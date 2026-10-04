@@ -250,6 +250,29 @@ export type SubjectScreenMeta = {
   privileged: boolean
   data_class: string
   dollars_run: string | null
+  parent_id?: string | null
+}
+
+export type SubjectChange = {
+  ref: number
+  name: string
+  status_before: string
+  status_before_label: string
+  status_now: string
+  status_now_label: string
+  direction: 'worse' | 'better' | 'same'
+  added: string[]
+  removed: string[]
+}
+
+export type ChangeCounts = { changed: number; worse: number; better: number; unchanged: number }
+
+export type SubjectChanges = {
+  parent_id: string
+  parent_created_at: string
+  parent_sources: SubjectScreenSources
+  subjects: SubjectChange[]
+  counts: ChangeCounts
 }
 
 export type SubjectScreenSources = {
@@ -266,9 +289,14 @@ export type SubjectScreen = {
   sources: SubjectScreenSources
   counts: Record<string, number>
   subjects: SubjectResult[]
+  changes?: SubjectChanges
 }
 
-export type SubjectScreenListItem = SubjectScreenMeta & { counts: Record<string, number>; sources: SubjectScreenSources }
+export type SubjectScreenListItem = SubjectScreenMeta & {
+  counts: Record<string, number>
+  sources: SubjectScreenSources
+  change_counts: ChangeCounts | null
+}
 
 export const SUBJECT_STATUS: Record<string, string> = {
   excluded: 'Excluded',
@@ -327,6 +355,8 @@ export const api = {
   integrity: (id: string) => req<IntegrityView>(`/api/runs/${id}/integrity`),
   subjectScreens: () => req<SubjectScreenListItem[]>('/api/subject-screens'),
   subjectScreen: (id: string) => req<SubjectScreen>(`/api/subject-screens/${encodeURIComponent(id)}`),
+  recheckSubjectScreen: (id: string, form: FormData) =>
+    req<{ id: string }>(`/api/subject-screens/${encodeURIComponent(id)}/recheck`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }

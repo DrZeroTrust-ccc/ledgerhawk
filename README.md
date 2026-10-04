@@ -74,7 +74,10 @@ and optionally join dollars from a run. Each subject is screened whatever its si
 registrations one step away that share a non-hub contact, a non-hub suite or a legal name. Every subject gets a
 status, plain-language findings and investigator next steps. The **Subject Screen workbook** (Summary, Subjects,
 Related Entities, Exclusion Records, Read Me) names the matter, the sources with their as-of dates and hash, and can
-carry a "Privileged and Confidential" header. Logic in `pipeline/subjects.py`; workbook in `exports/subjects.py`.
+carry a "Privileged and Confidential" header. **Re-check with latest data** re-runs the same subjects against the
+newest extracts and records what changed since the last check (new or dropped exclusions, ties, signals and related
+entities, and status moves), shown on the page and in the workbook and Word report. Logic in `pipeline/subjects.py`;
+workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)
 

@@ -18,7 +18,7 @@ from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 from ..pipeline.sam import load_sam
-from ..pipeline.subjects import subject_screen
+from ..pipeline.subjects import compare_screens, subject_screen
 from ..pipeline.tiering import TIERS
 
 DISPOSITIONS = [
@@ -193,7 +193,8 @@ class Store:
     # ---- subject screens (named targets or a client's list) -------------------
     def create_subject_screen(self, subjects: list[dict], *, analyst: str, matter: str = "", client: str = "",
                               privileged: bool = False, synthetic: bool = False, sam_source: str | None = None,
-                              exclusions_source: str | None = None, dollars_run: str | None = None) -> str:
+                              exclusions_source: str | None = None, dollars_run: str | None = None,
+                              parent_id: str | None = None) -> str:
         sam_meta = self.source(sam_source) if sam_source else None
         ex_meta = self.source(exclusions_source) if exclusions_source else None
         sam = load_sam(sam_meta["path"], date.fromisoformat(sam_meta["as_of"]), Path(sam_meta["path"]).parent) if sam_meta else None
@@ -209,13 +210,32 @@ class Store:
             "privileged": privileged, "data_class": "synthetic" if synthetic else "production",
             "sam_source": sam_source, "exclusions_source": exclusions_source, "dollars_run": dollars_run,
             "input": [{k: s[k] for k in ("ref", "uei", "name", "role")} for s in subjects],
+            "parent_id": parent_id,
         }
+        if parent_id:
+            res["changes"] = compare_screens(self.subject_screen(parent_id), res)
         d = self.root / "subjects" / sid
         d.mkdir(parents=True)
         (d / "screen.json").write_text(json.dumps(res, indent=2, default=str))
         label = matter.strip() or f"{len(subjects)} subjects"
-        self.audit(analyst, "subject_screen", None, None, f"Subject screen {sid}: {label} ({len(subjects)} subjects)")
+        what = f"Re-check of {parent_id}" if parent_id else "Subject screen"
+        self.audit(analyst, "subject_screen", None, None, f"{what} {sid}: {label} ({len(subjects)} subjects)")
         return sid
+
+    def recheck_subject_screen(self, sid: str, analyst: str, sam_source: str | None = None,
+                               exclusions_source: str | None = None) -> str:
+        """Re-run a screen on the same subjects, by default against the newest extract of each kind it used."""
+        old = self.subject_screen(sid)
+        m = old["meta"]
+        newest = {}
+        for src in self.list_sources():
+            newest.setdefault(src["kind"], src["id"])  # list_sources is newest first within each kind
+        sam = sam_source or (newest.get("sam") if m.get("sam_source") else None)
+        ex = exclusions_source or (newest.get("exclusions") if m.get("exclusions_source") else None)
+        return self.create_subject_screen(
+            m["input"], analyst=analyst, matter=m.get("matter", ""), client=m.get("client", ""),
+            privileged=bool(m.get("privileged")), synthetic=m.get("data_class") == "synthetic", sam_source=sam,
+            exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid)
 
     def subject_screen(self, sid: str) -> dict:
         d = (self.root / "subjects" / sid).resolve()
@@ -225,10 +245,11 @@ class Store:
 
     def list_subject_screens(self) -> list[dict]:
         out = []
-        for d in sorted((self.root / "subjects").iterdir(), reverse=True):
-            if (d / "screen.json").exists():
-                s = json.loads((d / "screen.json").read_text())
-                out.append({**{k: v for k, v in s["meta"].items() if k != "input"}, "counts": s["counts"], "sources": s["sources"]})
+        dirs = [d for d in (self.root / "subjects").iterdir() if (d / "screen.json").exists()]
+        for d in sorted(dirs, key=lambda d: ((d / "screen.json").stat().st_mtime_ns, d.name), reverse=True):
+            s = json.loads((d / "screen.json").read_text())
+            out.append({**{k: v for k, v in s["meta"].items() if k != "input"}, "counts": s["counts"], "sources": s["sources"],
+                        "change_counts": (s.get("changes") or {}).get("counts")})
         return out
 
     # ---- analyst state ------------------------------------------------------

@@ -168,6 +168,11 @@ export default function SubjectsPage() {
                         {s.matter || 'Untitled matter'}
                       </Link>
                       {s.client && <span className="text-slate-500"> · {s.client}</span>} <DataClassBadge dataClass={s.data_class} />
+                      {s.change_counts && (
+                        <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
+                          Re-check · {s.change_counts.changed} changed{s.change_counts.worse ? `, ${s.change_counts.worse} worse` : ''}
+                        </span>
+                      )}
                     </td>
                     <td className="tabular py-2">{s.counts.subjects}</td>
                     <td className="tabular py-2" title={`${SUBJECT_STATUS.excluded}, ${SUBJECT_STATUS.tied}`}>
