@@ -39,7 +39,9 @@ export function SignalChip({ s }: { s: Signal }) {
         {s.id}
       </span>
       <span className="pointer-events-none absolute bottom-full left-0 z-20 mb-1.5 hidden w-80 rounded-md bg-ink px-3 py-2 text-xs leading-snug text-white shadow-lg group-hover:block group-focus-within:block">
-        <span className="font-semibold">{s.id} · {s.label}</span>
+        <span className="font-semibold">
+          {s.id} · {s.label}
+        </span>
         <br />
         {s.detail}
       </span>
@@ -64,7 +66,17 @@ export function FlagChip({ flag }: { flag: string }) {
 export function QueueChip({ queue }: { queue: string }) {
   if (!queue) return null
   const color =
-    queue === 'priority' ? 'bg-crimson text-white' : queue === 'exclusion' ? 'bg-crimson-50 text-crimson ring-1 ring-crimson/30' : queue === 'strong' ? 'bg-navy text-white' : queue === 'relationship' ? 'bg-navy-50 text-navy ring-1 ring-navy' : 'bg-slate-100 text-slate-600'
+    queue === 'priority'
+      ? 'bg-crimson text-white'
+      : queue === 'exclusion'
+        ? 'bg-crimson-50 text-crimson ring-1 ring-crimson/30'
+        : queue === 'strong'
+          ? 'bg-navy text-white'
+          : queue === 'relationship'
+            ? 'bg-navy-50 text-navy ring-1 ring-navy'
+            : queue === 'integrity'
+              ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-300'
+              : 'bg-slate-100 text-slate-600'
   return <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${color}`}>{QUEUE_LABEL[queue] ?? queue}</span>
 }
 
@@ -104,7 +116,11 @@ export function DataClassBadge({ dataClass }: { dataClass: string }) {
   return <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-violet-800">Synthetic data</span>
 }
 
-export function Button({ children, variant = 'primary', ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' }) {
+export function Button({
+  children,
+  variant = 'primary',
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' }) {
   const styles = {
     primary: 'bg-navy text-white hover:bg-ink disabled:bg-slate-300',
     secondary: 'bg-white text-navy ring-1 ring-slate-300 hover:bg-slate-50 disabled:text-slate-400',

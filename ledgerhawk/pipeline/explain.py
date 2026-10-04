@@ -8,6 +8,7 @@ QUEUE_LABELS = {
     "relationship": "Relationship screen",
     "strong": "Strong single signal",
     "exclusion": "Exclusion-linked",
+    "integrity": "Integrity lane",
     "": "Not in the review queue",
 }
 FLAG_TEXT = {
@@ -49,6 +50,13 @@ def why_it_flagged(v: dict) -> str:
         parts.append(f"Its SAM address looks like {kind} ({card['address']}).")
     if set(flags) & {"R_EXADDR", "R_EXPOC"} or any(s["id"].startswith("L_") for s in sigs):
         parts.append("Shared addresses and contacts are signals, not proof of common control.")
+    integ = v.get("integrity")
+    if integ:
+        label = {"A": "A, excluded and still paid", "B": "B, tied to an excluded party", "C": "C, shares a suite with an excluded party",
+                 "D": "D, already on the main list"}.get(integ["tier"], "not tiered")
+        parts.append(f"Small-vendor integrity lane, tier {label}: " + "; ".join(integ["reasons"]) + ".")
+        if integ.get("second"):
+            parts.append("Second signals: " + "; ".join(integ["second"]).lower() + ".")
     if not parts:
         if v.get("reason"):
             parts.append(f"{name} was not screened for outliers. {v['reason']}")

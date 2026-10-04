@@ -228,7 +228,7 @@ export default function RunsPage() {
         </p>
       </div>
       <Card title="Start a new run">
-        <UploadForm sources={sources.data?.sources ?? []} />
+        <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} />
       </Card>
       <DataSources sources={sources.data?.sources ?? null} reload={sources.reload} />
       <Card title="Previous runs">

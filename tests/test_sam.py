@@ -92,3 +92,19 @@ def test_no_fraud_language(run):
     res, v, _, _ = run
     text = " ".join(str(x) for col in ("signals", "links", "exclusion") for x in v[col])
     assert "fraud" not in text.lower()
+
+
+def test_integrity_lane(run):
+    res, v, p, _ = run
+    tier = lambda k: (v.at[p[k], "integrity"] or {}).get("tier", "")
+    assert tier("small_paid_after") == "A" and v.at[p["small_paid_after"], "queue"] == "integrity"
+    assert v.at[p["small_paid_after"], "integrity"]["after_exclusion"] == 105_000
+    assert tier("excluded_small") == "A"  # pending since 2023, paid in FY24 and FY25
+    recent = v.at[p["small_excluded_recent"], "integrity"]
+    assert recent["excluded"] and recent["tier"] == "" and v.at[p["small_excluded_recent"], "queue"] == ""
+    assert tier("small_second_uei") == "B"
+    assert tier("small_suite") == "C"
+    assert tier("small_sibling") == "D" and v.at[p["small_sibling"], "queue"] == ""
+    lane_with_tier = v[v["integrity"].map(lambda i: bool(i and i["tier"]))]
+    assert set(lane_with_tier["lane"]) == {"integrity"}
+    assert res.queue_counts["integrity_leads"] == int((v["queue"] == "integrity").sum()) >= 4
