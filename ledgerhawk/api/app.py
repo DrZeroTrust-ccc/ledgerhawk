@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
+from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from .graph import build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
@@ -41,6 +42,9 @@ def meta():
         "signals": SIGNAL_LABELS,
         "queues": QUEUE_LABELS,
         "rule_set_version": rules.version,
+        "tiers": TIERS,
+        "tier_meaning": TIER_MEANING,
+        "owners": OWNERS,
     }
 
 
@@ -120,8 +124,23 @@ def run_summary(run_id: str):
     return _get(store.summary, run_id)
 
 
-def _slim(v: dict, disp: dict) -> dict:
+def _workflow(v: dict, st: dict) -> dict:
+    """Effective tier and owner: an analyst's change wins over the pipeline default."""
+    tdef = v["tier_default"] if "tier_default" in v else default_tier(v)
+    odef = v["owner_suggested"] if "owner_suggested" in v else suggest_owner(v)
+    t = st.get("tier")
+    o = st.get("owner")
+    a = st.get("assignee")
     return {
+        "tier": t["tier"] if t else tdef, "tier_default": tdef, "tier_change": t,
+        "owner": o["owner"] if o else odef, "owner_suggested": odef, "owner_set": o,
+        "assignee": a["assignee"] if a else "", "last_touched": st.get("last_touched"),
+    }
+
+
+def _slim(v: dict, disp: dict, state: dict | None = None) -> dict:
+    return {
+        **_workflow(v, (state or {}).get(v["uei"], {})),
         "uei": v["uei"], "name": v["name"], "queue": v["queue"], "bucket": v["bucket"], "lane": v["lane"],
         "reason_code": v["reason_code"], "reason": v["reason"], "cut_stage": v["cut_stage"],
         "restored_from": v["restored_from"], "suppression": v["suppression"],
@@ -142,6 +161,9 @@ def list_vendors(
     signal: str = "",
     flag: str = "",
     disposition: str = "",
+    tier: str = "",
+    owner: str = "",
+    assignee: str = "",
     q: str = "",
     sort: str = "-tot",
     offset: int = 0,
@@ -149,7 +171,22 @@ def list_vendors(
 ):
     data = _get(store.vendors, run_id)
     disp = store.dispositions()
+    state = store.analyst_state()
     rows = data["rows"]
+    if tier or owner or assignee:
+        wf = {r["uei"]: _workflow(r, state.get(r["uei"], {})) for r in rows if r["queue"] or r["uei"] in state}
+        if tier == "any":
+            rows = [r for r in rows if wf.get(r["uei"], {}).get("tier")]
+        elif tier == "none":
+            rows = [r for r in rows if r["queue"] and not wf.get(r["uei"], {}).get("tier")]
+        elif tier:
+            rows = [r for r in rows if wf.get(r["uei"], {}).get("tier") == tier]
+        if owner:
+            rows = [r for r in rows if owner.lower() in wf.get(r["uei"], {}).get("owner", "").lower()]
+        if assignee == "none":
+            rows = [r for r in rows if not wf.get(r["uei"], {}).get("assignee")]
+        elif assignee:
+            rows = [r for r in rows if wf.get(r["uei"], {}).get("assignee") == assignee]
     if queue == "any":
         rows = [r for r in rows if r["queue"]]
     elif queue:
@@ -181,7 +218,7 @@ def list_vendors(
     return {
         "total": total,
         "dollars": dollars,
-        "rows": [_slim(r, disp) for r in rows[offset: offset + limit]],
+        "rows": [_slim(r, disp, state) for r in rows[offset: offset + limit]],
     }
 
 
@@ -209,6 +246,7 @@ def vendor(run_id: str, uei: str):
     out = dict(v)
     out["why"] = why_it_flagged(v)
     out["disposition"] = store.dispositions().get(uei)
+    out.update(_workflow(v, store.analyst_state().get(uei, {})))
     out["history"] = store.history(uei)
     return out
 
@@ -264,6 +302,79 @@ def exclusion_gaps(run_id: str):
             })
     return [{"agency": k, "vendors": sorted(v.values(), key=lambda x: -x["tot"])}
             for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
+
+
+@app.get("/api/runs/{run_id}/tier-rollup")
+def tier_rollup(run_id: str):
+    data = _get(store.vendors, run_id)
+    state = store.analyst_state()
+    disp = store.dispositions()
+    out = {k: {"tier": k, "label": label, "meaning": TIER_MEANING[k], "vendors": 0, "dollars": 0.0} for k, label in TIERS.items()}
+    assignees: dict[str, int] = {}
+    board: dict[str, int] = {}
+    for r in data["rows"]:
+        if not (r["queue"] or r["uei"] in state):
+            continue
+        wf = _workflow(r, state.get(r["uei"], {}))
+        if wf["tier"] in out:
+            out[wf["tier"]]["vendors"] += 1
+            out[wf["tier"]]["dollars"] += r["tot"]
+        if r["queue"]:
+            if wf["assignee"]:
+                assignees[wf["assignee"]] = assignees.get(wf["assignee"], 0) + 1
+            k = disp.get(r["uei"], {}).get("value", "Not yet dispositioned")
+            board[k] = board.get(k, 0) + 1
+    return {"tiers": list(out.values()), "assignees": assignees, "dispositions": board}
+
+
+class TierIn(BaseModel):
+    tier: str
+    reason: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/tier")
+def set_tier(run_id: str, uei: str, body: TierIn):
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this run")
+    prior = _workflow(v, store.analyst_state().get(uei, {}))["tier"]
+    try:
+        return store.set_tier(uei, body.tier, prior, body.reason, body.analyst, run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class RoutingIn(BaseModel):
+    owner: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/routing")
+def set_routing(run_id: str, uei: str, body: RoutingIn):
+    try:
+        return store.set_routing(uei, body.owner, body.analyst, run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+class AssignIn(BaseModel):
+    ueis: list[str]
+    assignee: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/assign")
+def assign(run_id: str, body: AssignIn):
+    if not body.ueis:
+        raise HTTPException(400, "Select at least one vendor.")
+    if len(body.ueis) > 1000:
+        raise HTTPException(400, "Assign at most 1,000 vendors at a time.")
+    try:
+        return {"assigned": store.assign(body.ueis, body.assignee, body.analyst, run_id)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 class DispositionIn(BaseModel):

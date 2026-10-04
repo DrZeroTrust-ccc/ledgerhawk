@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkGraph from '../LinkGraph'
 import { useAnalystName } from '../App'
-import { Button, Card, ErrorNote, FlagChip, Loading, QueueChip, useAsync } from '../ui'
+import { Button, Card, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const KIND_LABEL: Record<string, string> = {
   direct: 'Excluded under this UEI',
@@ -67,6 +67,14 @@ function ExclusionRecord({ h, ties }: { h: ExclusionHit; ties: ExclusionHit[] })
       )}
     </div>
   )
+}
+
+const HISTORY_LABEL: Record<string, string> = {
+  disposition: 'Disposition',
+  restored: 'Restored to queue',
+  tier: 'Tier',
+  routing: 'Routing',
+  assigned: 'Assignment',
 }
 
 const ROLE: Record<string, string> = {
@@ -151,6 +159,111 @@ function GraphCard({ runId, uei }: { runId: string; uei: string }) {
   )
 }
 
+function TierRouting({ runId, v, onSaved }: { runId: string; v: VendorDetail; onSaved: () => void }) {
+  const [analyst] = useAnalystName()
+  const meta = useAsync(() => api.meta(), [])
+  const [tier, setTier] = useState(v.tier)
+  const [reason, setReason] = useState('')
+  const [owner, setOwner] = useState(v.owner)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      setReason('')
+      onSaved()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const owners = meta.data?.owners ?? []
+  return (
+    <div className="space-y-4 text-sm">
+      <div>
+        <div className="flex flex-wrap items-center gap-2">
+          {v.tier ? <TierChip tier={v.tier} changed={!!v.tier_change} /> : <span className="text-slate-500">No tier</span>}
+          {v.tier_change && v.tier_default !== v.tier && (
+            <span className="text-xs text-slate-500">pipeline default: {v.tier_default ? TIER_SHORT[v.tier_default] : 'none'}</span>
+          )}
+        </div>
+        {v.tier_change && (
+          <p className="mt-1.5 text-xs text-slate-600">
+            {v.tier_change.reason}
+            <span className="block text-slate-500">
+              {v.tier_change.analyst} · {new Date(v.tier_change.at).toLocaleString()} · was {v.tier_change.prior ? TIER_SHORT[v.tier_change.prior] : 'no tier'}
+            </span>
+          </p>
+        )}
+      </div>
+      <form
+        className="space-y-2"
+        onSubmit={(e) => {
+          e.preventDefault()
+          run(() => api.setTier(runId, v.uei, { tier, reason, analyst }))
+        }}
+      >
+        <select value={tier} onChange={(e) => setTier(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5">
+          <option value="">No tier</option>
+          {meta.data &&
+            Object.entries(meta.data.tiers).map(([k, label]) => (
+              <option key={k} value={k}>
+                {label}: {meta.data!.tier_meaning[k]}
+              </option>
+            ))}
+        </select>
+        {tier !== v.tier && (
+          <>
+            <textarea
+              required
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Reason (required), e.g. Promoted: award records show one IDIQ"
+              className="w-full rounded-md border border-slate-300 px-2 py-1.5"
+            />
+            <Button type="submit" className="w-full" disabled={busy || !reason.trim() || !analyst.trim()}>
+              Change tier
+            </Button>
+          </>
+        )}
+      </form>
+      <form
+        className="space-y-2 border-t border-slate-100 pt-3"
+        onSubmit={(e) => {
+          e.preventDefault()
+          run(() => api.setRouting(runId, v.uei, { owner, analyst }))
+        }}
+      >
+        <label className="block text-xs text-slate-500">Routes to</label>
+        <input list="owners" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5" />
+        <datalist id="owners">
+          {owners.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+        {!v.owner_set && v.owner_suggested && <p className="text-xs text-slate-500">Suggested from the signals; edit to override.</p>}
+        {v.owner_set && (
+          <p className="text-xs text-slate-500">
+            Set by {v.owner_set.analyst}; suggested: {v.owner_suggested || 'none'}
+          </p>
+        )}
+        {owner !== v.owner && (
+          <Button type="submit" variant="secondary" className="w-full" disabled={busy || !owner.trim() || !analyst.trim()}>
+            Save owner
+          </Button>
+        )}
+      </form>
+      {v.assignee && <p className="border-t border-slate-100 pt-3 text-xs text-slate-600">Assigned to {v.assignee}. Reassign from the queue.</p>}
+      {!analyst.trim() && <p className="text-xs text-slate-500">Enter your name in the header first.</p>}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
 function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail; onSaved: () => void }) {
   const [analyst] = useAnalystName()
   const meta = useAsync(() => api.meta(), [])
@@ -219,6 +332,7 @@ export default function VendorPage() {
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-navy">{v.name}</h1>
           <QueueChip queue={v.queue || (v.bucket === 'watch' ? 'watch' : '')} />
+          <TierChip tier={v.tier} changed={!!v.tier_change} />
           {v.exclusion_flags.map((f) => (
             <FlagChip key={f} flag={f} />
           ))}
@@ -316,6 +430,9 @@ export default function VendorPage() {
           <Card title="Disposition">
             <DispositionForm runId={id} v={v} onSaved={reload} />
           </Card>
+          <Card title="Tier and routing">
+            <TierRouting key={`${v.tier}|${v.owner}`} runId={id} v={v} onSaved={reload} />
+          </Card>
           <Card title="Where it sits in this run">
             <dl className="space-y-2 text-sm">
               <div>
@@ -343,7 +460,7 @@ export default function VendorPage() {
                     {new Date(h.at).toLocaleString()} · {h.analyst}
                   </div>
                   <div>
-                    <span className="font-medium">{h.action === 'disposition' ? 'Disposition' : h.action === 'restored' ? 'Restored to queue' : h.action}</span>: {h.detail}
+                    <span className="font-medium">{HISTORY_LABEL[h.action] ?? h.action}</span>: {h.detail}
                   </div>
                 </li>
               ))}

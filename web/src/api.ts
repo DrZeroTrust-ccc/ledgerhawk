@@ -21,6 +21,22 @@ export type VendorRow = {
   certs?: string[]
   in_sam?: boolean
   disposition: Disposition | null
+  tier: string
+  tier_default: string
+  tier_change: TierChange | null
+  owner: string
+  owner_suggested: string
+  owner_set: { owner: string; analyst: string; at: string } | null
+  assignee: string
+  last_touched: string | null
+}
+
+export type TierChange = { tier: string; prior: string; reason: string; analyst: string; at: string }
+
+export type TierRollup = {
+  tiers: { tier: string; label: string; meaning: string; vendors: number; dollars: number }[]
+  assignees: Record<string, number>
+  dispositions: Record<string, number>
 }
 
 export type Poc = { role: string; name: string; title: string; city: string; state: string; pkey: string; universe: number }
@@ -180,6 +196,9 @@ export type Meta = {
   signals: Record<string, string>
   queues: Record<string, string>
   rule_set_version: string
+  tiers: Record<string, string>
+  tier_meaning: Record<string, string>
+  owners: string[]
 }
 
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
@@ -222,6 +241,12 @@ export const api = {
   addSource: (form: FormData) => req<Source>('/api/sources', { method: 'POST', body: form }),
   graph: (id: string, uei: string) => req<Graph>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/graph`),
   gaps: (id: string) => req<GapGroup[]>(`/api/runs/${id}/exclusion-gaps`),
+  tierRollup: (id: string) => req<TierRollup>(`/api/runs/${id}/tier-rollup`),
+  setTier: (id: string, uei: string, body: { tier: string; reason: string; analyst: string }) =>
+    req<TierChange>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/tier`, json(body)),
+  setRouting: (id: string, uei: string, body: { owner: string; analyst: string }) =>
+    req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/routing`, json(body)),
+  assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 
 export function money(x: number): string {

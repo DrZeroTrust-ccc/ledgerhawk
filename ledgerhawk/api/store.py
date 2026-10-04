@@ -16,6 +16,7 @@ from pathlib import Path
 
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
+from ..pipeline.tiering import TIERS
 
 DISPOSITIONS = [
     "Clear – lawful explanation",
@@ -30,6 +31,10 @@ SOURCE_KINDS = {
     "sam": {"label": "SAM.gov entity extract (V2)", "stale_days": 35},
     "exclusions": {"label": "SAM exclusions extract", "stale_days": 2},
 }
+
+
+def _rank(tier: str) -> int:
+    return {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "explained": 9}.get(tier, 10)
 
 
 def _now() -> str:
@@ -50,6 +55,13 @@ class Store:
                 CREATE TABLE IF NOT EXISTS disposition (
                     uei TEXT PRIMARY KEY, value TEXT NOT NULL, note TEXT NOT NULL,
                     analyst TEXT NOT NULL, at TEXT NOT NULL, run_id TEXT);
+                CREATE TABLE IF NOT EXISTS tier_change (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, uei TEXT NOT NULL, tier TEXT NOT NULL, prior TEXT,
+                    reason TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL, run_id TEXT);
+                CREATE TABLE IF NOT EXISTS routing (
+                    uei TEXT PRIMARY KEY, owner TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS assignment (
+                    uei TEXT PRIMARY KEY, assignee TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, analyst TEXT NOT NULL,
                     action TEXT NOT NULL, uei TEXT, run_id TEXT, detail TEXT);
@@ -187,6 +199,58 @@ class Store:
             db.execute("INSERT OR REPLACE INTO disposition VALUES (?,?,?,?,?,?)", (uei, value, note, analyst, at, run_id))
         self.audit(analyst, "disposition", uei, run_id, f"{value}: {note}")
         return {"uei": uei, "value": value, "note": note, "analyst": analyst, "at": at}
+
+    def set_tier(self, uei: str, tier: str, prior: str, reason: str, analyst: str, run_id: str) -> dict:
+        if tier not in TIERS and tier != "":
+            raise ValueError(f"Unknown tier: {tier}")
+        if not reason.strip():
+            raise ValueError("A reason is required to change a tier.")
+        if not analyst.strip():
+            raise ValueError("An analyst name is required.")
+        at = _now()
+        with self._db() as db:
+            db.execute("INSERT INTO tier_change (uei, tier, prior, reason, analyst, at, run_id) VALUES (?,?,?,?,?,?,?)",
+                       (uei, tier, prior, reason, analyst, at, run_id))
+        verb = "Promoted" if (tier and (not prior or _rank(tier) < _rank(prior))) else "Demoted" if tier else "Removed from tiers"
+        self.audit(analyst, "tier", uei, run_id, f"{verb} to {TIERS.get(tier, 'no tier')} (was {TIERS.get(prior, 'no tier')}): {reason}")
+        return {"uei": uei, "tier": tier, "prior": prior, "reason": reason, "analyst": analyst, "at": at}
+
+    def set_routing(self, uei: str, owner: str, analyst: str, run_id: str) -> dict:
+        if not owner.strip() or not analyst.strip():
+            raise ValueError("An owner and an analyst name are required.")
+        at = _now()
+        with self._db() as db:
+            db.execute("INSERT OR REPLACE INTO routing VALUES (?,?,?,?)", (uei, owner.strip(), analyst, at))
+        self.audit(analyst, "routing", uei, run_id, f"Routed to {owner.strip()}")
+        return {"uei": uei, "owner": owner.strip(), "analyst": analyst, "at": at}
+
+    def assign(self, ueis: list[str], assignee: str, analyst: str, run_id: str) -> int:
+        if not analyst.strip():
+            raise ValueError("An analyst name is required.")
+        at = _now()
+        with self._db() as db:
+            if assignee.strip():
+                db.executemany("INSERT OR REPLACE INTO assignment VALUES (?,?,?,?)", [(u, assignee.strip(), analyst, at) for u in ueis])
+            else:
+                db.executemany("DELETE FROM assignment WHERE uei = ?", [(u,) for u in ueis])
+        for u in ueis:
+            self.audit(analyst, "assigned", u, run_id, f"Assigned to {assignee.strip()}" if assignee.strip() else "Unassigned")
+        return len(ueis)
+
+    def analyst_state(self) -> dict[str, dict]:
+        """Per-UEI tier override, routing, assignee and last-touched time (carries across runs)."""
+        out: dict[str, dict] = {}
+        with self._db() as db:
+            for uei, tier, prior, reason, analyst, at in db.execute(
+                    "SELECT uei, tier, prior, reason, analyst, at FROM tier_change ORDER BY id"):
+                out.setdefault(uei, {})["tier"] = {"tier": tier, "prior": prior, "reason": reason, "analyst": analyst, "at": at}
+            for uei, owner, analyst, at in db.execute("SELECT uei, owner, analyst, at FROM routing"):
+                out.setdefault(uei, {})["owner"] = {"owner": owner, "analyst": analyst, "at": at}
+            for uei, assignee, analyst, at in db.execute("SELECT uei, assignee, analyst, at FROM assignment"):
+                out.setdefault(uei, {})["assignee"] = {"assignee": assignee, "analyst": analyst, "at": at}
+            for uei, at in db.execute("SELECT uei, MAX(at) FROM audit WHERE uei IS NOT NULL GROUP BY uei"):
+                out.setdefault(uei, {})["last_touched"] = at
+        return out
 
     def dispositions(self) -> dict[str, dict]:
         with self._db() as db:
