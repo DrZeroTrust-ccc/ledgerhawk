@@ -10,11 +10,14 @@ import pandas as pd
 
 from .exclusions import ExclusionsExtract, exclusion_pass, load_exclusions
 from .ingest import Validation, load_vendor_file
+from .links import relationship_bucket, sam_screen
+from .sam import SamExtract, load_sam
 from .rules import RuleSet
 from .stages import CLOSEOUT, INTEGRITY, NONCOMMERCIAL, OUTLIER, SET_ASIDE, stage1, stage2
 
 PIPELINE_VERSION = "0.1.0"
-QUEUE_EXCLUSION_FLAGS = {"EXCLUDED", "ALIAS_MATCH", "SITE_UEI_QUESTION", "STALE_PENDING"}
+QUEUE_EXCLUSION_FLAGS = {"EXCLUDED", "ALIAS_MATCH", "SITE_UEI_QUESTION", "STALE_PENDING", "R_EXADDR", "R_EXPOC",
+                         "NAME_MATCH_SUPPORTED"}
 
 
 @dataclass
@@ -48,8 +51,9 @@ class RunResult:
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
         (out / "run.json").write_text(json.dumps(self.summary(), indent=2, default=str))
-        cols = ["uei", "name", "struct", "naics", "psc", "fy24", "fy25", "tot", "lane", "reason_code", "reason",
-                "cut_stage", "restored_from", "suppression", "bucket", "queue", "signals", "exclusion_flags", "exclusion"]
+        cols = ["uei", "name", "nn", "struct", "naics", "psc", "fy24", "fy25", "tot", "lane", "reason_code", "reason",
+                "cut_stage", "restored_from", "suppression", "bucket", "queue", "signals", "exclusion_flags", "exclusion",
+                "sam", "links", "neighbors"]
         with open(out / "vendors.jsonl", "w") as f:
             for rec in self.vendors[cols].to_dict(orient="records"):
                 f.write(json.dumps(rec, default=str) + "\n")
@@ -64,7 +68,7 @@ class RunResult:
 def _queue(r) -> str:
     if set(r.exclusion_flags) & QUEUE_EXCLUSION_FLAGS:
         return "exclusion"  # an exclusion link overrides any set-aside
-    if r.bucket in ("priority", "strong"):
+    if r.bucket in ("priority", "relationship", "strong"):
         return r.bucket
     return ""
 
@@ -76,6 +80,8 @@ def run_pipeline(
     rules: RuleSet | None = None,
     restore: set[str] | None = None,
     sam_extract_date: date | None = None,
+    sam_file: str | Path | None = None,
+    sam_cache_dir: str | Path | None = None,
 ) -> RunResult:
     rules = rules or RuleSet()
     df, validation = load_vendor_file(vendor_file)
@@ -92,16 +98,31 @@ def run_pipeline(
 
     df = stage1(df, rules, restore)
     df = stage2(df, rules)
+
+    sam: SamExtract | None = None
+    if sam_file:
+        if sam_extract_date is None:
+            raise ValueError("sam_extract_date is required so registration status is reproducible")
+        sam = load_sam(sam_file, sam_extract_date, sam_cache_dir)
+        df = sam_screen(df, sam, rules, ex)
+        df["bucket"] = relationship_bucket(df)
+    else:
+        df["sam"] = None
+        df["links"] = [[] for _ in range(len(df))]
+        df["neighbors"] = [[] for _ in range(len(df))]
     df["queue"] = df.apply(_queue, axis=1)
 
     funnel = build_funnel(df)
     queue_counts = {
         "priority": int((df["queue"] == "priority").sum()),
+        "relationship": int((df["queue"] == "relationship").sum()),
         "strong": int((df["queue"] == "strong").sum()),
         "exclusion": int((df["queue"] == "exclusion").sum()),
         "watch": int((df["bucket"] == "watch").sum()),
         "directly_excluded": int(df["exclusion_flags"].map(lambda f: "EXCLUDED" in f).sum()),
         "name_match_candidates": int(df["exclusion_flags"].map(lambda f: "NAME_MATCH_CANDIDATE" in f).sum()),
+        "address_or_contact_ties": int(df["exclusion_flags"].map(lambda f: bool({"R_EXADDR", "R_EXPOC"} & set(f))).sum()),
+        "sam_matched": int(df["sam"].map(bool).sum()),
         "integrity_lane": int((df["lane"] == INTEGRITY).sum()),
         "closeouts": int((df["lane"] == CLOSEOUT).sum()),
         "restored": int((df["reason_code"] == "RESTORED").sum()),
@@ -113,7 +134,10 @@ def run_pipeline(
         "exclusions_file": ex.source_name if ex else None,
         "exclusions_extract_date": ex.extract_date.isoformat() if ex else None,
         "exclusions_active_records": int(len(ex.records)) if ex else None,
-        "sam_extract_date": sam_extract_date.isoformat() if sam_extract_date else None,
+        "sam_file": sam.source_name if sam else None,
+        "sam_sha256": sam.sha256 if sam else None,
+        "sam_extract_date": sam.extract_date.isoformat() if sam else None,
+        "sam_records": sam.records if sam else None,
         "rule_set_version": rules.version,
         "rule_set_fingerprint": rules.fingerprint(),
         "thresholds": {k: v for k, v in rules.to_dict().items() if not isinstance(v, list)},

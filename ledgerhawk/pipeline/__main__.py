@@ -1,4 +1,4 @@
-"""Command line: python -m ledgerhawk.pipeline run VENDORS [--exclusions CSV --exclusions-date YYYY-MM-DD] --out DIR"""
+"""Command line: python -m ledgerhawk.pipeline run VENDORS [--exclusions CSV --exclusions-date D] [--sam DAT --sam-date D] --out DIR"""
 from __future__ import annotations
 
 import argparse
@@ -17,6 +17,8 @@ def main() -> None:
     r.add_argument("vendors")
     r.add_argument("--exclusions")
     r.add_argument("--exclusions-date", type=date.fromisoformat)
+    r.add_argument("--sam", help="SAM V2 public entity extract (.dat)")
+    r.add_argument("--sam-date", type=date.fromisoformat)
     r.add_argument("--restore", nargs="*", default=[])
     r.add_argument("--synthetic", action="store_true", help="Tag this run as synthetic data")
     r.add_argument("--out", required=True)
@@ -26,11 +28,12 @@ def main() -> None:
     a = p.parse_args()
 
     if a.cmd == "synthetic":
-        v, e, planted = make_synthetic(a.out, a.n)
-        print(json.dumps({"vendors": str(v), "exclusions": str(e), "planted": planted}, indent=2))
+        v, e, sam, planted = make_synthetic(a.out, a.n)
+        print(json.dumps({"vendors": str(v), "exclusions": str(e), "sam": str(sam), "planted": planted}, indent=2))
         return
 
-    res = run_pipeline(a.vendors, a.exclusions, a.exclusions_date, restore=set(a.restore))
+    res = run_pipeline(a.vendors, a.exclusions, a.exclusions_date, restore=set(a.restore),
+                       sam_file=a.sam, sam_extract_date=a.sam_date)
     if a.synthetic:
         res.manifest["data_class"] = "synthetic"
     out = res.write(a.out)

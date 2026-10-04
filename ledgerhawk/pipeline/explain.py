@@ -5,6 +5,7 @@ from .normalize import money
 
 QUEUE_LABELS = {
     "priority": "Priority review",
+    "relationship": "Relationship screen",
     "strong": "Strong single signal",
     "exclusion": "Exclusion-linked",
     "": "Not in the review queue",
@@ -15,6 +16,9 @@ FLAG_TEXT = {
     "SITE_UEI_QUESTION": "shares its legal name with an excluded vendor under a different UEI (exclusion-coverage question)",
     "STALE_PENDING": "has had an exclusion in \"Proceedings Pending\" for over a year",
     "NAME_MATCH_CANDIDATE": "has the same name as an excluded firm, not yet supported by an address or contact link",
+    "NAME_MATCH_SUPPORTED": "has the same name as an excluded firm under a different UEI, in the same city or state",
+    "R_EXADDR": "is registered at the same suite as an excluded party",
+    "R_EXPOC": "lists a contact who also appears on an excluded party's record",
 }
 
 
@@ -37,8 +41,14 @@ def why_it_flagged(v: dict) -> str:
     ctx = [s for s in v.get("signals") or [] if s["id"] == "S6"]
     if ctx:
         parts.append(f"Context: a large deobligation ({ctx[0]['detail']}), usually a closeout, is shown but not scored.")
-    if "NAME_MATCH_CANDIDATE" in flags:
+    if "NAME_MATCH_CANDIDATE" in flags and "NAME_MATCH_SUPPORTED" not in flags:
         parts.append("A same-name exclusion record exists but nothing else ties it to this vendor yet, so it is a candidate only.")
+    card = v.get("sam")
+    if card and (card.get("residential") or card.get("virtual")):
+        kind = "a virtual office or mailbox" if card.get("virtual") else "an apartment, unit or PO box"
+        parts.append(f"Its SAM address looks like {kind} ({card['address']}).")
+    if set(flags) & {"R_EXADDR", "R_EXPOC"} or any(s["id"].startswith("L_") for s in sigs):
+        parts.append("Shared addresses and contacts are signals, not proof of common control.")
     if not parts:
         if v.get("reason"):
             parts.append(f"{name} was not screened for outliers. {v['reason']}")

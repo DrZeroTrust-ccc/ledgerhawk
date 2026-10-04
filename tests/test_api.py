@@ -15,7 +15,7 @@ def ctx(tmp_path_factory):
     import ledgerhawk.api.app as appmod
     appmod = importlib.reload(appmod)
     client = TestClient(appmod.app)
-    vendors, excl, planted = make_synthetic(root / "in", n=800, seed=3)
+    vendors, excl, sam, planted = make_synthetic(root / "in", n=800, seed=3)
     with open(vendors, "rb") as v, open(excl, "rb") as e:
         r = client.post("/api/runs", files={"vendors": v, "exclusions": e},
                         data={"exclusions_date": "2026-10-02", "synthetic": "true", "analyst": "Test Analyst"})
@@ -82,3 +82,53 @@ def test_bad_run_id(ctx):
     client, *_ = ctx
     assert client.get("/api/runs/../../etc").status_code == 404
     assert client.get("/api/runs/nope").status_code == 404
+
+
+@pytest.fixture(scope="module")
+def sam_ctx(ctx, tmp_path_factory):
+    client, _, _ = ctx
+    root = tmp_path_factory.mktemp("sam_in")
+    vendors, excl, sam, planted = make_synthetic(root, n=800, seed=3)
+    with open(sam, "rb") as f:
+        r = client.post("/api/sources", files={"file": f}, data={"kind": "sam", "as_of": "2026-09-06", "analyst": "Test Analyst"})
+    assert r.status_code == 200, r.text
+    sam_id = r.json()["id"]
+    with open(excl, "rb") as f:
+        r = client.post("/api/sources", files={"file": f}, data={"kind": "exclusions", "as_of": "2026-10-02", "analyst": "Test Analyst"})
+    ex_id = r.json()["id"]
+    with open(vendors, "rb") as v:
+        r = client.post("/api/runs", files={"vendors": v},
+                        data={"synthetic": "true", "analyst": "Test Analyst", "sam_source": sam_id, "exclusions_source": ex_id})
+    assert r.status_code == 200, r.text
+    return client, r.json()["id"], planted
+
+
+def test_sources_listed_with_staleness(sam_ctx):
+    client, *_ = sam_ctx
+    src = client.get("/api/sources").json()["sources"]
+    kinds = {s["kind"]: s for s in src}
+    assert kinds["sam"]["as_of"] == "2026-09-06" and kinds["sam"]["stale_after_days"] == 35
+    assert kinds["exclusions"]["stale_after_days"] == 2
+
+
+def test_relationship_queue_and_graph(sam_ctx):
+    client, run_id, p = sam_ctx
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["meta"]["sam_date"] == "2026-09-06" and run["queue_counts"]["relationship"] >= 3
+    g = client.get(f"/api/runs/{run_id}/vendors/{p['ex_affiliate']}/graph").json()
+    kinds = {n["kind"] for n in g["nodes"]}
+    assert {"vendor", "person", "suite", "excluded"} <= kinds
+    assert len([n for n in g["nodes"] if n["kind"] == "excluded"]) == 3
+    assert all(path["hops"] == 2 for path in g["paths_to_excluded"])
+    hub = client.get(f"/api/runs/{run_id}/vendors/{p['hub'][0]}/graph").json()
+    assert any(n.get("hub") for n in hub["nodes"])
+    assert not [n for n in hub["nodes"] if n["kind"] == "vendor" and not n.get("center")]
+
+
+def test_exclusion_gaps(sam_ctx):
+    client, run_id, p = sam_ctx
+    gaps = client.get(f"/api/runs/{run_id}/exclusion-gaps").json()
+    by_agency = {g["agency"]: {v["uei"] for v in g["vendors"]} for g in gaps}
+    assert p["ex_affiliate"] in by_agency["ICE"]
+    assert p["ex_person_vendor"] in by_agency["TSA"]
+    assert p["name_collision"] not in set().union(*by_agency.values())
