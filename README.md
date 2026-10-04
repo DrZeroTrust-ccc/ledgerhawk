@@ -97,5 +97,14 @@ There is no sign-in yet. Analysts type their name in the header, and that's what
 - The queue shows tier rollups with dollars, filters by tier, owner and assignee, bulk assignment, and a board view
   grouped by disposition.
 
+## Milestone 5: exports
+
+- **Vendors of Interest workbook** (Queue page, "Download Vendors of Interest"): every tiered vendor, tier 1 first, in
+  the column layout of the hand-built pilot list, plus a Read Me sheet with tier counts, the funnel, what was left off,
+  limits and sources.
+- **Case file PDF** (vendor page, "Download case file"): tier, owner, disposition, why it flagged, next step, signals,
+  SAM registration, linked vendors, exclusions and analyst history.
+- Both name LedgerHawk as author in their metadata and carry the screening footer.
+
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
-modifications), OSINT, the integrity-lane signals, case files and exports.
+modifications), OSINT, the integrity-lane signals, the Small-Vendor workbook and the briefing deck.

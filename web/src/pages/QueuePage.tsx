@@ -57,7 +57,12 @@ function BulkAssign({ runId, selected, onDone }: { runId: string; selected: stri
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md bg-navy-50 px-3 py-2 text-sm">
       <span className="font-medium text-navy">{num(selected.length)} selected</span>
-      <input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Assign to (analyst name)" className="w-52 rounded-md border border-slate-300 px-2 py-1 text-sm" />
+      <input
+        value={who}
+        onChange={(e) => setWho(e.target.value)}
+        placeholder="Assign to (analyst name)"
+        className="w-52 rounded-md border border-slate-300 px-2 py-1 text-sm"
+      />
       <Button disabled={!who.trim() || busy || !analyst.trim()} onClick={() => go(who)}>
         Assign
       </Button>
@@ -84,7 +89,11 @@ function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]
             </div>
             <div className="space-y-2">
               {items.map((r) => (
-                <Link key={r.uei} to={`/runs/${runId}/vendors/${encodeURIComponent(r.uei)}`} className="block rounded-md bg-white p-2.5 text-sm shadow-sm hover:ring-1 hover:ring-navy">
+                <Link
+                  key={r.uei}
+                  to={`/runs/${runId}/vendors/${encodeURIComponent(r.uei)}`}
+                  className="block rounded-md bg-white p-2.5 text-sm shadow-sm hover:ring-1 hover:ring-navy"
+                >
                   <div className="font-medium text-navy">{r.name}</div>
                   <div className="mt-1 flex flex-wrap items-center gap-1">
                     <TierChip tier={r.tier} changed={!!r.tier_change} />
@@ -155,8 +164,15 @@ export default function QueuePage() {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold text-navy">Queue</h1>
         {run.data && <DataClassBadge dataClass={run.data.meta.data_class} />}
+        <a
+          href={`/api/runs/${id}/exports/vendors-of-interest.xlsx`}
+          className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+          title="Tiered vendors in the layout of the hand-built Vendors of Interest list"
+        >
+          Download Vendors of Interest (XLSX)
+        </a>
         {run.data && (
-          <Link to={`/runs/${id}`} className="ml-auto text-sm text-navy hover:underline">
+          <Link to={`/runs/${id}`} className="text-sm text-navy hover:underline">
             {run.data.meta.label} · run dashboard
           </Link>
         )}
@@ -261,7 +277,9 @@ export default function QueuePage() {
 
       {view === 'board' && data && meta.data ? (
         <>
-          {data.total > data.rows.length && <p className="text-xs text-slate-500">Showing the top {num(data.rows.length)} by dollars. Narrow the filters to see the rest.</p>}
+          {data.total > data.rows.length && (
+            <p className="text-xs text-slate-500">Showing the top {num(data.rows.length)} by dollars. Narrow the filters to see the rest.</p>
+          )}
           <Board runId={id} rows={data.rows} dispositions={meta.data.dispositions} />
         </>
       ) : (
@@ -303,7 +321,9 @@ export default function QueuePage() {
                         </Link>
                         <div className="font-mono text-xs text-slate-500">{r.uei}</div>
                         {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
-                        {r.lane !== 'outlier' && r.reason_code && <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>}
+                        {r.lane !== 'outlier' && r.reason_code && (
+                          <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>
+                        )}
                       </td>
                       <td className="space-y-1 px-3 py-2.5">
                         <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />

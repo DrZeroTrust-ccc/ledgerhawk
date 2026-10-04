@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -15,6 +15,8 @@ from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
+from ..exports.case import build_case
+from ..exports.voi import build_voi
 from .graph import build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
@@ -249,6 +251,32 @@ def vendor(run_id: str, uei: str):
     out.update(_workflow(v, store.analyst_state().get(uei, {})))
     out["history"] = store.history(uei)
     return out
+
+
+@app.get("/api/runs/{run_id}/exports/vendors-of-interest.xlsx")
+def export_voi(run_id: str):
+    data = _get(store.vendors, run_id)
+    summary = store.summary(run_id)
+    disp = store.dispositions()
+    state = store.analyst_state()
+    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])}
+             for r in data["rows"] if r["queue"] or r["uei"] in state]
+    body = build_voi(items, summary)
+    name = f"LedgerHawk Vendors of Interest {run_id}.xlsx"
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/runs/{run_id}/vendors/{uei}/case.pdf")
+def export_case(run_id: str, uei: str):
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this run")
+    wf = _workflow(v, store.analyst_state().get(uei, {}))
+    body = build_case(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id))
+    return Response(body, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.pdf"'})
 
 
 @app.get("/api/runs/{run_id}/vendors/{uei}/graph")
