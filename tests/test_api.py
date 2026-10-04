@@ -1,5 +1,6 @@
 import importlib
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -226,6 +227,13 @@ def test_seed_synthetic(tmp_path, monkeypatch):
     assert len(runs) == 1 and runs[0]["data_class"] == "synthetic"
     appmod._seed_synthetic()
     assert len(appmod.store.list_runs()) == 1
+    # A run that predates the integrity lane gets a fresh synthetic run beside it.
+    rj = appmod.store.run_dir(runs[0]["id"]) / "run.json"
+    s = json.loads(rj.read_text())
+    s["queue_counts"].pop("integrity_leads")
+    rj.write_text(json.dumps(s))
+    appmod._seed_synthetic()
+    assert len(appmod.store.list_runs()) == 2
 
 
 def test_integrity_lane_endpoint_and_export(sam_ctx):
