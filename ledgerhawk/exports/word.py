@@ -20,7 +20,7 @@ from ..pipeline.normalize import money
 from ..pipeline.subjects import STATUSES, next_steps
 from ..pipeline.tiering import TIERS, category
 from .case import POC_ROLE, TIE_LABEL
-from .subjects import note_byline, notes_for, signoff_lines
+from .subjects import award_line, awards_for, note_byline, notes_for, signoff_lines
 from .voi import FOOTER
 
 PRIVILEGED = "Privileged and Confidential. Prepared at the direction of counsel."
@@ -280,6 +280,16 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
                     "Excluded" if r["excluded"] else ", ".join(r["flags"])] for r in s["related"]])
             if s["related_total"] > len(s["related"]):
                 _small(doc, f"{s['related_total'] - len(s['related'])} more in the workbook.")
+        found = awards_for(screen, s["ref"])
+        if found:
+            aw = screen["awards"]
+            doc.add_heading("Federal awards (USAspending)", level=3)
+            _bullets(doc, [award_line(e) for e in found])
+            top = sorted((a | {"uei": e["uei"]} for e in found for a in e["awards"]), key=lambda a: -a["amount"])[:10]
+            if top:
+                _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],
+                      [[a["award_id"], a["agency"], a["start"], f"${a['amount']:,.0f}", "Yes" if a["after_exclusion"] else ""] for a in top])
+            _small(doc, f"USAspending.gov, looked up {aw['fetched_at'][:10]}. Largest awards shown; the workbook lists all retrieved.")
         doc.add_heading("Investigator notes", level=3)
         _notes(doc, notes_for(screen, f"s:{s['ref']}"), "[Add work done on this subject here.]")
 
@@ -308,7 +318,9 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
         "Same-name exclusion matches with nothing else in common are shown as unconfirmed.",
         "People are matched to SAM contacts by first and last name, and by state when one is given. SAM lists contacts, "
         "not owners, and names repeat, so confirm identity before attributing a match.",
-        "Not covered: award-level history, corporate registries, beneficial ownership, court records and media.",
+        ("Award history is from USAspending.gov as of the lookup date shown, largest contracts and IDVs first; it is the "
+         "federal reporting record, not the contract file. Not covered: " if screen.get("awards") else
+         "Not covered: award-level history, ") + "corporate registries, beneficial ownership, court records and media.",
         "A subject with no hits is not cleared; the sources and dates above are the scope of this check.",
     ])
     _small(doc, f"Screen {m['id']} · generated {generated_at:%Y-%m-%d %H:%M} UTC")

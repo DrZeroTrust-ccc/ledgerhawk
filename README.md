@@ -83,7 +83,10 @@ each subject, person or the whole screen, with a cited source and an evidence fi
 screen is then submitted, and a second person approves it or returns it with comments; approval locks the notes and
 the sign-off prints in the Word report and workbook (Analyst Notes sheet). Notes live in `review.json` beside the
 unchanged `screen.json`, and a re-check carries them forward. **Link chart (i2 / Maltego)** downloads the screen as an
-Entities sheet and a one-row-per-link Links sheet (organizations, contacts, suites, exclusion records) ready to import. Logic in `pipeline/subjects.py`;
+Entities sheet and a one-row-per-link Links sheet (organizations, contacts, suites, exclusion records) ready to import. **Look up awards (USAspending)** pulls the largest contracts
+and IDVs for each subject UEI and each excluded related firm from the public USAspending API, stores the dated
+result beside the screen, marks awards that started on or after an exclusion of the same UEI, and adds them to the
+page, the Word report and an Awards sheet (`pipeline/awards.py`). Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)

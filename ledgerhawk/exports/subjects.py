@@ -61,6 +61,25 @@ def signoff_lines(screen: dict) -> list[tuple[str, str]]:
     return rows
 
 
+def awards_for(screen: dict, ref: int) -> list[dict]:
+    """USAspending results for the UEIs behind one subject (the subject's own and its excluded related entities)."""
+    aw = screen.get("awards") or {}
+    return [e for e in aw.get("entities", []) if ref in e["refs"]]
+
+
+def award_line(e: dict) -> str:
+    if e["error"]:
+        return f"{e['name']} [{e['uei']}]: {e['error']}."
+    if not e["count"]:
+        return f"{e['name']} [{e['uei']}] ({e['role']}): no contracts or IDVs on USAspending."
+    line = (f"{e['name']} [{e['uei']}] ({e['role']}): {e['count']} contracts and IDVs, ${e['total']:,.0f} obligated, "
+            f"{e['first'][:4]}-{e['last'][:4]}, {len(e['agencies'])} awarding agenc{'y' if len(e['agencies']) == 1 else 'ies'}"
+            + (" (largest 100 per type shown)" if e["truncated"] else ""))
+    if e["after_exclusion"]:
+        line += f". {e['after_exclusion']} started on or after the exclusion of {e['excluded_since']}"
+    return line + "."
+
+
 def _sam_status(e: dict) -> str:
     c = e.get("sam")
     if not c:
@@ -206,6 +225,30 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
     last = _rows(ws, 6, body, set(), 45)
     ws.auto_filter.ref = f"B5:M{last}"
 
+    aw = screen.get("awards")
+    if aw:
+        ws = wb.create_sheet("Awards")
+        _banner(ws, screen)
+        _title(ws, "Federal Awards (USAspending)", f"Contracts and IDVs reported to USAspending.gov, looked up "
+               f"{aw['fetched_at'][:16].replace('T', ' ')} UTC by {aw.get('fetched_by', '')}. Largest 100 per type per UEI. "
+               "Obligations as reported; USAspending can lag the contract file.")
+        _head(ws, 5, ["Subject #", "UEI", "Entity", "Role", "Award ID", "Type", "Awarding Agency", "Sub-Agency", "Start",
+                      "End", "Obligated ($)", "After Exclusion", "NAICS", "PSC", "Description", "USAspending Link"],
+              [10, 15, 30, 16, 22, 16, 30, 30, 11, 11, 15, 10, 30, 30, 60, 50])
+        body = []
+        for e in aw["entities"]:
+            refs = ", ".join(str(r) for r in e["refs"])
+            if e["error"] or not e["awards"]:
+                body.append([refs, e["uei"], e["name"], e["role"], "", "", "", "", "", "", None, "", "", "",
+                             e["error"] or "No contracts or IDVs found", ""])
+            for a in e["awards"]:
+                body.append([refs, e["uei"], e["name"], e["role"], a["award_id"], a["type"] or a["group"].upper(), a["agency"],
+                             a["sub_agency"], a["start"], a["end"], a["amount"], "Yes" if a["after_exclusion"] else "",
+                             " ".join(x for x in [a["naics"], a["naicsd"]] if x), " ".join(x for x in [a["psc"], a["pscd"]] if x),
+                             a["description"], a["url"]])
+        last = _rows(ws, 6, body, {12}, 30)
+        ws.auto_filter.ref = f"B5:Q{last}"
+
     notes = (screen.get("review") or {}).get("notes") or []
     if notes:
         ws = wb.create_sheet("Analyst Notes")
@@ -235,8 +278,10 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         "subject. Contacts and addresses shared by more than 5 SAM entities are treated as hubs (registered agents, shared "
         "offices) and are not used as links.",
         "Same-name matches with nothing else in common are shown as unconfirmed; common names produce false matches.",
-        "Not covered: award-level history (contracts, orders and modifications), corporate registries, beneficial ownership, "
-        "court records and media. Those are the next steps listed for each subject.",
+        ("Awards: the Awards sheet lists contracts and IDVs reported to USAspending.gov as of the lookup time shown there "
+         "(largest 100 per type per UEI). Not covered: " if screen.get("awards") else
+         "Not covered: award-level history (contracts, orders and modifications), ")
+        + "corporate registries, beneficial ownership, court records and media. Those are the next steps listed for each subject.",
         "Sources: " + "; ".join(x for x in [
             f"SAM.gov entity extract {src['sam_file']} as of {src['sam_extract_date']} (SHA-256 {src['sam_sha256']})" if src.get("sam_file") else "",
             f"SAM.gov exclusions extract {src['exclusions_file']} as of {src['exclusions_extract_date']}" if src.get("exclusions_file") else "",

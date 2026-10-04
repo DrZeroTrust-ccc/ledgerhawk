@@ -361,3 +361,91 @@ def test_link_chart(syn, tmp_path):
     assert wb["Read Me"]["A1"].value == PRIVILEGED
     assert [c.value for c in wb["Links"][1]][:4] == ["From ID", "From Type", "From Label", "Link Type"]
     assert wb["Links"].max_row == len(links) + 1 and wb["Entities"].max_row == len(ents) + 1
+
+
+def _fake_usaspending(calls):
+    """Stands in for api.usaspending.gov: two contracts for every UEI, one IDV, and a stray award to another UEI."""
+    import urllib.error
+
+    def post(url, body):
+        calls.append(body)
+        uei = body["filters"]["recipient_search_text"][0]
+        if uei == "FAILFAILFAIL":
+            raise urllib.error.URLError("down")
+        if "IDV_A" in body["filters"]["award_type_codes"]:
+            return {"results": [{"internal_id": 3, "generated_internal_id": f"CONT_IDV_{uei}", "Award ID": "GS-00F-001",
+                                 "Recipient UEI": uei, "Award Amount": 0, "Awarding Agency": "General Services Administration",
+                                 "Start Date": "2019-03-01", "Last Date to Order": "2029-02-28", "Contract Award Type": "FSS"}],
+                    "page_metadata": {"page": 1, "hasNext": False}}
+        return {"results": [
+            {"internal_id": 1, "generated_internal_id": f"CONT_AWD_A_{uei}", "Award ID": "47QTCA25F0001", "Recipient UEI": uei,
+             "Recipient Name": "X", "Award Amount": 250000.5, "Awarding Agency": "General Services Administration",
+             "Awarding Sub Agency": "Federal Acquisition Service", "Start Date": "2025-07-01", "End Date": "2026-06-30",
+             "Contract Award Type": "DELIVERY ORDER", "NAICS": {"code": "541611", "description": "Admin consulting"}, "PSC": "R408"},
+            {"internal_id": 2, "generated_internal_id": f"CONT_AWD_B_{uei}", "Award ID": "47QTCA22F0002", "Recipient UEI": uei,
+             "Award Amount": 90000, "Awarding Agency": "Department of Veterans Affairs", "Start Date": "2022-01-15"},
+            {"internal_id": 9, "Award ID": "OTHER", "Recipient UEI": "ZZZZZZZZZZZZ", "Award Amount": 5e6, "Start Date": "2024-01-01"},
+        ], "page_metadata": {"page": 1, "hasNext": True}}
+    return post
+
+
+def test_awards_lookup(syn):
+    from datetime import date as d
+    from ledgerhawk.pipeline.awards import awards_for_uei, screen_awards
+    sam, ex, p, _ = syn
+    calls = []
+    one = awards_for_uei("ABCDEFGHJKLM", _fake_usaspending(calls), today=d(2026, 10, 4))
+    assert [a["award_id"] for a in one["awards"]] == ["47QTCA25F0001", "47QTCA22F0002", "GS-00F-001"]  # stray UEI dropped
+    assert one["truncated"] and one["awards"][0]["naics"] == "541611" and one["awards"][0]["url"].endswith("CONT_AWD_A_ABCDEFGHJKLM")
+    assert one["awards"][2]["end"] == "2029-02-28"  # IDVs report a last date to order
+    assert {tuple(c["filters"]["award_type_codes"][:1]) for c in calls} == {("A",), ("IDV_A",)}  # groups asked separately
+    assert calls[0]["filters"]["time_period"][0]["end_date"] == "2026-10-04"
+    assert awards_for_uei("FAILFAILFAIL", _fake_usaspending([]))["error"].startswith("USAspending did not answer")
+
+    res = subject_screen(parse_subjects(f"{p['excluded_major']}\n{p['ex_affiliate']}"), sam, ex).to_dict()
+    aw = screen_awards(res, _fake_usaspending([]), today=d(2026, 10, 4))
+    by = {e["uei"]: e for e in aw["entities"]}
+    major = by[p["excluded_major"]]
+    assert major["role"] == "subject" and major["excluded_since"] == "2025-03-01"
+    assert major["after_exclusion"] == 1 and major["total"] == 340000.5  # the July 2025 order came after the exclusion
+    assert any(e["role"] == "related, excluded" for e in aw["entities"])  # excluded related firms are looked up too
+    affiliate = next(e for e in aw["entities"] if e["role"] == "subject" and e["uei"] != p["excluded_major"])
+    assert affiliate["after_exclusion"] == 0 and not affiliate["excluded_since"]
+
+
+def test_awards_api_and_exports(syn, tmp_path):
+    from docx import Document
+    _, _, p, (vendors, excl, sam) = syn
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+    client = TestClient(appmod.app)
+    try:
+        ids = {}
+        for kind, path, d in (("sam", sam, "2026-09-06"), ("exclusions", excl, "2026-10-02")):
+            with open(path, "rb") as f:
+                ids[kind] = client.post("/api/sources", files={"file": f}, data={"kind": kind, "as_of": d, "analyst": "T"}).json()["id"]
+        sid = client.post("/api/subject-screens", data={"subjects_text": p["excluded_major"], "analyst": "T",
+                                                        "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]}).json()["id"]
+        base = f"/api/subject-screens/{sid}"
+        assert client.get(base).json()["awards"] is None
+        appmod.store.awards_post = lambda url, body: (_ for _ in ()).throw(OSError("blocked"))
+        r = client.post(f"{base}/awards", data={"analyst": "T"})
+        assert r.status_code == 502 and client.get(base).json()["awards"] is None  # a failed lookup saves nothing
+        appmod.store.awards_post = _fake_usaspending([])
+        assert client.post(f"{base}/awards", data={"analyst": ""}).status_code == 400
+        r = client.post(f"{base}/awards", data={"analyst": "Ana"})
+        assert r.status_code == 200, r.text
+        got = client.get(base).json()["awards"]
+        assert got["fetched_by"] == "Ana" and got["entities"][0]["after_exclusion"] == 1
+        wb = load_workbook(io.BytesIO(client.get(f"{base}/subject-screen.xlsx").content))
+        ws = wb["Awards"]
+        assert ws["F6"].value == "47QTCA25F0001" and ws["M6"].value == "Yes" and ws["L6"].value == 250000.5
+        doc = Document(io.BytesIO(client.get(f"{base}/subject-screen.docx").content))
+        text = "\n".join(par.text for par in doc.paragraphs)
+        assert "Federal awards (USAspending)" in text and "started on or after the exclusion of 2025-03-01" in text
+        assert any(a["action"] == "screen_awards" for a in client.get("/api/audit").json())
+    finally:
+        mp.undo()
