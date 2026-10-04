@@ -58,8 +58,9 @@ def healthz():
 
 
 def _seed_synthetic() -> None:
-    """On an empty data directory, add one synthetic run so a fresh deploy has something to show."""
-    if store.list_runs():
+    """Add one synthetic run when no stored run was built by the current pipeline, so a fresh deploy (or one whose
+    only run predates the integrity lane) has something to show. Older runs are kept."""
+    if any("integrity_leads" in r.get("queue_counts", {}) for r in store.list_runs()):
         return
     from ..pipeline.synthetic import make_synthetic
     work = Path(tempfile.mkdtemp(prefix="lh-seed-"))
