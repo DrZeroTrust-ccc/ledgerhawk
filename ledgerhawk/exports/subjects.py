@@ -1,4 +1,4 @@
-"""Subject Screen workbook: Summary, Subjects, Related Entities, Exclusion Records, Read Me.
+"""Subject Screen workbook: Summary, Subjects, People, Related Entities, Exclusion Records, Analyst Notes, Read Me.
 
 Written for an investigation file: every sheet names the matter, the sources and their as-of dates, and carries the
 confidentiality header when the matter is marked privileged. Metadata names LedgerHawk only.
@@ -29,6 +29,36 @@ EX_HEADERS = ["Subject #", "Entity UEI", "Entity", "How It Matched", "Excluded P
 EX_WIDTHS = [10, 15, 32, 22, 32, 10, 30, 12, 14, 16, 18, 60]
 HIT_KIND = {"direct": "This UEI", "alias": "Alias in the record", "address": "Shared suite", "person": "Shared contact",
             "name_match": "Same name"}
+
+
+def notes_for(screen: dict, target: str) -> list[dict]:
+    return [n for n in (screen.get("review") or {}).get("notes", []) if n["target"] == target]
+
+
+def note_target_label(target: str) -> str:
+    kind, _, ref = target.partition(":")
+    return {"s": f"Subject {ref}", "p": f"Person {ref}"}.get(kind, "Whole screen")
+
+
+def note_byline(n: dict) -> str:
+    """Who, when, the cited source, the evidence file with its hash, and whether it came from an earlier check."""
+    parts = [f"{n['analyst']}, {n['at'][:10]}"]
+    if n.get("source"):
+        parts.append(f"Source: {n['source']}")
+    if n.get("file"):
+        parts.append(f"Evidence: {n['file']} (SHA-256 {n['file_sha256']})")
+    if n.get("carried_from"):
+        parts.append(f"carried from the screen of {n['carried_from']['created_at'][:10]}")
+    return " · ".join(parts)
+
+
+def signoff_lines(screen: dict) -> list[tuple[str, str]]:
+    r = screen.get("review") or {"state": "draft", "state_label": "Draft, not yet reviewed", "history": []}
+    rows = [("Review status", r["state_label"])]
+    labels = {"submit": "Submitted by", "approve": "Approved by", "return": "Returned by", "reopen": "Reopened by"}
+    for h in r["history"]:
+        rows.append((labels[h["action"]], f"{h['by']}, {h['at'][:16].replace('T', ' ')} UTC" + (f": {h['comment']}" if h["comment"] else "")))
+    return rows
 
 
 def _sam_status(e: dict) -> str:
@@ -78,6 +108,7 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         ["SAM exclusions extract", f"{src.get('exclusions_file') or 'not used'}" + (f", as of {src['exclusions_extract_date']}" if src.get("exclusions_file") else "")],
         ["Dollars joined from run", m.get("dollars_run") or "none"],
         ["Rule set", f"{src.get('rule_set_version')} ({src.get('rule_set_fingerprint')})"],
+        *[[k, v] for k, v in signoff_lines(screen)],
     ]
     r = _rows(ws, 6, info, set(), 20)
     _head(ws, r + 2, ["Status", "Subjects"], [40, 90])
@@ -174,6 +205,19 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
                              h["termination_date"], h["scope"], ", ".join(x for x in [h["city"], h["state"]] if x), h["comments"]])
     last = _rows(ws, 6, body, set(), 45)
     ws.auto_filter.ref = f"B5:M{last}"
+
+    notes = (screen.get("review") or {}).get("notes") or []
+    if notes:
+        ws = wb.create_sheet("Analyst Notes")
+        _banner(ws, screen)
+        _title(ws, "Analyst Notes", "Work recorded by investigators on this screen, with cited sources and evidence files. "
+                                    "SHA-256 hashes identify each evidence file as it was attached.")
+        _head(ws, 5, ["About", "Note", "Source", "Evidence File", "Evidence SHA-256", "By", "At (UTC)", "Carried From"],
+              [14, 70, 40, 28, 30, 18, 20, 22])
+        last = _rows(ws, 6, [[note_target_label(n["target"]), n["text"], n.get("source", ""), n.get("file", ""),
+                              n.get("file_sha256", ""), n["analyst"], n["at"].replace("T", " ")[:19],
+                              (n.get("carried_from") or {}).get("created_at", "")[:10]] for n in notes], set(), 45)
+        ws.auto_filter.ref = f"B5:I{last}"
 
     ws = wb.create_sheet("Read Me")
     _banner(ws, screen)

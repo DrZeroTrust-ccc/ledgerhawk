@@ -263,3 +263,71 @@ def test_people_only_screen_api(syn, tmp_path):
         assert again["people"][0]["status"] == "tied" and again["changes"]["people"] == []
     finally:
         mp.undo()
+
+
+def test_notes_evidence_and_signoff(syn, tmp_path):
+    import hashlib
+    from docx import Document
+    _, _, p, (vendors, excl, sam) = syn
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+    client = TestClient(appmod.app)
+    try:
+        ids = {}
+        for kind, path, d in (("sam", sam, "2026-09-06"), ("exclusions", excl, "2026-10-02")):
+            with open(path, "rb") as f:
+                ids[kind] = client.post("/api/sources", files={"file": f}, data={"kind": kind, "as_of": d, "analyst": "T"}).json()["id"]
+        sid = client.post("/api/subject-screens", data={"subjects_text": p["ex_affiliate"], "people_text": "Reese Fosterling, NY",
+                                                        "analyst": "Ana", "matter": "M-9", "sam_source": ids["sam"],
+                                                        "exclusions_source": ids["exclusions"]}).json()["id"]
+        base = f"/api/subject-screens/{sid}"
+        assert client.get(base).json()["review"]["state"] == "draft"
+        assert client.post(f"{base}/notes", data={"analyst": "", "text": "x"}).status_code == 400
+        assert client.post(f"{base}/notes", data={"analyst": "Ana", "target": "s:9", "text": "x"}).status_code == 400
+        assert client.post(f"{base}/notes", data={"analyst": "Ana", "target": "s:1"}).status_code == 400
+        pdf = b"%PDF-1.4 sam record"
+        r = client.post(f"{base}/notes", data={"analyst": "Ana", "target": "s:1", "text": "Called the registered POC; number disconnected.",
+                                               "source": "SAM.gov entity record, viewed 2026-10-04"},
+                        files={"file": ("SAM record (1).pdf", pdf, "application/pdf")})
+        assert r.status_code == 200, r.text
+        note = r.json()
+        assert note["file"] == "SAM_record_1_.pdf" and note["file_sha256"] == hashlib.sha256(pdf).hexdigest()
+        assert client.get(f"{base}/evidence/{note['id']}").content == pdf
+        other = client.post(f"{base}/notes", data={"analyst": "Ana", "target": "p:1", "text": "Same person per state filing."}).json()
+        gone = client.post(f"{base}/notes", data={"analyst": "Ana", "target": "screen", "text": "typo"}).json()
+        assert client.post(f"{base}/notes/{gone['id']}/delete", data={"analyst": "Rev"}).status_code == 400  # not the author
+        assert client.post(f"{base}/notes/{gone['id']}/delete", data={"analyst": " ana "}).status_code == 200
+        assert [n["id"] for n in client.get(base).json()["review"]["notes"]] == [note["id"], other["id"]]
+
+        # two-person sign-off
+        assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "approve"}).status_code == 400  # not submitted
+        assert client.post(f"{base}/review", data={"analyst": "Ana", "action": "submit"}).status_code == 200
+        assert client.post(f"{base}/review", data={"analyst": "ana", "action": "approve"}).status_code == 400  # same person
+        assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "return"}).status_code == 400  # needs a comment
+        assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "return", "comment": "Cite the state filing."}).json()["state"] == "returned"
+        client.post(f"{base}/review", data={"analyst": "Ana", "action": "submit"})
+        r = client.post(f"{base}/review", data={"analyst": "Rev", "action": "approve"})
+        assert r.json()["state"] == "approved" and [h["action"] for h in r.json()["history"]] == ["submit", "return", "submit", "approve"]
+        assert client.post(f"{base}/notes", data={"analyst": "Ana", "target": "screen", "text": "late"}).status_code == 400  # locked
+        assert client.get("/api/subject-screens").json()[0]["review_state"] == "approved"
+
+        doc = Document(io.BytesIO(client.get(f"{base}/subject-screen.docx").content))
+        text = "\n".join(par.text for par in doc.paragraphs) + "\n".join(c.text for t in doc.tables for row in t.rows for c in row.cells)
+        assert "Called the registered POC" in text and "Same person per state filing." in text and "typo" not in text
+        assert "Approved by" in text and "Rev" in text and note["file_sha256"] in text
+        wb = load_workbook(io.BytesIO(client.get(f"{base}/subject-screen.xlsx").content))
+        assert wb["Analyst Notes"].max_row == 7 and wb["Analyst Notes"]["C6"].value.startswith("Called")
+        assert any(a["action"] == "screen_approve" for a in client.get("/api/audit").json())
+
+        # a re-check carries notes and evidence forward and starts sign-off again
+        new = client.post(f"{base}/recheck", data={"analyst": "Ana"}).json()["id"]
+        rv = client.get(f"/api/subject-screens/{new}").json()["review"]
+        assert rv["state"] == "draft" and len(rv["notes"]) == 2 and rv["notes"][0]["carried_from"]["id"] == sid
+        assert client.get(f"/api/subject-screens/{new}/evidence/{note['id']}").content == pdf
+        assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "reopen"}).status_code == 400  # needs a comment
+        assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "reopen", "comment": "New filing"}).json()["state"] == "draft"
+    finally:
+        mp.undo()

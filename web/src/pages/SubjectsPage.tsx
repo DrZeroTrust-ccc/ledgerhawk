@@ -4,6 +4,13 @@ import { api, SUBJECT_STATUS, type RunMeta, type Source } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
 
+const REVIEW_TEXT: Record<string, string> = { submitted: 'Awaiting review', returned: 'Returned', approved: 'Approved' }
+const REVIEW_BADGE: Record<string, string> = {
+  submitted: 'bg-amber-50 text-amber-800',
+  returned: 'bg-crimson-50 text-crimson',
+  approved: 'bg-emerald-50 text-emerald-800',
+}
+
 const field = 'w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm'
 
 function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
@@ -176,6 +183,9 @@ export default function SubjectsPage() {
                         {s.matter || 'Untitled matter'}
                       </Link>
                       {s.client && <span className="text-slate-500"> · {s.client}</span>} <DataClassBadge dataClass={s.data_class} />
+                      {s.review_state && s.review_state !== 'draft' && (
+                        <span className={`ml-1 rounded px-1.5 py-0.5 text-xs ${REVIEW_BADGE[s.review_state]}`}>{REVIEW_TEXT[s.review_state]}</span>
+                      )}
                       {s.change_counts && (
                         <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
                           Re-check · {s.change_counts.changed} changed{s.change_counts.worse ? `, ${s.change_counts.worse} worse` : ''}

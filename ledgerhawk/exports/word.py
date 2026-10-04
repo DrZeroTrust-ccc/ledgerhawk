@@ -20,6 +20,7 @@ from ..pipeline.normalize import money
 from ..pipeline.subjects import STATUSES, next_steps
 from ..pipeline.tiering import TIERS, category
 from .case import POC_ROLE, TIE_LABEL
+from .subjects import note_byline, notes_for, signoff_lines
 from .voi import FOOTER
 
 PRIVILEGED = "Privileged and Confidential. Prepared at the direction of counsel."
@@ -109,6 +110,15 @@ def _repeat_header(row) -> None:
 def _bullets(doc: Document, items: list[str], numbered: bool = False) -> None:
     for x in items:
         doc.add_paragraph(x, style="List Number" if numbered else "List Bullet")
+
+
+def _notes(doc: Document, notes: list[dict], placeholder: str) -> None:
+    if not notes:
+        doc.add_paragraph(placeholder)
+    for n in notes:
+        if n["text"]:
+            doc.add_paragraph(n["text"])
+        _small(doc, note_byline(n))
 
 
 def _save(doc: Document) -> bytes:
@@ -232,6 +242,12 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
     if c["subjects"]:
         _grid(doc, ["Status", "Subjects"], [[label, c.get(k, 0)] for k, label in STATUSES.items() if c.get(k)])
 
+    doc.add_heading("Review and sign-off", level=2)
+    _kv(doc, signoff_lines(screen))
+    if notes_for(screen, "screen"):
+        doc.add_heading("Notes on the whole screen", level=3)
+        _notes(doc, notes_for(screen, "screen"), "")
+
     ch = screen.get("changes")
     if ch:
         doc.add_heading("What changed since the last check", level=2)
@@ -265,7 +281,7 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             if s["related_total"] > len(s["related"]):
                 _small(doc, f"{s['related_total'] - len(s['related'])} more in the workbook.")
         doc.add_heading("Investigator notes", level=3)
-        doc.add_paragraph("[Add work done on this subject here.]")
+        _notes(doc, notes_for(screen, f"s:{s['ref']}"), "[Add work done on this subject here.]")
 
     for x in screen.get("people") or []:
         doc.add_heading(f"Person {x['ref']}. {x['input']}", level=2)
@@ -280,7 +296,7 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             _grid(doc, ["Entity", "UEI", "Role", "Place", "Excluded"],
                   [[r["name"], r["uei"], ", ".join(r["roles"]), r["place"], "Yes" if r["excluded"] else ""] for r in x["registrations"]])
         doc.add_heading("Investigator notes", level=3)
-        doc.add_paragraph("[Add work done on this person here.]")
+        _notes(doc, notes_for(screen, f"p:{x['ref']}"), "[Add work done on this person here.]")
 
     doc.add_heading("Method and limits", level=2)
     _bullets(doc, [
