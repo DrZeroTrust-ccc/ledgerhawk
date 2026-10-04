@@ -109,6 +109,13 @@ NONCOMMERCIAL_STRUCTS = [
 ]
 
 # S4: PSC prefixes covering weapons, ammunition, vehicles and aircraft.
+STEM_STOP_WORDS = [
+    "THE", "AMERICAN", "AMERICA", "US", "USA", "UNITED", "NATIONAL", "GLOBAL", "FEDERAL", "GOVERNMENT", "INTERNATIONAL",
+    "ADVANCED", "SERVICES", "SERVICE", "SOLUTIONS", "GROUP", "TECHNOLOGIES", "TECHNOLOGY", "SYSTEMS", "CONSTRUCTION",
+    "ENGINEERING", "ENTERPRISES", "N", "S", "E", "W", "NORTH", "SOUTH", "EAST", "WEST", "NORTHERN", "SOUTHERN",
+    "EASTERN", "WESTERN", "AND", "OF",
+]
+
 S4_PSC_PREFIXES = ["10", "11", "13", "14", "15", "16", "19", "20", "23", "28"]
 S5_NAICS2 = ["11", "44", "45", "71", "72"]
 S5_PSC_PREFIXES = ["D", "A", "1"]
@@ -140,6 +147,18 @@ class RuleSet:
     # Stage 5
     name_match_min_len: int = 6
     stale_pending_days: int = 365
+    # Stage 3 (SAM)
+    r_young_start: str = "2023-01-01"
+    r_young_min: float = 1_000_000
+    r_split_cert_min: float = 1_000_000
+    sam_stale_days: int = 35
+    exclusions_stale_days: int = 2
+    # Stage 4 (relationships)
+    hub_cap: int = 5
+    person_vendor_cap: int = 8
+    l_min: float = 250_000
+    l_fade_ratio: float = 0.25
+    stem_stop_words: list[str] = field(default_factory=lambda: list(STEM_STOP_WORDS))
     # Lists
     majors: list[str] = field(default_factory=lambda: list(DEFAULT_MAJORS))
     jv_patterns: list[str] = field(default_factory=lambda: list(JV_PATTERNS))

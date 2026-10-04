@@ -26,7 +26,7 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
 }
 
 export function SignalChip({ s }: { s: Signal }) {
-  const context = s.id === 'S6'
+  const context = s.id === 'S6' || s.id === 'R_split'
   return (
     <span className="group relative inline-flex">
       <span
@@ -48,7 +48,7 @@ export function SignalChip({ s }: { s: Signal }) {
 }
 
 export function FlagChip({ flag }: { flag: string }) {
-  const strong = flag === 'EXCLUDED' || flag === 'ALIAS_MATCH'
+  const strong = flag === 'EXCLUDED' || flag === 'ALIAS_MATCH' || flag === 'R_EXPOC' || flag === 'R_EXADDR'
   const weak = flag === 'NAME_MATCH_CANDIDATE'
   return (
     <span
@@ -64,7 +64,7 @@ export function FlagChip({ flag }: { flag: string }) {
 export function QueueChip({ queue }: { queue: string }) {
   if (!queue) return null
   const color =
-    queue === 'priority' ? 'bg-crimson text-white' : queue === 'exclusion' ? 'bg-crimson-50 text-crimson ring-1 ring-crimson/30' : queue === 'strong' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-600'
+    queue === 'priority' ? 'bg-crimson text-white' : queue === 'exclusion' ? 'bg-crimson-50 text-crimson ring-1 ring-crimson/30' : queue === 'strong' ? 'bg-navy text-white' : queue === 'relationship' ? 'bg-navy-50 text-navy ring-1 ring-navy' : 'bg-slate-100 text-slate-600'
   return <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${color}`}>{QUEUE_LABEL[queue] ?? queue}</span>
 }
 

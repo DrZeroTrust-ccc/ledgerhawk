@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
-from .store import DISPOSITIONS, Store
+from .graph import build_graph
+from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 DATA_DIR = Path(os.environ.get("LEDGERHAWK_DATA_DIR", "data/app"))
@@ -43,6 +44,30 @@ def meta():
     }
 
 
+@app.get("/api/sources")
+def list_sources():
+    return {"kinds": SOURCE_KINDS, "sources": store.list_sources()}
+
+
+@app.post("/api/sources")
+async def add_source(kind: str = Form(...), as_of: str = Form(...), analyst: str = Form(""), file: UploadFile = File(...)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the upload is attributed.")
+    try:
+        d = date.fromisoformat(as_of)
+    except ValueError:
+        raise HTTPException(400, "Enter the extract date (YYYY-MM-DD).")
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / Path(file.filename or f"{kind}.dat").name
+        with open(p, "wb") as f:
+            while chunk := await file.read(1 << 22):
+                f.write(chunk)
+        try:
+            return store.add_source(kind, p, d, analyst)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+
 @app.get("/api/runs")
 def list_runs():
     return store.list_runs()
@@ -55,6 +80,8 @@ async def create_run(
     exclusions_date: str = Form(""),
     synthetic: bool = Form(False),
     analyst: str = Form(""),
+    sam_source: str = Form(""),
+    exclusions_source: str = Form(""),
 ):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the run is attributed.")
@@ -70,8 +97,19 @@ async def create_run(
                 ed = date.fromisoformat(exclusions_date)
             except ValueError:
                 raise HTTPException(400, "Enter the exclusions extract date (YYYY-MM-DD) so the run is reproducible.")
+        if exclusions_source and ep is None:
+            try:
+                src = store.source(exclusions_source)
+            except KeyError:
+                raise HTTPException(400, "That exclusions source no longer exists.")
+            ep, ed = Path(src["path"]), date.fromisoformat(src["as_of"])
+        if sam_source:
+            try:
+                store.source(sam_source)
+            except KeyError:
+                raise HTTPException(400, "That SAM source no longer exists.")
         try:
-            run_id = store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst)
+            run_id = store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst, sam_source=sam_source or None)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     return {"id": run_id}
@@ -89,6 +127,7 @@ def _slim(v: dict, disp: dict) -> dict:
         "restored_from": v["restored_from"], "suppression": v["suppression"],
         "fy24": v["fy24"], "fy25": v["fy25"], "tot": v["tot"],
         "signals": v["signals"], "exclusion_flags": v["exclusion_flags"],
+        "certs": (v.get("sam") or {}).get("certs", []), "in_sam": bool(v.get("sam")),
         "disposition": disp.get(v["uei"]),
     }
 
@@ -172,6 +211,59 @@ def vendor(run_id: str, uei: str):
     out["disposition"] = store.dispositions().get(uei)
     out["history"] = store.history(uei)
     return out
+
+
+@app.get("/api/runs/{run_id}/vendors/{uei}/graph")
+def vendor_graph(run_id: str, uei: str):
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this run")
+    return build_graph(v, data["by_uei"], data["by_nn"])
+
+
+GAP_KINDS = {"address": "Shares a suite with an excluded party", "person": "Shares a contact with an excluded party",
+             "alias": "Named as an alias in an exclusion record", "name_match": "Same name as an excluded firm (supported)"}
+
+
+@app.get("/api/runs/{run_id}/exclusion-gaps")
+def exclusion_gaps(run_id: str):
+    """Vendors not excluded themselves but tied to an excluded party, grouped by excluding agency."""
+    data = _get(store.vendors, run_id)
+    groups: dict[str, dict[tuple, dict]] = {}
+
+    def put(agency: str, key: tuple, row: dict) -> None:
+        g = groups.setdefault(agency, {})
+        if key not in g:
+            g[key] = row
+            return
+        if row["tie"] not in g[key]["tie"]:
+            g[key]["tie"] += f"; {row['tie'][0].lower()}{row['tie'][1:]}"
+        if row["evidence"] and row["evidence"] not in g[key]["evidence"]:
+            g[key]["evidence"] = "; ".join(x for x in (g[key]["evidence"], row["evidence"]) if x)
+
+    for r in data["rows"]:
+        flags = set(r["exclusion_flags"])
+        if "EXCLUDED" in flags:
+            continue
+        for h in r["exclusion"]:
+            if h["kind"] == "name_match" and h.get("support", "unsupported") == "unsupported":
+                continue
+            if h["kind"] not in GAP_KINDS:
+                continue
+            put(h["agency"] or "Unknown agency", (r["uei"], h["name"], h["active_date"]), {
+                "uei": r["uei"], "name": r["name"], "tot": r["tot"], "lane": r["lane"], "tie": GAP_KINDS[h["kind"]],
+                "excluded_party": h["name"], "type": h["type"], "active_date": h["active_date"],
+                "evidence": h.get("evidence") or h.get("support", ""),
+            })
+        if "SITE_UEI_QUESTION" in flags:
+            put("Corporate / site UEI questions", (r["uei"],), {
+                "uei": r["uei"], "name": r["name"], "tot": r["tot"], "lane": r["lane"],
+                "tie": "Same legal name as an excluded vendor under a different UEI", "excluded_party": r["name"],
+                "type": "", "active_date": "", "evidence": "",
+            })
+    return [{"agency": k, "vendors": sorted(v.values(), key=lambda x: -x["tot"])}
+            for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
 
 
 class DispositionIn(BaseModel):

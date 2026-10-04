@@ -16,7 +16,7 @@ EXCL_DATE = date(2026, 10, 2)
 @pytest.fixture(scope="module")
 def synthetic(tmp_path_factory):
     d = tmp_path_factory.mktemp("syn")
-    vendors, excl, planted = make_synthetic(d, n=3000, seed=11)
+    vendors, excl, _sam, planted = make_synthetic(d, n=3000, seed=11)
     res = run_pipeline(vendors, excl, EXCL_DATE)
     by_uei = res.vendors.set_index("uei")
     return res, by_uei, planted, vendors, excl
@@ -89,7 +89,8 @@ def test_alias_comment_links_vendor(synthetic):
 
 def test_expired_exclusions_dropped(synthetic):
     res, *_ = synthetic
-    assert res.manifest["exclusions_active_records"] == 3
+    # 11 synthetic records; only the EPA one that terminated in 2022 is inactive.
+    assert res.manifest["exclusions_active_records"] == 10
 
 
 def test_parse_aliases():

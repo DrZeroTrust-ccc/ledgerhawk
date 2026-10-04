@@ -6,7 +6,7 @@ reproducible. Dispositions and the audit log are keyed by UEI so they carry acro
 """
 from __future__ import annotations
 
-import hashlib
+import secrets
 import json
 import shutil
 import sqlite3
@@ -14,6 +14,7 @@ import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 
 DISPOSITIONS = [
@@ -25,6 +26,12 @@ DISPOSITIONS = [
 ]
 
 
+SOURCE_KINDS = {
+    "sam": {"label": "SAM.gov entity extract (V2)", "stale_days": 35},
+    "exclusions": {"label": "SAM exclusions extract", "stale_days": 2},
+}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -33,6 +40,7 @@ class Store:
     def __init__(self, root: str | Path):
         self.root = Path(root)
         (self.root / "runs").mkdir(parents=True, exist_ok=True)
+        (self.root / "sources").mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict] = {}
         self._lock = threading.Lock()
         self.db_path = self.root / "state.db"
@@ -51,11 +59,45 @@ class Store:
     def _db(self):
         return sqlite3.connect(self.db_path)
 
+    # ---- data sources (SAM extract, exclusions), uploaded once and shared by runs ----------
+    def add_source(self, kind: str, path: Path, as_of: date, analyst: str) -> dict:
+        if kind not in SOURCE_KINDS:
+            raise ValueError(f"Unknown source kind: {kind}")
+        sha = file_sha256(path)
+        sid = f"{kind}-{as_of.isoformat()}-{sha[:8]}"
+        d = self.root / "sources" / sid
+        if not d.exists():
+            d.mkdir(parents=True)
+            shutil.copyfile(path, d / path.name)
+        meta = {"id": sid, "kind": kind, "label": SOURCE_KINDS[kind]["label"], "as_of": as_of.isoformat(),
+                "file": path.name, "sha256": sha, "bytes": path.stat().st_size, "uploaded_by": analyst, "uploaded_at": _now()}
+        if not (d / "meta.json").exists():
+            (d / "meta.json").write_text(json.dumps(meta, indent=2))
+            self.audit(analyst, "source_added", None, None, f"{meta['label']} as of {meta['as_of']} ({path.name})")
+        return self.source(sid)
+
+    def source(self, sid: str) -> dict:
+        d = (self.root / "sources" / sid).resolve()
+        if d.parent != (self.root / "sources").resolve() or not (d / "meta.json").exists():
+            raise KeyError(sid)
+        meta = json.loads((d / "meta.json").read_text())
+        age = (date.today() - date.fromisoformat(meta["as_of"])).days
+        meta["age_days"] = age
+        meta["stale"] = age > SOURCE_KINDS[meta["kind"]]["stale_days"]
+        meta["stale_after_days"] = SOURCE_KINDS[meta["kind"]]["stale_days"]
+        meta["path"] = str(d / meta["file"])
+        return meta
+
+    def list_sources(self) -> list[dict]:
+        out = [self.source(d.name) for d in (self.root / "sources").iterdir() if (d / "meta.json").exists()]
+        return sorted(out, key=lambda m: (m["kind"], m["as_of"]), reverse=True)
+
     # ---- runs -------------------------------------------------------------
     def create_run(self, vendor_path: Path, exclusions_path: Path | None, exclusions_date: date | None,
                    *, synthetic: bool, analyst: str, restore: set[str] | None = None,
-                   parent_id: str | None = None, label: str = "") -> str:
-        h = hashlib.sha256(f"{_now()}{vendor_path.name}{sorted(restore or [])}".encode()).hexdigest()[:8]
+                   parent_id: str | None = None, label: str = "", sam_source: str | None = None) -> str:
+        sam = self.source(sam_source) if sam_source else None
+        h = secrets.token_hex(4)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + h
         d = self.root / "runs" / run_id
         (d / "inputs").mkdir(parents=True)
@@ -65,7 +107,10 @@ class Store:
         if exclusions_path:
             e = d / "inputs" / exclusions_path.name
             shutil.copyfile(exclusions_path, e)
-        res = run_pipeline(v, e, exclusions_date, restore=restore)
+        res = run_pipeline(v, e, exclusions_date, restore=restore,
+                           sam_file=sam["path"] if sam else None,
+                           sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
+                           sam_cache_dir=Path(sam["path"]).parent if sam else None)
         res.manifest["data_class"] = "synthetic" if synthetic else "production"
         res.write(d)
         meta = {
@@ -74,6 +119,7 @@ class Store:
             "vendor_file": v.name, "exclusions_file": e.name if e else None,
             "exclusions_date": exclusions_date.isoformat() if exclusions_date else None,
             "restore": sorted(restore or []),
+            "sam_source": sam["id"] if sam else None, "sam_date": sam["as_of"] if sam else None,
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
         self.audit(analyst, "run_created", None, run_id, f"{meta['label']} ({meta['data_class']})")
@@ -107,7 +153,11 @@ class Store:
             if run_id not in self._cache:
                 d = self.run_dir(run_id)
                 rows = [json.loads(line) for line in open(d / "vendors.jsonl")]
-                self._cache[run_id] = {"rows": rows, "by_uei": {r["uei"]: r for r in rows if r["uei"]}}
+                by_nn: dict[str, list[str]] = {}
+                for r in rows:
+                    if r.get("nn") and r["uei"]:
+                        by_nn.setdefault(r["nn"], []).append(r["uei"])
+                self._cache[run_id] = {"rows": rows, "by_uei": {r["uei"]: r for r in rows if r["uei"]}, "by_nn": by_nn}
                 if len(self._cache) > 4:
                     self._cache.pop(next(iter(self._cache)))
             return self._cache[run_id]
@@ -119,7 +169,8 @@ class Store:
         excl = d / "inputs" / meta["exclusions_file"] if meta["exclusions_file"] else None
         ed = date.fromisoformat(meta["exclusions_date"]) if meta["exclusions_date"] else None
         new_id = self.create_run(d / "inputs" / meta["vendor_file"], excl, ed, synthetic=meta["data_class"] == "synthetic",
-                                 analyst=analyst, restore=restore, parent_id=run_id, label=meta["label"])
+                                 analyst=analyst, restore=restore, parent_id=run_id, label=meta["label"],
+                                 sam_source=meta.get("sam_source"))
         self.audit(analyst, "restored", uei, new_id, note)
         return new_id
 

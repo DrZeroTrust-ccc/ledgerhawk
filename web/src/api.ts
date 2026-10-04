@@ -18,12 +18,84 @@ export type VendorRow = {
   tot: number
   signals: Signal[]
   exclusion_flags: string[]
+  certs?: string[]
+  in_sam?: boolean
   disposition: Disposition | null
 }
 
+export type Poc = { role: string; name: string; title: string; city: string; state: string; pkey: string; universe: number }
+
+export type SamCard = {
+  legal_name: string
+  dba: string
+  cage: string
+  active: boolean
+  reg_date: string
+  exp_date: string
+  last_update: string
+  start_date: string
+  certs: string[]
+  naics: string
+  address: string
+  city: string
+  state: string
+  akey: string
+  bkey: string
+  suite_count: number
+  bldg_count: number
+  residential: boolean
+  virtual: boolean
+  pocs: Poc[]
+}
+
+export type LinkedVendor = { uei: string; name: string; via: string; same_suite: boolean; certified: boolean; lane: string; tot: number }
+
+export type GraphNode = {
+  id: string
+  kind: 'vendor' | 'person' | 'suite' | 'building' | 'excluded'
+  label: string
+  uei?: string
+  lane?: string
+  queue?: string
+  excluded?: boolean
+  center?: boolean
+  kept_pair?: boolean
+  hub?: boolean
+  universe?: number
+  note?: string
+  agency?: string
+  type?: string
+  active_date?: string
+  scope?: string
+  tot?: number
+}
+export type GraphEdge = { source: string; target: string; kind: string; label: string }
+export type Graph = { nodes: GraphNode[]; edges: GraphEdge[]; paths_to_excluded: { to: string; agency: string; hops: number | null }[] }
+
+export type Source = {
+  id: string
+  kind: 'sam' | 'exclusions'
+  label: string
+  as_of: string
+  file: string
+  sha256: string
+  bytes: number
+  uploaded_by: string
+  uploaded_at: string
+  age_days: number
+  stale: boolean
+  stale_after_days: number
+}
+
+export type GapGroup = {
+  agency: string
+  vendors: { uei: string; name: string; tot: number; lane: string; tie: string; excluded_party: string; type: string; active_date: string; evidence: string }[]
+}
+
 export type ExclusionHit = {
-  kind: 'direct' | 'name_match' | 'alias'
+  kind: 'direct' | 'name_match' | 'alias' | 'address' | 'person'
   support?: string
+  evidence?: string
   name: string
   uei: string
   agency: string
@@ -47,6 +119,8 @@ export type VendorDetail = VendorRow & {
   why: string
   exclusion: ExclusionHit[]
   history: HistoryItem[]
+  sam: SamCard | null
+  links: LinkedVendor[]
 }
 
 export type FunnelStep = {
@@ -72,6 +146,8 @@ export type RunMeta = {
   exclusions_file: string | null
   exclusions_date: string | null
   restore: string[]
+  sam_source?: string | null
+  sam_date?: string | null
   funnel: FunnelStep[]
   queue_counts: QueueCounts
 }
@@ -142,6 +218,10 @@ export const api = {
   restore: (id: string, uei: string, body: { note: string; analyst: string }) =>
     req<{ id: string }>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/restore`, json(body)),
   audit: () => req<HistoryItem[]>('/api/audit'),
+  sources: () => req<{ sources: Source[] }>('/api/sources'),
+  addSource: (form: FormData) => req<Source>('/api/sources', { method: 'POST', body: form }),
+  graph: (id: string, uei: string) => req<Graph>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/graph`),
+  gaps: (id: string) => req<GapGroup[]>(`/api/runs/${id}/exclusion-gaps`),
 }
 
 export function money(x: number): string {
@@ -160,6 +240,7 @@ export const num = (n: number) => n.toLocaleString('en-US')
 
 export const QUEUE_LABEL: Record<string, string> = {
   priority: 'Priority',
+  relationship: 'Relationship screen',
   strong: 'Strong single signal',
   exclusion: 'Exclusion-linked',
   watch: 'Watch (deferred)',
@@ -171,7 +252,12 @@ export const FLAG_LABEL: Record<string, string> = {
   SITE_UEI_QUESTION: 'Same name as excluded UEI',
   STALE_PENDING: 'Pending over 12 months',
   NAME_MATCH_CANDIDATE: 'Name-only candidate',
+  NAME_MATCH_SUPPORTED: 'Name match, same area',
+  R_EXADDR: 'Shares suite with excluded party',
+  R_EXPOC: 'Shares contact with excluded party',
 }
+
+export const queueTotal = (q: QueueCounts) => (q.priority ?? 0) + (q.relationship ?? 0) + (q.strong ?? 0) + (q.exclusion ?? 0)
 
 export const REASON_LABEL: Record<string, string> = {
   NONCOMMERCIAL: 'Not a commercial vendor',

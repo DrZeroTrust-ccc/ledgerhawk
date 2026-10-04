@@ -6,6 +6,7 @@ import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
   ['priority', 'Priority'],
+  ['relationship', 'Relationship screen'],
   ['strong', 'Strong single signal'],
   ['exclusion', 'Exclusion-linked'],
   ['watch', 'Watch (deferred)'],
