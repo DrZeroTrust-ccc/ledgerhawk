@@ -217,6 +217,19 @@ async def create_subject_screen(
     return {"id": sid}
 
 
+@app.post("/api/subject-screens/{sid}/recheck")
+def recheck_subject_screen(sid: str, analyst: str = Form(""), sam_source: str = Form(""), exclusions_source: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the re-check is attributed.")
+    try:
+        new_id = store.recheck_subject_screen(sid, analyst, sam_source or None, exclusions_source or None)
+    except KeyError:
+        raise HTTPException(404, "Subject screen, source or run not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"id": new_id}
+
+
 @app.get("/api/subject-screens/{sid}")
 def subject_screen(sid: str):
     try:

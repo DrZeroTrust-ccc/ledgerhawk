@@ -83,6 +83,22 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
     _head(ws, r + 2, ["Status", "Subjects"], [40, 90])
     _rows(ws, r + 3, [[label, screen["counts"].get(k, 0)] for k, label in STATUSES.items()], set(), 20)
 
+    ch = screen.get("changes")
+    if ch:
+        ws = wb.create_sheet("What Changed")
+        _banner(ws, screen)
+        ps = ch["parent_sources"]
+        since = "; ".join(x for x in [f"SAM {ps['sam_extract_date']}" if ps.get("sam_extract_date") else "",
+                                      f"exclusions {ps['exclusions_extract_date']}" if ps.get("exclusions_extract_date") else ""] if x)
+        _title(ws, "What Changed", f"Compared with screen {ch['parent_id']} of {ch['parent_created_at'][:10]} ({since}). "
+                                   f"{ch['counts']['changed']} subjects changed, {ch['counts']['unchanged']} unchanged.")
+        _head(ws, 5, ["Subject #", "Subject", "Status Before", "Status Now", "New Since Last Check", "No Longer Found"],
+              [10, 32, 28, 28, 70, 70])
+        last = _rows(ws, 6, [[r["ref"], r["name"], r["status_before_label"], r["status_now_label"],
+                              "\n".join(f"• {x}" for x in r["added"]), "\n".join(f"• {x}" for x in r["removed"])]
+                             for r in ch["subjects"]], set(), 60)
+        ws.auto_filter.ref = f"B5:G{last}"
+
     ws = wb.create_sheet("Subjects")
     _banner(ws, screen)
     _title(ws, "Subjects", sub)

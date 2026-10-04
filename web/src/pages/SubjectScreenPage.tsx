@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { api, money, SUBJECT_STATUS, type SubjectResult, type SubjectScreen } from '../api'
-import { Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { api, money, SUBJECT_STATUS, type SubjectChanges, type SubjectResult, type SubjectScreen } from '../api'
+import { useAnalystName } from '../App'
+import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
 
 const STATUS_STYLE: Record<string, string> = {
   excluded: 'bg-crimson-50 text-crimson ring-1 ring-crimson/30',
@@ -112,6 +113,84 @@ function Subject({ s, withDollars }: { s: SubjectResult; withDollars: boolean })
   )
 }
 
+function Changes({ ch }: { ch: SubjectChanges }) {
+  const ps = ch.parent_sources
+  const since = [ps.sam_extract_date && `SAM ${ps.sam_extract_date}`, ps.exclusions_extract_date && `exclusions ${ps.exclusions_extract_date}`]
+    .filter(Boolean)
+    .join(', ')
+  const arrow = { worse: 'text-crimson', better: 'text-emerald-700', same: 'text-slate-600' }
+  return (
+    <Card title="What changed since the last check">
+      <p className="text-sm text-slate-600">
+        Compared with the <Link to={`/subjects/${ch.parent_id}`} className="text-navy underline">screen of {ch.parent_created_at.slice(0, 10)}</Link>
+        {since && ` (${since})`}. {ch.counts.changed} changed, {ch.counts.worse} got worse, {ch.counts.better} improved, {ch.counts.unchanged} unchanged.
+      </p>
+      {ch.subjects.length === 0 ? (
+        <p className="mt-3 text-sm text-slate-500">Nothing changed for any subject.</p>
+      ) : (
+        <ul className="mt-3 divide-y divide-slate-100">
+          {ch.subjects.map((r) => (
+            <li key={r.ref} className="py-2 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-slate-400">#{r.ref}</span>
+                <span className="font-medium">{r.name}</span>
+                <span className={arrow[r.direction]}>
+                  {r.direction === 'same' ? r.status_now_label : `${r.status_before_label} → ${r.status_now_label}`}
+                </span>
+              </div>
+              <ul className="mt-1 list-disc pl-5 text-ink">
+                {r.added.map((x, i) => (
+                  <li key={`a${i}`}>
+                    <span className="font-medium">New:</span> {x}
+                  </li>
+                ))}
+                {r.removed.map((x, i) => (
+                  <li key={`r${i}`} className="text-slate-500">
+                    No longer found: {x}
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  )
+}
+
+function Recheck({ id }: { id: string }) {
+  const [analyst] = useAnalystName()
+  const nav = useNavigate()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <span className="flex flex-col items-end gap-1">
+      <Button
+        variant="secondary"
+        disabled={busy || !analyst.trim()}
+        title={analyst.trim() ? 'Run the same subjects against the newest SAM and exclusions extracts' : 'Enter your name in the header first'}
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          const f = new FormData()
+          f.append('analyst', analyst)
+          try {
+            const r = await api.recheckSubjectScreen(id, f)
+            nav(`/subjects/${r.id}`)
+          } catch (err) {
+            setError((err as Error).message)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? 'Re-checking…' : 'Re-check with latest data'}
+      </Button>
+      <ErrorNote error={error} />
+    </span>
+  )
+}
+
 function Header({ data }: { data: SubjectScreen }) {
   const m = data.meta
   const src = data.sources
@@ -132,7 +211,8 @@ function Header({ data }: { data: SubjectScreen }) {
               .join(' · ')}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-start gap-2">
+          <Recheck id={m.id} />
           <a
             href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`}
             className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
@@ -162,6 +242,7 @@ export default function SubjectScreenPage() {
   return (
     <div className="space-y-6">
       <Header data={data} />
+      {data.changes && <Changes ch={data.changes} />}
       <Card>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Stat label="Subjects" value={c.subjects} />

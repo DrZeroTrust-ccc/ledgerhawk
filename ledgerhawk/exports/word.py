@@ -231,6 +231,21 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
                       "contacts, suites or legal names.")
     _grid(doc, ["Status", "Subjects"], [[label, c.get(k, 0)] for k, label in STATUSES.items() if c.get(k)])
 
+    ch = screen.get("changes")
+    if ch:
+        doc.add_heading("What changed since the last check", level=2)
+        ps = ch["parent_sources"]
+        doc.add_paragraph(
+            f"Compared with the screen of {ch['parent_created_at'][:10]}"
+            + (f" (SAM {ps['sam_extract_date']}, exclusions {ps['exclusions_extract_date']})" if ps.get("sam_extract_date") and ps.get("exclusions_extract_date") else "")
+            + f": {ch['counts']['changed']} subjects changed, {ch['counts']['worse']} got worse, {ch['counts']['unchanged']} unchanged.")
+        for r in ch["subjects"]:
+            p = doc.add_paragraph()
+            p.add_run(f"{r['ref']}. {r['name']}: ").bold = True
+            p.add_run(r["status_now_label"] if r["direction"] == "same"
+                      else f"{r['status_before_label']} → {r['status_now_label']}")
+            _bullets(doc, [f"New: {x}" for x in r["added"]] + [f"No longer found: {x}" for x in r["removed"]])
+
     for s in screen["subjects"]:
         names = " / ".join((e.get("sam") or {}).get("legal_name") or e["name"] for e in s["entities"])
         doc.add_heading(f"{s['ref']}. {names or s['input_name'] or s['input_uei']}", level=2)

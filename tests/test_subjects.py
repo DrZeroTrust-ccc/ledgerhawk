@@ -145,3 +145,72 @@ def test_word_reports(syn):
     text = "\n".join(par.text for par in doc.paragraphs)
     assert "Why it flagged" in text and "Investigator notes" in text and "Matter: M-1" in text
     assert not doc.sections[0].header.paragraphs[0].text
+
+
+def _later_exclusions(excl, out, add_uei: str, drop_uei: str):
+    """A later exclusions extract: one new firm exclusion, one record dropped."""
+    import csv
+    rows = list(csv.DictReader(open(excl)))
+    rows = [r for r in rows if r["Unique Entity ID"] != drop_uei]
+    rows.append({**rows[0], "Name": "", "Classification": "Firm", "Unique Entity ID": add_uei, "Excluding Agency": "DOL",
+                 "Exclusion Type": "Ineligible (Proceedings Completed)", "Active Date": "10/05/2026", "Termination Date": "Indefinite",
+                 "Additional Comments": ""})
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    return out
+
+
+def test_compare_screens(syn, tmp_path):
+    from ledgerhawk.pipeline.subjects import compare_screens
+    sam, ex, p, (_, excl, _) = syn
+    subs = parse_subjects("\n".join([p["succ_old"], p["excluded_major"], p["ex_affiliate"]]))
+    old = subject_screen(subs, sam, ex).to_dict() | {"meta": {"id": "old", "created_at": "2026-10-04T00:00:00"}}
+    later = load_exclusions(_later_exclusions(excl, tmp_path / "ex2.csv", p["succ_old"], p["excluded_major"]), date(2026, 10, 9))
+    new = subject_screen(subs, sam, later).to_dict()
+    ch = compare_screens(old, new)
+    rows = {r["ref"]: r for r in ch["subjects"]}
+    assert rows[1]["direction"] == "worse" and rows[1]["status_now"] == "excluded"
+    assert any("DOL" in x for x in rows[1]["added"])
+    assert rows[2]["direction"] == "better" and any("GSA" in x for x in rows[2]["removed"])
+    assert 3 not in rows and ch["counts"] == {"changed": 2, "worse": 1, "better": 1, "unchanged": 1}
+    # The related entity (succ_new) sees nothing new: the change is on the subject itself.
+    assert ch["subjects"][0]["ref"] == 1  # worse first
+
+
+def test_recheck_api(syn, tmp_path):
+    from docx import Document
+    _, _, p, (vendors, excl, sam) = syn
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+    client = TestClient(appmod.app)
+    try:
+        ids = {}
+        for kind, path, d in (("sam", sam, "2026-09-06"), ("exclusions", excl, "2026-10-02")):
+            with open(path, "rb") as f:
+                ids[kind] = client.post("/api/sources", files={"file": f}, data={"kind": kind, "as_of": d, "analyst": "T"}).json()["id"]
+        r = client.post("/api/subject-screens", data={"subjects_text": f"{p['succ_old']}\n{p['excluded_major']}", "analyst": "T",
+                                                      "matter": "M-1", "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]})
+        first = r.json()["id"]
+        later = _later_exclusions(excl, tmp_path / "ex2.csv", p["succ_old"], p["excluded_major"])
+        with open(later, "rb") as f:
+            client.post("/api/sources", files={"file": ("ex2.csv", f)}, data={"kind": "exclusions", "as_of": "2026-10-09", "analyst": "T"})
+        assert client.post(f"/api/subject-screens/{first}/recheck", data={"analyst": ""}).status_code == 400
+        assert client.post("/api/subject-screens/nope/recheck", data={"analyst": "T"}).status_code == 404
+        r = client.post(f"/api/subject-screens/{first}/recheck", data={"analyst": "T"})
+        assert r.status_code == 200, r.text
+        got = client.get(f"/api/subject-screens/{r.json()['id']}").json()
+        assert got["meta"]["parent_id"] == first and got["meta"]["matter"] == "M-1"
+        assert got["sources"]["exclusions_extract_date"] == "2026-10-09"  # newest extract picked up
+        assert got["changes"]["counts"]["worse"] == 1
+        wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{got['meta']['id']}/subject-screen.xlsx").content))
+        assert "What Changed" in wb.sheetnames
+        doc = Document(io.BytesIO(client.get(f"/api/subject-screens/{got['meta']['id']}/subject-screen.docx").content))
+        assert any(par.text == "What changed since the last check" for par in doc.paragraphs)
+        assert client.get("/api/subject-screens").json()[0]["change_counts"]["changed"] == 2
+    finally:
+        mp.undo()

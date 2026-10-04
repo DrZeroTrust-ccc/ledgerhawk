@@ -398,3 +398,61 @@ def next_steps(entities: list[dict], related: list[dict], have_sam: bool) -> lis
         steps.append("No further steps from these sources. Record the sources and extract dates as the scope of this check; "
                      "it is not a clearance.")
     return steps
+
+
+KIND_TEXT = {"alias": "Named as an alias in the exclusion record of",
+             "address": "Same suite as excluded", "person": "Shares a contact with excluded", "name_match": "Same name as excluded"}
+
+
+def _facts(s: dict) -> dict[tuple, str]:
+    """The comparable facts behind a subject's result, keyed so two screens can be diffed."""
+    out: dict[tuple, str] = {}
+    for e in s["entities"]:
+        who = e["name"] + (f" [{e['uei']}]" if e["uei"] else "")
+        for h in e["exclusion"]:
+            party = h["name"] or "record for this UEI"
+            text = (f"{who}: on the exclusions list ({h['agency']}, since {h['active_date']})" if h["kind"] == "direct"
+                    else f"{who}: {KIND_TEXT.get(h['kind'], h['kind'])} {party} ({h['agency']}, since {h['active_date']})")
+            out[("ex", e["uei"], h["kind"], party, h["agency"], h["active_date"])] = text
+        for sig in e["signals"]:
+            out[("sig", e["uei"], sig["id"])] = f"{who}: {sig['label']}"
+        c = e.get("sam")
+        if c and not c["active"]:
+            out[("inactive", e["uei"])] = f"{who}: SAM registration not active"
+        if e["uei"] and c is None:
+            out[("no_sam", e["uei"])] = f"{who}: not in the SAM entity extract"
+    for r in s["related"]:
+        out[("rel", r["uei"])] = f"Related entity {r['name']} [{r['uei']}] ({'; '.join(r['via'])})"
+        if r["excluded"] or r["flags"]:
+            out[("rel_ex", r["uei"])] = f"Related entity {r['name']} [{r['uei']}] is {'excluded' if r['excluded'] else 'tied to an excluded party'}"
+    return out
+
+
+def compare_screens(old: dict, new: dict) -> dict:
+    """What changed between two screens of the same subject list (matched by subject number)."""
+    before = {s["ref"]: s for s in old["subjects"]}
+    rows = []
+    worse = better = 0
+    for s in sorted(new["subjects"], key=lambda x: x["ref"]):
+        o = before.get(s["ref"])
+        if o is None:
+            continue
+        fo, fn = _facts(o), _facts(s)
+        added = [fn[k] for k in fn if k not in fo]
+        removed = [fo[k] for k in fo if k not in fn]
+        moved = STATUS_ORDER.index(s["status"]) - STATUS_ORDER.index(o["status"])
+        worse += moved < 0
+        better += moved > 0
+        if added or removed or moved:
+            names = " / ".join((e.get("sam") or {}).get("legal_name") or e["name"] for e in s["entities"])
+            rows.append({"ref": s["ref"], "name": names or s["input_name"] or s["input_uei"],
+                         "status_before": o["status"], "status_before_label": o["status_label"],
+                         "status_now": s["status"], "status_now_label": s["status_label"],
+                         "direction": "worse" if moved < 0 else "better" if moved > 0 else "same",
+                         "added": added, "removed": removed})
+    rows.sort(key=lambda r: ({"worse": 0, "same": 1, "better": 2}[r["direction"]], r["ref"]))
+    return {
+        "parent_id": old["meta"]["id"], "parent_created_at": old["meta"]["created_at"], "parent_sources": old["sources"],
+        "subjects": rows,
+        "counts": {"changed": len(rows), "worse": worse, "better": better, "unchanged": len(new["subjects"]) - len(rows)},
+    }
