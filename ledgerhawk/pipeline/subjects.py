@@ -456,3 +456,162 @@ def compare_screens(old: dict, new: dict) -> dict:
         "subjects": rows,
         "counts": {"changed": len(rows), "worse": worse, "better": better, "unchanged": len(new["subjects"]) - len(rows)},
     }
+
+
+# --- People: every SAM registration that lists a person, and exclusions in their name -------------------
+US_STATES = set("AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND "
+                "OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR GU VI AS MP".split())
+PERSON_STATUSES = {
+    "excluded": "Excluded as an individual (same state)",
+    "tied": "Listed on an excluded firm's registration",
+    "name_only": "Same name as an excluded individual (unconfirmed)",
+    "listed": "Listed on SAM registrations",
+    "clear": "No hits in these sources",
+}
+MAX_PERSON_ENTITIES = 50
+
+
+def _up(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]+", " ", (s or "").upper())).strip()
+
+
+def parse_people(text: str) -> list[dict]:
+    """One person per line: "First Last" or "First Last, ST" (a state makes matches much more reliable)."""
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip().strip(",;")
+        if not line:
+            continue
+        name, _, rest = line.partition(",")
+        state = _up(rest)
+        state = state if state in US_STATES else ""
+        toks = _up(name).split()
+        if len(toks) < 2:
+            raise ValueError(f'Give a first and last name for each person ("{line}").')
+        out.append({"input": line, "first": toks[0], "last": toks[-1], "state": state})
+    if len(out) > MAX_SUBJECTS:
+        raise ValueError(f"A screen takes up to {MAX_SUBJECTS} people.")
+    for n, p in enumerate(out, start=1):
+        p["ref"] = n
+    return out
+
+
+def people_screen(people: list[dict], sam: SamExtract | None, ex: ExclusionsExtract | None,
+                  rules: RuleSet | None = None) -> list[dict]:
+    rules = rules or RuleSet()
+    cap = rules.hub_cap
+    out = []
+    ent = sam.entities.set_index("uei") if sam else None
+    excluded_ueis = set(ex.records.loc[ex.records["uei"] != "", "uei"]) if ex else set()
+    rec = ex.records if ex else None
+    for p in people:
+        listings = []
+        if sam:
+            m = sam.pocs[(sam.pocs["first"].map(_up) == p["first"]) & (sam.pocs["last"].map(_up) == p["last"])]
+            if p["state"]:
+                m = m[m["state"].map(_up) == p["state"]]
+            for u, g in m.groupby("uei"):
+                e = ent.loc[u] if u in ent.index else None
+                listings.append({
+                    "uei": u, "name": e["legal_name"] if e is not None else u,
+                    "roles": sorted(POC_ROLE_TEXT.get(r, r) for r in g["role"]),
+                    "place": ", ".join(x for x in [g["city"].iloc[0].title(), g["state"].iloc[0]] if x),
+                    "active": bool(e["active"]) if e is not None else False,
+                    "excluded": u in excluded_ueis,
+                })
+            listings.sort(key=lambda x: (not x["excluded"], x["name"]))
+        hits = []
+        if rec is not None:
+            ind = rec[rec["classification"].str.lower() == "individual"]
+            ind = ind[(ind["first"].map(_up) == p["first"]) & (ind["last"].map(_up) == p["last"])]
+            for r in ind.to_dict(orient="records"):
+                same_state = bool(p["state"]) and _up(r["state"]) == p["state"]
+                support = ("same state" if same_state else
+                           f"different state ({r['state']})" if p["state"] and r["state"] else "name only")
+                hits.append({"name": r["display_name"], "agency": r["agency"], "type": r["etype"], "active_date": r["active_date"],
+                             "termination_date": r["termination_date"] or "Indefinite", "city": r["city"], "state": r["state"],
+                             "comments": r["comments"], "support": support})
+        common = len(listings) > cap
+        findings = []
+        for h in hits:
+            where = ", ".join(x for x in [h["city"], h["state"]] if x) or "no location on record"
+            if h["support"] == "same state":
+                findings.append(f"An individual of this name in the same state is excluded: {h['agency']}, {h['type']}, since "
+                                f"{h['active_date']} ({where}).")
+            else:
+                findings.append(f"An individual of this name is excluded ({h['agency']}, since {h['active_date']}, {where}; "
+                                f"{h['support']}). Nothing else ties them yet; common names produce false matches.")
+        ex_list = [x for x in listings if x["excluded"]]
+        for x in ex_list:
+            findings.append(f"Listed as {', '.join(x['roles'])} on {x['name']} [{x['uei']}], which is excluded.")
+        if listings:
+            findings.append(f"Listed as a contact on {len(listings)} SAM registration{'s' if len(listings) != 1 else ''}"
+                            + ("" if p["state"] else " (any state; add a state to narrow this)") + ".")
+        if common:
+            findings.append(f"This name appears on more than {cap} registrations, so it is probably several people or a "
+                            "registered agent; treat the list as unconfirmed.")
+        if any(h["support"] == "same state" for h in hits):
+            status = "excluded"
+        elif ex_list:
+            status = "tied"
+        elif hits:
+            status = "name_only"
+        elif listings:
+            status = "listed"
+        else:
+            status = "clear"
+            findings.append("No SAM registration lists this person and no exclusion is in this name.")
+        steps = []
+        if status in ("excluded", "name_only"):
+            steps.append("Confirm identity against the exclusion record (middle name, address, date of birth from other "
+                         "sources) before attributing it to this person.")
+        if ex_list or status == "excluded":
+            steps.append("Establish the person's role and ownership in each listed firm, and whether an excluded party "
+                         "continues to do business through them. Raise affiliation risk with counsel.")
+        if listings:
+            steps.append("Check each listed firm's ownership and officers in state corporate registries; SAM lists contacts, "
+                         "not owners.")
+        if not steps:
+            steps.append("No further steps from these sources; this is not a clearance.")
+        out.append({"ref": p["ref"], "input": p["input"], "first": p["first"], "last": p["last"], "state": p["state"],
+                    "status": status, "status_label": PERSON_STATUSES[status], "common": common,
+                    "registrations": listings[:MAX_PERSON_ENTITIES], "registrations_total": len(listings),
+                    "exclusions": hits, "findings": findings, "next_steps": steps})
+    out.sort(key=lambda x: (list(PERSON_STATUSES).index(x["status"]), x["ref"]))
+    return out
+
+
+POC_ROLE_TEXT = {"gov_business": "government business contact", "alt_gov_business": "alternate government business contact",
+                 "past_performance": "past performance contact", "alt_past_performance": "alternate past performance contact",
+                 "electronic_business": "electronic business contact", "alt_electronic_business": "alternate electronic business contact"}
+
+
+def _person_facts(p: dict) -> dict[tuple, str]:
+    out: dict[tuple, str] = {}
+    for x in p["registrations"]:
+        out[("reg", x["uei"])] = f"Listed on {x['name']} [{x['uei']}]"
+        if x["excluded"]:
+            out[("reg_ex", x["uei"])] = f"{x['name']} [{x['uei']}] is excluded"
+    for h in p["exclusions"]:
+        out[("ex", h["name"], h["agency"], h["active_date"])] = f"Individual exclusion: {h['name']} ({h['agency']}, since {h['active_date']})"
+    return out
+
+
+def compare_people(old: list[dict], new: list[dict]) -> list[dict]:
+    before = {p["ref"]: p for p in old}
+    order = list(PERSON_STATUSES)
+    rows = []
+    for p in sorted(new, key=lambda x: x["ref"]):
+        o = before.get(p["ref"])
+        if o is None:
+            continue
+        fo, fn = _person_facts(o), _person_facts(p)
+        added = [fn[k] for k in fn if k not in fo]
+        removed = [fo[k] for k in fo if k not in fn]
+        moved = order.index(p["status"]) - order.index(o["status"])
+        if added or removed or moved:
+            rows.append({"ref": p["ref"], "name": p["input"], "status_before_label": o["status_label"],
+                         "status_now_label": p["status_label"],
+                         "direction": "worse" if moved < 0 else "better" if moved > 0 else "same",
+                         "added": added, "removed": removed})
+    return rows

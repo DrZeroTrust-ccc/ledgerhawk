@@ -272,6 +272,7 @@ export type SubjectChanges = {
   parent_created_at: string
   parent_sources: SubjectScreenSources
   subjects: SubjectChange[]
+  people?: SubjectChange[]
   counts: ChangeCounts
 }
 
@@ -284,11 +285,28 @@ export type SubjectScreenSources = {
   rule_set_version: string
 }
 
+export type PersonResult = {
+  ref: number
+  input: string
+  first: string
+  last: string
+  state: string
+  status: string
+  status_label: string
+  common: boolean
+  registrations: { uei: string; name: string; roles: string[]; place: string; active: boolean; excluded: boolean }[]
+  registrations_total: number
+  exclusions: { name: string; agency: string; type: string; active_date: string; city: string; state: string; support: string }[]
+  findings: string[]
+  next_steps: string[]
+}
+
 export type SubjectScreen = {
   meta: SubjectScreenMeta
   sources: SubjectScreenSources
   counts: Record<string, number>
   subjects: SubjectResult[]
+  people?: PersonResult[]
   changes?: SubjectChanges
 }
 

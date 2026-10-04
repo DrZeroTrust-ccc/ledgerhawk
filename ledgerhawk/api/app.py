@@ -18,7 +18,7 @@ from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
-from ..pipeline.subjects import STATUSES, parse_subjects
+from ..pipeline.subjects import PERSON_STATUSES, STATUSES, parse_people, parse_subjects
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from ..exports.case import build_case
 from ..exports.small import build_small
@@ -99,6 +99,7 @@ def meta():
         "integrity_tiers": INTEGRITY_TIERS,
         "integrity_meaning": INTEGRITY_MEANING,
         "subject_statuses": STATUSES,
+        "person_statuses": PERSON_STATUSES,
     }
 
 
@@ -182,6 +183,7 @@ def list_subject_screens():
 async def create_subject_screen(
     subjects_text: str = Form(""),
     subjects_file: UploadFile | None = File(None),
+    people_text: str = Form(""),
     analyst: str = Form(""),
     matter: str = Form(""),
     client: str = Form(""),
@@ -201,7 +203,8 @@ async def create_subject_screen(
             path = Path(tmp) / Path(subjects_file.filename).name
             path.write_bytes(await subjects_file.read())
         try:
-            subjects = parse_subjects(subjects_text, path)
+            people = parse_people(people_text)
+            subjects = parse_subjects(subjects_text, path) if (subjects_text.strip() or path or not people) else []
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     try:
@@ -209,7 +212,8 @@ async def create_subject_screen(
             store.run_dir(dollars_run)
         sid = store.create_subject_screen(
             subjects, analyst=analyst, matter=matter, client=client, privileged=privileged, synthetic=synthetic,
-            sam_source=sam_source or None, exclusions_source=exclusions_source or None, dollars_run=dollars_run or None)
+            sam_source=sam_source or None, exclusions_source=exclusions_source or None, dollars_run=dollars_run or None,
+            people=people)
     except KeyError:
         raise HTTPException(400, "That source or run no longer exists.")
     except ValueError as exc:

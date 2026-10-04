@@ -17,8 +17,9 @@ from pathlib import Path
 from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
+from ..pipeline.rules import RuleSet
 from ..pipeline.sam import load_sam
-from ..pipeline.subjects import compare_screens, subject_screen
+from ..pipeline.subjects import compare_people, compare_screens, people_screen, subject_screen
 from ..pipeline.tiering import TIERS
 
 DISPOSITIONS = [
@@ -194,7 +195,7 @@ class Store:
     def create_subject_screen(self, subjects: list[dict], *, analyst: str, matter: str = "", client: str = "",
                               privileged: bool = False, synthetic: bool = False, sam_source: str | None = None,
                               exclusions_source: str | None = None, dollars_run: str | None = None,
-                              parent_id: str | None = None) -> str:
+                              parent_id: str | None = None, people: list[dict] | None = None) -> str:
         sam_meta = self.source(sam_source) if sam_source else None
         ex_meta = self.source(exclusions_source) if exclusions_source else None
         sam = load_sam(sam_meta["path"], date.fromisoformat(sam_meta["as_of"]), Path(sam_meta["path"]).parent) if sam_meta else None
@@ -203,21 +204,38 @@ class Store:
         if dollars_run:
             dollars = {u: {k: r.get(k) for k in ("fy24", "fy25", "struct", "naics", "naicsd", "psc", "pscd")}
                        for u, r in self.vendors(dollars_run)["by_uei"].items()}
-        res = subject_screen(subjects, sam, ex, dollars=dollars).to_dict()
+        if sam is None and ex is None:
+            raise ValueError("Pick a SAM entity extract, an exclusions extract, or both.")
+        res = (subject_screen(subjects, sam, ex, dollars=dollars).to_dict() if subjects else
+               {"subjects": [], "counts": {"subjects": 0, "related": 0}, "sources": {
+                   "sam_file": sam.source_name if sam else None, "sam_sha256": sam.sha256 if sam else None,
+                   "sam_extract_date": sam.extract_date.isoformat() if sam else None,
+                   "exclusions_file": ex.source_name if ex else None,
+                   "exclusions_extract_date": ex.extract_date.isoformat() if ex else None,
+                   "rule_set_version": RuleSet().version, "rule_set_fingerprint": RuleSet().fingerprint()}})
+        res["people"] = people_screen(people or [], sam, ex)
+        res["counts"]["people"] = len(res["people"])
         sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(4)
         res["meta"] = {
             "id": sid, "created_at": _now(), "created_by": analyst, "matter": matter.strip(), "client": client.strip(),
             "privileged": privileged, "data_class": "synthetic" if synthetic else "production",
             "sam_source": sam_source, "exclusions_source": exclusions_source, "dollars_run": dollars_run,
             "input": [{k: s[k] for k in ("ref", "uei", "name", "role")} for s in subjects],
+            "input_people": people or [],
             "parent_id": parent_id,
         }
         if parent_id:
-            res["changes"] = compare_screens(self.subject_screen(parent_id), res)
+            parent = self.subject_screen(parent_id)
+            res["changes"] = compare_screens(parent, res)
+            res["changes"]["people"] = compare_people(parent.get("people") or [], res["people"])
+            res["changes"]["counts"]["changed"] += len(res["changes"]["people"])
+            res["changes"]["counts"]["worse"] += sum(r["direction"] == "worse" for r in res["changes"]["people"])
+            res["changes"]["counts"]["better"] += sum(r["direction"] == "better" for r in res["changes"]["people"])
+            res["changes"]["counts"]["unchanged"] += len(res["people"]) - len(res["changes"]["people"])
         d = self.root / "subjects" / sid
         d.mkdir(parents=True)
         (d / "screen.json").write_text(json.dumps(res, indent=2, default=str))
-        label = matter.strip() or f"{len(subjects)} subjects"
+        label = matter.strip() or f"{len(subjects)} subjects, {len(people or [])} people"
         what = f"Re-check of {parent_id}" if parent_id else "Subject screen"
         self.audit(analyst, "subject_screen", None, None, f"{what} {sid}: {label} ({len(subjects)} subjects)")
         return sid
@@ -235,7 +253,7 @@ class Store:
         return self.create_subject_screen(
             m["input"], analyst=analyst, matter=m.get("matter", ""), client=m.get("client", ""),
             privileged=bool(m.get("privileged")), synthetic=m.get("data_class") == "synthetic", sam_source=sam,
-            exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid)
+            exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid, people=m.get("input_people") or [])
 
     def subject_screen(self, sid: str) -> dict:
         d = (self.root / "subjects" / sid).resolve()
@@ -248,7 +266,7 @@ class Store:
         dirs = [d for d in (self.root / "subjects").iterdir() if (d / "screen.json").exists()]
         for d in sorted(dirs, key=lambda d: ((d / "screen.json").stat().st_mtime_ns, d.name), reverse=True):
             s = json.loads((d / "screen.json").read_text())
-            out.append({**{k: v for k, v in s["meta"].items() if k != "input"}, "counts": s["counts"], "sources": s["sources"],
+            out.append({**{k: v for k, v in s["meta"].items() if k not in ("input", "input_people")}, "counts": s["counts"], "sources": s["sources"],
                         "change_counts": (s.get("changes") or {}).get("counts")})
         return out
 
