@@ -230,7 +230,18 @@ GAP_KINDS = {"address": "Shares a suite with an excluded party", "person": "Shar
 def exclusion_gaps(run_id: str):
     """Vendors not excluded themselves but tied to an excluded party, grouped by excluding agency."""
     data = _get(store.vendors, run_id)
-    groups: dict[str, list[dict]] = {}
+    groups: dict[str, dict[tuple, dict]] = {}
+
+    def put(agency: str, key: tuple, row: dict) -> None:
+        g = groups.setdefault(agency, {})
+        if key not in g:
+            g[key] = row
+            return
+        if row["tie"] not in g[key]["tie"]:
+            g[key]["tie"] += f"; {row['tie'][0].lower()}{row['tie'][1:]}"
+        if row["evidence"] and row["evidence"] not in g[key]["evidence"]:
+            g[key]["evidence"] = "; ".join(x for x in (g[key]["evidence"], row["evidence"]) if x)
+
     for r in data["rows"]:
         flags = set(r["exclusion_flags"])
         if "EXCLUDED" in flags:
@@ -240,18 +251,19 @@ def exclusion_gaps(run_id: str):
                 continue
             if h["kind"] not in GAP_KINDS:
                 continue
-            groups.setdefault(h["agency"] or "Unknown agency", []).append({
+            put(h["agency"] or "Unknown agency", (r["uei"], h["name"], h["active_date"]), {
                 "uei": r["uei"], "name": r["name"], "tot": r["tot"], "lane": r["lane"], "tie": GAP_KINDS[h["kind"]],
                 "excluded_party": h["name"], "type": h["type"], "active_date": h["active_date"],
                 "evidence": h.get("evidence") or h.get("support", ""),
             })
         if "SITE_UEI_QUESTION" in flags:
-            groups.setdefault("Corporate / site UEI questions", []).append({
+            put("Corporate / site UEI questions", (r["uei"],), {
                 "uei": r["uei"], "name": r["name"], "tot": r["tot"], "lane": r["lane"],
                 "tie": "Same legal name as an excluded vendor under a different UEI", "excluded_party": r["name"],
                 "type": "", "active_date": "", "evidence": "",
             })
-    return [{"agency": k, "vendors": sorted(v, key=lambda x: -x["tot"])} for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
+    return [{"agency": k, "vendors": sorted(v.values(), key=lambda x: -x["tot"])}
+            for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))]
 
 
 class DispositionIn(BaseModel):

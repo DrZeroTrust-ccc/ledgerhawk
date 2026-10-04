@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, money, num, REASON_LABEL, type FunnelStep, type RunSummary } from '../api'
+import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
 
@@ -149,14 +149,17 @@ function QueueTiles({ run }: { run: RunSummary }) {
   const id = run.meta.id
   const tiles: [string, number, string, string][] = [
     ['Priority', q.priority, `/runs/${id}/queue?queue=priority`, 'Two or more of S1–S4'],
+    ...(run.meta.sam_source
+      ? ([['Relationship screen', q.relationship ?? 0, `/runs/${id}/queue?queue=relationship`, 'Two signals, one from SAM links']] as [string, number, string, string][])
+      : []),
     ['Strong single signal', q.strong, `/runs/${id}/queue?queue=strong`, 'One signal above the strong bar'],
-    ['Exclusion-linked', q.exclusion, `/runs/${id}/queue?queue=exclusion`, `${num(q.directly_excluded)} directly excluded`],
+    ['Exclusion-linked', q.exclusion, `/runs/${id}/queue?queue=exclusion`, `${num(q.directly_excluded)} excluded · ${num(q.address_or_contact_ties ?? 0)} tied by address or contact`],
     ['Watch (deferred)', q.watch, `/runs/${id}/queue?queue=watch`, 'One signal; deferred, not cleared'],
     ['Integrity lane', q.integrity_lane, `/runs/${id}/queue?lane=integrity`, 'Under $250K; integrity signals only'],
     ['Data-quality review', q.closeouts, `/runs/${id}/queue?lane=closeout`, 'Net small only from deobligations'],
   ]
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-7">
       {tiles.map(([label, n, to, sub]) => (
         <Link key={label} to={to} className="rounded-lg border border-slate-200 bg-white p-4 hover:border-navy">
           <Stat label={label} value={num(n)} sub={sub} />
@@ -178,7 +181,7 @@ function Histogram({ runId }: { runId: string }) {
         {entries.map(([k, n]) => (
           <li key={k}>
             <Link to={`/runs/${runId}/queue?signal=${k.replace(/\+/g, ',')}`} className="flex items-center gap-3 text-sm hover:text-navy">
-              <span className="w-28 font-mono text-xs">{k}</span>
+              <span className="w-40 shrink-0 break-all font-mono text-xs">{k.replace(/\+/g, ' + ')}</span>
               <span className="h-2 flex-1 rounded bg-slate-100">
                 <span className="block h-2 rounded bg-navy/70" style={{ width: `${(100 * n) / max}%` }} />
               </span>
@@ -214,7 +217,13 @@ function Inputs({ run }: { run: RunSummary }) {
         <dt className="text-slate-500">Exclusions extract</dt>
         <dd>{m.exclusions_file ? `${m.exclusions_file} · as of ${m.exclusions_extract_date} · ${num(Number(m.exclusions_active_records))} active records` : <span className="text-amber-700">Not provided. The exclusion lane is empty.</span>}</dd>
         <dt className="text-slate-500">SAM entity extract</dt>
-        <dd className="text-slate-500">Not used yet (arrives with SAM enrichment)</dd>
+        <dd>
+          {m.sam_file ? (
+            `${m.sam_file} · as of ${m.sam_extract_date} · ${num(Number(m.sam_records))} entities · ${num(run.queue_counts.sam_matched ?? 0)} vendors matched`
+          ) : (
+            <span className="text-amber-700">Not provided. SAM cards, the relationship screen and address or contact ties are off.</span>
+          )}
+        </dd>
         <dt className="text-slate-500">Rule set</dt>
         <dd>
           {m.rule_set_version} <span className="font-mono text-xs text-slate-500">{m.rule_set_fingerprint}</span>
@@ -270,9 +279,9 @@ export default function RunDashboard() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-semibold text-navy">{run.meta.label}</h1>
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="break-all text-2xl font-semibold text-navy">{run.meta.label}</h1>
             <DataClassBadge dataClass={run.meta.data_class} />
           </div>
           <p className="mt-1 text-sm text-slate-600">
@@ -290,7 +299,7 @@ export default function RunDashboard() {
           </p>
         </div>
         <Link to={`/runs/${id}/queue`}>
-          <Button>Open queue ({num(q.priority + q.strong + q.exclusion)})</Button>
+          <Button>Open queue ({num(queueTotal(q))})</Button>
         </Link>
       </div>
       <QueueTiles run={run} />

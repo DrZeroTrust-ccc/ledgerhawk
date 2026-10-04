@@ -6,6 +6,7 @@ import RunDashboard from './pages/RunDashboard'
 import QueuePage from './pages/QueuePage'
 import VendorPage from './pages/VendorPage'
 import AuditPage from './pages/AuditPage'
+import ExclusionGapsPage from './pages/ExclusionGapsPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -27,7 +28,7 @@ function Nav() {
   const link = ({ isActive }: { isActive: boolean }) =>
     `rounded-md px-3 py-1.5 text-sm font-medium ${isActive ? 'bg-white/15 text-white' : 'text-white/75 hover:text-white'}`
   return (
-    <nav className="flex items-center gap-1">
+    <nav className="flex flex-wrap items-center gap-1">
       <NavLink to="/" end className={link}>
         Runs
       </NavLink>
@@ -38,6 +39,9 @@ function Nav() {
           </NavLink>
           <NavLink to={`/runs/${id}/queue`} className={link}>
             Queue
+          </NavLink>
+          <NavLink to={`/runs/${id}/exclusion-gaps`} className={link}>
+            Exclusion gaps
           </NavLink>
         </>
       )}
@@ -75,6 +79,7 @@ export default function App() {
             <Route path="/runs/:id" element={<RunDashboard />} />
             <Route path="/runs/:id/queue" element={<QueuePage />} />
             <Route path="/runs/:id/vendors/:uei" element={<VendorPage />} />
+            <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
             <Route path="/audit" element={<AuditPage />} />
           </Routes>
         </main>

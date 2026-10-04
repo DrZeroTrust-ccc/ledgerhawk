@@ -43,7 +43,8 @@ def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]]) -
         edge(center, suite, "located_at")
     if card.get("bkey"):
         hub = card["bldg_count"] > HUB_CAP
-        bldg = node(f"b:{card['bkey']}", "building", card["bkey"].split("|")[0].title(), universe=card["bldg_count"], hub=hub,
+        street = card["address"].split(",")[0]
+        bldg = node(f"b:{card['bkey']}", "building", f"Building at {street.title()}", universe=card["bldg_count"], hub=hub,
                     note=f"{card['bldg_count']} SAM entities in this building, suppressed" if hub else "")
         edge(suite or center, bldg, "in_building")
 
