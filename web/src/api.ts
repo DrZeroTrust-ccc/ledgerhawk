@@ -309,7 +309,41 @@ export type SubjectScreen = {
   people?: PersonResult[]
   changes?: SubjectChanges
   review: ScreenReview
+  awards: ScreenAwards | null
 }
+
+export type Award = {
+  group: 'contract' | 'idv'
+  award_id: string
+  amount: number
+  description: string
+  agency: string
+  sub_agency: string
+  start: string
+  end: string
+  type: string
+  url: string
+  after_exclusion: boolean
+}
+
+export type AwardEntity = {
+  uei: string
+  name: string
+  refs: number[]
+  role: string
+  excluded_since: string
+  awards: Award[]
+  truncated: boolean
+  error: string
+  total: number
+  count: number
+  after_exclusion: number
+  agencies: string[]
+  first: string
+  last: string
+}
+
+export type ScreenAwards = { fetched_at: string; fetched_by: string; entities: AwardEntity[]; skipped: number; errors: number }
 
 export type ScreenNote = {
   id: string
@@ -403,6 +437,8 @@ export const api = {
     req<ScreenNote>(`/api/subject-screens/${encodeURIComponent(id)}/notes`, { method: 'POST', body: form }),
   deleteScreenNote: (id: string, nid: string, form: FormData) =>
     req<unknown>(`/api/subject-screens/${encodeURIComponent(id)}/notes/${nid}/delete`, { method: 'POST', body: form }),
+  fetchScreenAwards: (id: string, form: FormData) =>
+    req<ScreenAwards>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),

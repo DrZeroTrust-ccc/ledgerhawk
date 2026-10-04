@@ -16,6 +16,7 @@ import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from ..pipeline import awards as awards_mod
 from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
@@ -67,6 +68,7 @@ class Store:
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
         (self.root / "subjects").mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict] = {}
+        self.awards_post = None  # tests swap in a fake USAspending
         self._lock = threading.Lock()
         self.db_path = self.root / "state.db"
         with self._db() as db:
@@ -287,7 +289,22 @@ class Store:
             raise KeyError(sid)
         screen = json.loads((d / "screen.json").read_text())
         screen["review"] = self._review(sid)
+        aw = d / "awards.json"
+        screen["awards"] = json.loads(aw.read_text()) if aw.exists() else None
         return screen
+
+    def fetch_screen_awards(self, sid: str, analyst: str) -> dict:
+        """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""
+        screen = self.subject_screen(sid)
+        res = awards_mod.screen_awards(screen, post=self.awards_post or awards_mod._post)
+        if res["entities"] and res["errors"] == len(res["entities"]):
+            raise ConnectionError("USAspending did not answer. Try again in a few minutes; the last lookup, if any, is kept.")
+        res["fetched_by"] = analyst.strip()
+        (self.root / "subjects" / sid / "awards.json").write_text(json.dumps(res, indent=2))
+        n = sum(e["count"] for e in res["entities"])
+        self.audit(analyst, "screen_awards", None, None, f"USAspending lookup for screen {sid}: {n} awards across "
+                   f"{len(res['entities'])} UEIs" + (f", {res['errors']} lookups failed" if res["errors"] else ""))
+        return res
 
     def list_subject_screens(self) -> list[dict]:
         out = []

@@ -278,6 +278,18 @@ def screen_evidence(sid: str, nid: str):
     return FileResponse(path, filename=name)
 
 
+@app.post("/api/subject-screens/{sid}/awards")
+def fetch_screen_awards(sid: str, analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the lookup is attributed.")
+    try:
+        return store.fetch_screen_awards(sid, analyst)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    except ConnectionError as exc:
+        raise HTTPException(502, str(exc))
+
+
 @app.post("/api/subject-screens/{sid}/review")
 def review_screen(sid: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
     if not analyst.strip():

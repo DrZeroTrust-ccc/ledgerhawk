@@ -4,7 +4,9 @@ import {
   api,
   money,
   SUBJECT_STATUS,
+  type AwardEntity,
   type PersonResult,
+  type ScreenAwards,
   type ScreenNote,
   type ScreenReview,
   type SubjectChanges,
@@ -307,7 +309,8 @@ function Person({ p, ctx }: { p: PersonResult; ctx: NotesCtx }) {
   )
 }
 
-function Subject({ s, withDollars, ctx }: { s: SubjectResult; withDollars: boolean; ctx: NotesCtx }) {
+function Subject({ s, withDollars, ctx, awards }: { s: SubjectResult; withDollars: boolean; ctx: NotesCtx; awards: ScreenAwards | null }) {
+  const awardEntities = awards?.entities.filter((e) => e.refs.includes(s.ref)) ?? []
   const noteCount = ctx.review.notes.filter((n) => n.target === `s:${s.ref}`).length
   const [open, setOpen] = useState(s.status !== 'clear')
   const given = [s.input_uei, s.input_name].filter(Boolean).join(' · ')
@@ -398,6 +401,7 @@ function Subject({ s, withDollars, ctx }: { s: SubjectResult; withDollars: boole
                 </ul>
               </section>
             )}
+            {awards && awardEntities.length > 0 && <AwardBlock entities={awardEntities} awards={awards} />}
           </div>
         </div>
       )}
@@ -450,6 +454,96 @@ function Changes({ ch }: { ch: SubjectChanges }) {
   )
 }
 
+function AwardsButton({ id, has, reload }: { id: string; has: boolean; reload: () => void }) {
+  const [analyst] = useAnalystName()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <span className="flex flex-col items-end gap-1">
+      <Button
+        variant="secondary"
+        disabled={busy || !analyst.trim()}
+        title={analyst.trim() ? 'Contracts and IDVs reported to USAspending.gov for each subject UEI and excluded related firm' : 'Enter your name in the header first'}
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          const f = new FormData()
+          f.append('analyst', analyst)
+          try {
+            await api.fetchScreenAwards(id, f)
+            reload()
+          } catch (err) {
+            setError((err as Error).message)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? 'Looking up awards…' : has ? 'Refresh awards' : 'Look up awards (USAspending)'}
+      </Button>
+      <ErrorNote error={error} />
+    </span>
+  )
+}
+
+function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awards: ScreenAwards }) {
+  return (
+    <section>
+      <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Federal awards · USAspending, {awards.fetched_at.slice(0, 10)}
+      </h3>
+      <div className="space-y-3">
+        {entities.map((e) => (
+          <div key={e.uei} className="text-sm">
+            <div className="font-medium">
+              {e.name} <span className="font-mono text-xs font-normal text-slate-500">{e.uei}</span>
+              {e.role !== 'subject' && <span className="ml-1 text-xs font-normal text-slate-500">({e.role})</span>}
+            </div>
+            {e.error ? (
+              <div className="text-xs text-crimson">{e.error}</div>
+            ) : e.count === 0 ? (
+              <div className="text-xs text-slate-500">No contracts or IDVs on USAspending.</div>
+            ) : (
+              <>
+                <div className="tabular text-xs text-slate-600">
+                  {e.count} contracts and IDVs{e.truncated ? ' (largest shown)' : ''} · {money(e.total)} obligated · {e.first.slice(0, 4)}–{e.last.slice(0, 4)} ·{' '}
+                  {e.agencies.slice(0, 3).join(', ')}
+                  {e.agencies.length > 3 && ` +${e.agencies.length - 3}`}
+                </div>
+                {e.after_exclusion > 0 && (
+                  <div className="mt-1 text-xs font-medium text-crimson">
+                    {e.after_exclusion} award{e.after_exclusion === 1 ? '' : 's'} started on or after the exclusion of {e.excluded_since}
+                  </div>
+                )}
+                <ul className="mt-1 divide-y divide-slate-100">
+                  {e.awards.slice(0, 5).map((a) => (
+                    <li key={a.award_id + a.start} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1 text-xs">
+                      <span>
+                        {a.url ? (
+                          <a href={a.url} target="_blank" rel="noreferrer" className="font-mono text-navy underline">
+                            {a.award_id}
+                          </a>
+                        ) : (
+                          <span className="font-mono">{a.award_id}</span>
+                        )}{' '}
+                        <span className="text-slate-500">
+                          {a.agency} · {a.start}
+                        </span>
+                        {a.after_exclusion && <span className="ml-1 rounded bg-crimson-50 px-1 text-crimson">after exclusion</span>}
+                      </span>
+                      <span className="tabular">{money(a.amount)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function Recheck({ id }: { id: string }) {
   const [analyst] = useAnalystName()
   const nav = useNavigate()
@@ -483,7 +577,7 @@ function Recheck({ id }: { id: string }) {
   )
 }
 
-function Header({ data }: { data: SubjectScreen }) {
+function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   const m = data.meta
   const src = data.sources
   return (
@@ -501,9 +595,11 @@ function Header({ data }: { data: SubjectScreen }) {
             {[src.sam_extract_date && `SAM entity extract as of ${src.sam_extract_date}`, src.exclusions_extract_date && `exclusions as of ${src.exclusions_extract_date}`]
               .filter(Boolean)
               .join(' · ')}
+            {data.awards && ` · awards from USAspending as of ${data.awards.fetched_at.slice(0, 16).replace('T', ' ')} UTC`}
           </p>
         </div>
         <div className="flex flex-wrap items-start gap-2">
+          {data.subjects.length > 0 && <AwardsButton id={m.id} has={!!data.awards} reload={reload} />}
           <Recheck id={m.id} />
           <a
             href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`}
@@ -541,7 +637,7 @@ export default function SubjectScreenPage() {
   const ctx: NotesCtx = { screenId: data.meta.id, review: data.review, reload }
   return (
     <div className="space-y-6">
-      <Header data={data} />
+      <Header data={data} reload={reload} />
       {data.changes && <Changes ch={data.changes} />}
       <Review ctx={ctx} />
       <Card>
@@ -565,7 +661,7 @@ export default function SubjectScreenPage() {
         </div>
       </Card>
       {shown.map((s) => (
-        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} ctx={ctx} />
+        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} ctx={ctx} awards={data.awards} />
       ))}
       {(data.people?.length ?? 0) > 0 && (
         <>
