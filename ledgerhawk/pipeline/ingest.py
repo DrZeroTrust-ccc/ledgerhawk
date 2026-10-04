@@ -12,17 +12,17 @@ from .normalize import legal_form, normalize_name
 
 # Source header (lowercased, spaces/punct collapsed) -> internal name. Extend as new files appear.
 COLUMN_ALIASES = {
-    "uei": ["uei", "unique entity id", "recipient uei", "vendor uei", "sam uei"],
-    "name": ["name", "legal business name", "vendor name", "recipient name"],
-    "struct": ["struct", "entity structure", "business structure"],
-    "etype": ["etype", "entity type"],
-    "gsa": ["gsa", "gsa vendor", "gsa vendor flag", "gsa flag"],
-    "naics": ["naics", "primary naics", "naics code", "primary naics code"],
-    "naicsd": ["naicsd", "naics description", "primary naics description"],
-    "psc": ["psc", "primary psc", "psc code", "primary psc code"],
-    "pscd": ["pscd", "psc description", "primary psc description"],
-    "fy24": ["fy24", "fy 24", "fy2024", "fy 2024", "fy24 net obligations", "fy2024 obligations", "fy 2024 obligations"],
-    "fy25": ["fy25", "fy 25", "fy2025", "fy 2025", "fy25 net obligations", "fy2025 obligations", "fy 2025 obligations"],
+    "uei": ["uei", "vendor uei", "unique entity id", "recipient uei", "vendor uei", "sam uei"],
+    "name": ["name", "vendor name", "legal business name", "vendor name", "recipient name"],
+    "struct": ["struct", "entity structure type", "entity structure", "business structure"],
+    "etype": ["etype", "entity type description", "entity type"],
+    "gsa": ["gsa", "is gsa vendor", "gsa vendor", "gsa vendor flag", "gsa flag"],
+    "naics": ["naics", "top naics code", "primary naics", "naics code", "primary naics code"],
+    "naicsd": ["naicsd", "top naics description", "naics description", "primary naics description"],
+    "psc": ["psc", "top psc code", "primary psc", "psc code", "primary psc code"],
+    "pscd": ["pscd", "top psc description", "psc description", "primary psc description"],
+    "fy24": ["fy24", "total fiscal year 2024 dollars obligated", "fy 24", "fy2024", "fy 2024", "fy24 net obligations", "fy2024 obligations", "fy 2024 obligations"],
+    "fy25": ["fy25", "total fiscal year 2025 dollars obligated", "fy 25", "fy2025", "fy 2025", "fy25 net obligations", "fy2025 obligations", "fy 2025 obligations"],
 }
 REQUIRED = ["uei", "name", "fy24", "fy25"]
 

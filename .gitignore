@@ -9,3 +9,4 @@ __pycache__/
 *.dat
 web/node_modules/
 web/dist/
+*.egg-info/
