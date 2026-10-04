@@ -90,7 +90,7 @@ def stage1(df: pd.DataFrame, rules: RuleSet, restore: set[str] | None = None) ->
     df["is_dialysis"] = clean.str.contains(_any_word(rules.dialysis_patterns))
     df["is_air_charter"] = df["naics"].str.match(r"^481[12]")
     foreign_re = re.compile(r"[\s,](?:" + "|".join(rules.foreign_suffixes) + r")\s*$", re.I)
-    df["is_foreign"] = df["name"].str.contains(foreign_re)
+    df["is_foreign"] = df["name"].str.contains(foreign_re) | clean.str.contains(_any_word(rules.foreign_words))
     labels = {
         "is_jv": "Declared joint venture",
         "is_tribal": "Tribal, ANC or NHO family entity",
@@ -129,7 +129,8 @@ def stage2(df: pd.DataFrame, rules: RuleSet) -> pd.DataFrame:
     not_jv = ~df["is_jv"]
 
     # S1: same normalized name, 2–3 UEIs, one fades while another rises, and the legal form or structure changes.
-    cand = df[pool & not_jv & (df["nn"] != "")]
+    # Partners can sit outside the pool (a small successor is still a successor); only pool vendors get the signal.
+    cand = df[(df["lane"] != NONCOMMERCIAL) & not_jv & (df["nn"] != "")]
     sizes = cand.groupby("nn")["uei"].transform("size")
     for nn, g in cand[(sizes >= 2) & (sizes <= 3)].groupby("nn"):
         fades = g[(g.fy24 >= rules.s1_min) & (g.fy25 <= rules.s1_fade_ratio * g.fy24)]
@@ -139,8 +140,10 @@ def stage2(df: pd.DataFrame, rules: RuleSet) -> pd.DataFrame:
                 if fi == ri or (f.struct == r.struct and f.form == r.form):
                     continue
                 change = f"form {f.form or f.struct or '?'} → {r.form or r.struct or '?'}"
-                add(fi, "S1", f"{f.uei} faded ({trend(f)}) as {r.uei} rose ({trend(r)}); {change}")
-                add(ri, "S1", f"{r.uei} rose ({trend(r)}) as {f.uei} faded ({trend(f)}); {change}")
+                if pool[fi]:
+                    add(fi, "S1", f"{f.uei} faded ({trend(f)}) as {r.uei} rose ({trend(r)}); {change}")
+                if pool[ri]:
+                    add(ri, "S1", f"{r.uei} rose ({trend(r)}) as {f.uei} faded ({trend(f)}); {change}")
 
     ratio = df["ratio"].fillna(0)
     masks = {
@@ -169,7 +172,8 @@ def stage2(df: pd.DataFrame, rules: RuleSet) -> pd.DataFrame:
         if r.lane != OUTLIER:
             return ""
         ids = {s["id"] for s in r.signals}
-        dampened = bool(r.suppression)
+        # Joint ventures already skip S1–S3; the lawful patterns below dampen the rest.
+        dampened = bool(r.is_tribal or r.is_qio or r.is_dialysis or r.is_air_charter or r.is_foreign)
         core = ids & {"S1", "S2", "S3", "S4"}
         if dampened:
             # Growth signals (S2, S3) don't count for lawful-pattern vendors.
