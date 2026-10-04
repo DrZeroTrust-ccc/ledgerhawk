@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@theme {
+  --color-navy: #1F3447;
+  --color-navy-50: #eef2f6;
+  --color-navy-100: #d9e1ea;
+  --color-crimson: #B0263A;
+  --color-crimson-50: #fbecee;
+  --color-ink: #141B22;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+body { @apply bg-slate-50 text-ink antialiased; }
+.tabular { font-variant-numeric: tabular-nums; }
