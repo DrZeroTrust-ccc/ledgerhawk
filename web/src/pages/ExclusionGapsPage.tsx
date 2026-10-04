@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, num } from '../api'
+import { Breadcrumbs, runLabel, usePlace, useRuns } from '../nav'
 import { Card, ErrorNote, Loading, useAsync } from '../ui'
 
 export default function ExclusionGapsPage() {
@@ -7,12 +8,12 @@ export default function ExclusionGapsPage() {
   const { data, error } = useAsync(() => api.gaps(id), [id])
   const run = useAsync(() => api.run(id), [id])
   const total = data?.reduce((n, g) => n + g.vendors.length, 0) ?? 0
+  const { runs } = useRuns()
+  usePlace(run.data ? `Exclusion gaps (${run.data.meta.label})` : null)
   return (
     <div className="space-y-6">
       <div>
-        <Link to={`/runs/${id}`} className="text-sm text-navy hover:underline">
-          ← Run dashboard
-        </Link>
+        <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Exclusion gaps' }]} />
         <h1 className="mt-2 text-2xl font-semibold text-navy">Exclusion coverage gaps</h1>
         <p className="mt-1 max-w-3xl text-sm text-slate-600">
           Vendors that are not excluded themselves but are tied to an excluded party by a shared suite, a shared contact, an alias in the

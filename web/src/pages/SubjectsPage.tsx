@@ -155,7 +155,7 @@ export default function SubjectsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold text-ink">Subject screen</h1>
+        <h1 className="text-xl font-semibold text-ink">Subject screens</h1>
         <p className="text-sm text-slate-500">For investigations and diligence on named companies.</p>
       </div>
       <ErrorNote error={sources.error || runs.error || screens.error} />

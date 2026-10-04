@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Breadcrumbs, runLabel, usePlace, useRuns } from '../nav'
 import { Link, useParams } from 'react-router-dom'
 import { api, money, num } from '../api'
 import { Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
@@ -22,9 +23,12 @@ export default function IntegrityPage() {
   const { data, error } = useAsync(() => api.integrity(id), [id])
   const run = useAsync(() => api.run(id), [id])
   const [pick, setPick] = useState('')
+  const { runs } = useRuns()
+  usePlace(run.data ? `Integrity lane (${run.data.meta.label})` : null)
   const rows = data?.rows.filter((r) => (pick === 'excluded' ? r.integrity?.excluded : !pick || r.integrity?.tier === pick)) ?? []
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Integrity lane' }]} />
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { lastPlace } from '../nav'
 import { api, money, num, queueTotal, type Source } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
@@ -215,11 +216,28 @@ function UploadForm({ sources }: { sources: Source[] }) {
   )
 }
 
+function PickUp() {
+  const p = lastPlace()
+  if (!p) return null
+  return (
+    <Link
+      to={p.path}
+      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-navy-100 bg-navy-50 px-4 py-3 text-sm text-navy hover:border-navy"
+    >
+      <span>
+        <span className="text-slate-500">Pick up where you left off:</span> <span className="font-medium">{p.label}</span>
+      </span>
+      <span className="font-medium">Continue →</span>
+    </Link>
+  )
+}
+
 export default function RunsPage() {
   const { data: runs, error } = useAsync(() => api.runs(), [])
   const sources = useAsync(() => api.sources(), [])
   return (
     <div className="space-y-6">
+      <PickUp />
       <div>
         <h1 className="text-2xl font-semibold text-navy">Runs</h1>
         <p className="mt-1 text-sm text-slate-600">
