@@ -40,5 +40,25 @@ signals and exclusion links), and `queue.csv`.
 | `pipeline/exclusions.py` | Active-record filter, direct hits, scope, stale pending, alias parsing, name candidates |
 | `pipeline/run.py` | Orchestration, funnel, manifest, outputs |
 
+## Analyst app (milestone 2)
+
+A FastAPI backend (`ledgerhawk/api`) and a React app (`web/`) with four screens:
+
+- **Runs:** upload a vendor file and exclusions extract, tag synthetic data, see past runs.
+- **Run dashboard:** queue counts, the stage funnel (click a stage to see who was cut, why, and restore them), signal combinations, input validation, hash, extract dates and thresholds.
+- **Queue:** one list for priority, strong, exclusion-linked and watch vendors, with signal chips (hover for the triggering values), filters, dollars and disposition.
+- **Vendor page:** a plain-language "Why it flagged" paragraph, signals, exclusion records verbatim with scope badges, a disposition that always needs a note, and history.
+
+Every restore, disposition and run goes into the audit log with who and when. Restoring a vendor creates a new run from the same inputs, so earlier runs never change.
+
+```bash
+pip install -e '.[dev]'
+(cd web && npm ci && npm run build)
+LEDGERHAWK_DATA_DIR=data/app uvicorn ledgerhawk.api.app:app --port 8000   # serves the UI at http://localhost:8000
+# UI development with hot reload: (cd web && npm run dev), which proxies /api to :8000
+```
+
+There is no sign-in yet. Analysts type their name in the header, and that's what the audit log records.
+
 Not yet built: SAM enrichment and link analysis (Stages 3–4), address and POC exclusion links,
 USAspending verification, OSINT, tiering, the integrity-lane signals, the UI and exports.

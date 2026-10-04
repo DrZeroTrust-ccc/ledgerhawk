@@ -7,3 +7,5 @@ __pycache__/
 /runs/
 *.xlsx
 *.dat
+web/node_modules/
+web/dist/
