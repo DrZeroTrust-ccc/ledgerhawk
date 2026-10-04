@@ -117,7 +117,31 @@ def test_api(syn, tmp_path):
         assert got["subjects"][0]["status"] == "tied"
         x = client.get(f"/api/subject-screens/{sid}/subject-screen.xlsx")
         assert x.status_code == 200 and x.content[:2] == b"PK"
+        w = client.get(f"/api/subject-screens/{sid}/subject-screen.docx")
+        assert w.status_code == 200 and w.content[:2] == b"PK"
         assert client.get("/api/subject-screens/nope").status_code == 404
         assert any(a["action"] == "subject_screen" for a in client.get("/api/audit").json())
     finally:
         mp.undo()
+
+
+def test_word_reports(syn):
+    from docx import Document
+
+    from ledgerhawk.exports.word import PRIVILEGED as WORD_PRIVILEGED, build_case_docx, build_subjects_docx
+    sam, ex, p, _ = syn
+    res = subject_screen(parse_subjects(f"{p['ex_affiliate']}\n{p['excluded_major']}"), sam, ex).to_dict()
+    res["meta"] = {"id": "x", "matter": "M-1", "client": "Client", "privileged": True, "created_by": "A", "created_at": "2026-10-04"}
+    doc = Document(io.BytesIO(build_subjects_docx(res)))
+    text = "\n".join(par.text for par in doc.paragraphs)
+    assert "What we found" in text and "Next steps" in text and "Method and limits" in text
+    assert doc.sections[0].header.paragraphs[0].text == WORD_PRIVILEGED
+    assert doc.core_properties.author == "LedgerHawk" and doc.core_properties.last_modified_by == "LedgerHawk"
+    assert "python-docx" not in (doc.core_properties.comments or "")
+
+    v = res["subjects"][0]["entities"][0] | {"queue": "exclusion", "naics": "", "psc": ""}
+    summary = {"meta": {"id": "run"}, "manifest": {"sam_extract_date": "2026-09-06"}}
+    doc = Document(io.BytesIO(build_case_docx(v, {"tier": "3"}, None, [], summary, matter="M-1")))
+    text = "\n".join(par.text for par in doc.paragraphs)
+    assert "Why it flagged" in text and "Investigator notes" in text and "Matter: M-1" in text
+    assert not doc.sections[0].header.paragraphs[0].text

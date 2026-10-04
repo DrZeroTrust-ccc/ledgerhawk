@@ -355,6 +355,12 @@ export default function VendorPage() {
           >
             Download case file (PDF)
           </a>
+          <a
+            href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+          >
+            Word (editable)
+          </a>
         </div>
         <p className="mt-1 font-mono text-sm text-slate-500">
           UEI {v.uei} {v.struct && <span className="font-sans">· {v.struct}</span>} {v.naics && <span className="font-sans">· NAICS {v.naics}</span>}{' '}
