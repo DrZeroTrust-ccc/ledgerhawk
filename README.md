@@ -87,5 +87,15 @@ LEDGERHAWK_DATA_DIR=data/app uvicorn ledgerhawk.api.app:app --port 8000   # serv
 
 There is no sign-in yet. Analysts type their name in the header, and that's what the audit log records.
 
+## Milestone 4: tiering and routing (Stage 8)
+
+- Every queued vendor gets a default tier: 3 (exclusion-related) for exclusion ties, 5 (not yet reviewed) for the
+  priority and relationship screens. Tiers 1, 2, 4 and "Explained by open source" come only from analyst review.
+- Changing a tier needs a written reason and lands in the audit log with the prior tier.
+- Each lead gets a suggested owner from its signals (the excluding agency's suspension and debarment official, SBA
+  8(a) or size review, SBA limitations on subcontracting, or the awarding contracting officer). Analysts can override it.
+- The queue shows tier rollups with dollars, filters by tier, owner and assignee, bulk assignment, and a board view
+  grouped by disposition.
+
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
-modifications), OSINT, tiering and routing, the integrity-lane signals, case files and exports.
+modifications), OSINT, the integrity-lane signals, case files and exports.

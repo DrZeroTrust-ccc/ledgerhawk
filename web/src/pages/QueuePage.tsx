@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { api, LANE_LABEL, money, num, REASON_LABEL } from '../api'
-import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, SignalChip, useAsync } from '../ui'
+import { api, LANE_LABEL, money, num, REASON_LABEL, type VendorRow } from '../api'
+import { useAnalystName } from '../App'
+import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
@@ -12,28 +13,124 @@ const TABS: [string, string][] = [
   ['watch', 'Watch (deferred)'],
 ]
 const PAGE = 100
+const NOT_YET = 'Not yet dispositioned'
+
+function TierStrip({ runId, active, onPick, version }: { runId: string; active: string; onPick: (t: string) => void; version: number }) {
+  const { data } = useAsync(() => api.tierRollup(runId), [runId, version])
+  if (!data) return null
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      {data.tiers.map((t) => (
+        <button
+          key={t.tier}
+          onClick={() => onPick(active === t.tier ? '' : t.tier)}
+          title={t.meaning}
+          className={`rounded-lg border bg-white p-3 text-left hover:border-navy ${active === t.tier ? 'border-navy ring-1 ring-navy' : 'border-slate-200'}`}
+        >
+          <div className="text-xs font-medium text-slate-500">{TIER_SHORT[t.tier]}</div>
+          <div className="tabular mt-0.5 text-lg font-semibold">{num(t.vendors)}</div>
+          <div className="tabular text-xs text-slate-500">{money(t.dollars)}</div>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function BulkAssign({ runId, selected, onDone }: { runId: string; selected: string[]; onDone: () => void }) {
+  const [analyst] = useAnalystName()
+  const [who, setWho] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const go = async (assignee: string) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.assign(runId, { ueis: selected, assignee, analyst })
+      setWho('')
+      onDone()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-navy-50 px-3 py-2 text-sm">
+      <span className="font-medium text-navy">{num(selected.length)} selected</span>
+      <input value={who} onChange={(e) => setWho(e.target.value)} placeholder="Assign to (analyst name)" className="w-52 rounded-md border border-slate-300 px-2 py-1 text-sm" />
+      <Button disabled={!who.trim() || busy || !analyst.trim()} onClick={() => go(who)}>
+        Assign
+      </Button>
+      <Button variant="ghost" disabled={busy || !analyst.trim()} onClick={() => go('')}>
+        Unassign
+      </Button>
+      {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
+function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]; dispositions: string[] }) {
+  const cols = [NOT_YET, ...dispositions]
+  return (
+    <div className="grid gap-3 overflow-x-auto pb-2 md:grid-cols-3 xl:grid-cols-6">
+      {cols.map((c) => {
+        const items = rows.filter((r) => (r.disposition?.value ?? NOT_YET) === c)
+        return (
+          <div key={c} className="min-w-[14rem] rounded-lg bg-slate-100 p-2">
+            <div className="flex items-baseline justify-between px-1 pb-2">
+              <h3 className="text-xs font-semibold text-slate-600">{c}</h3>
+              <span className="tabular text-xs text-slate-500">{num(items.length)}</span>
+            </div>
+            <div className="space-y-2">
+              {items.map((r) => (
+                <Link key={r.uei} to={`/runs/${runId}/vendors/${encodeURIComponent(r.uei)}`} className="block rounded-md bg-white p-2.5 text-sm shadow-sm hover:ring-1 hover:ring-navy">
+                  <div className="font-medium text-navy">{r.name}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1">
+                    <TierChip tier={r.tier} changed={!!r.tier_change} />
+                    <span className="tabular text-xs text-slate-600">{money(r.tot)}</span>
+                  </div>
+                  {r.assignee && <div className="mt-1 text-xs text-slate-500">Assigned to {r.assignee}</div>}
+                </Link>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 export default function QueuePage() {
   const { id = '' } = useParams()
   const [sp, setSp] = useSearchParams()
   const [limit, setLimit] = useState(PAGE)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [version, setVersion] = useState(0)
   const lane = sp.get('lane') ?? ''
   const queue = sp.get('queue') ?? (lane ? '' : 'any')
   const signal = sp.get('signal') ?? ''
   const disposition = sp.get('disposition') ?? ''
+  const tier = sp.get('tier') ?? ''
+  const owner = sp.get('owner') ?? ''
+  const assignee = sp.get('assignee') ?? ''
+  const view = sp.get('view') ?? 'list'
   const q = sp.get('q') ?? ''
 
-  const params: Record<string, string> = { limit: String(limit) }
+  const params: Record<string, string> = { limit: String(view === 'board' ? 500 : limit) }
   if (queue === 'watch') params.bucket = 'watch'
   else if (queue) params.queue = queue
   if (lane) params.lane = lane
   if (signal) params.signal = signal
   if (disposition) params.disposition = disposition
+  if (tier) params.tier = tier
+  if (owner) params.owner = owner
+  if (assignee) params.assignee = assignee
   if (q) params.q = q
 
   const run = useAsync(() => api.run(id), [id])
   const meta = useAsync(() => api.meta(), [])
-  const { data, error } = useAsync(() => api.vendors(id, params), [id, JSON.stringify(params)])
+  const { data, error } = useAsync(() => api.vendors(id, params), [id, JSON.stringify(params), version])
 
   const set = (k: string, v: string) => {
     const next = new URLSearchParams(sp)
@@ -42,7 +139,16 @@ export default function QueuePage() {
     if (k === 'queue') next.delete('lane')
     setSp(next)
     setLimit(PAGE)
+    setSelected(new Set())
   }
+  const toggle = (uei: string) =>
+    setSelected((s) => {
+      const n = new Set(s)
+      if (n.has(uei)) n.delete(uei)
+      else n.add(uei)
+      return n
+    })
+  const allOnPage = data ? data.rows.every((r) => selected.has(r.uei)) && data.rows.length > 0 : false
 
   return (
     <div className="space-y-4">
@@ -56,6 +162,8 @@ export default function QueuePage() {
         )}
       </div>
 
+      <TierStrip runId={id} active={tier} onPick={(t) => set('tier', t)} version={version} />
+
       <div className="flex flex-wrap gap-1 border-b border-slate-200">
         {TABS.map(([k, label]) => (
           <button
@@ -68,6 +176,17 @@ export default function QueuePage() {
           </button>
         ))}
         {lane && <span className="-mb-px border-b-2 border-crimson px-3 py-2 text-sm font-medium text-navy">{LANE_LABEL[lane] ?? lane}</span>}
+        <span className="ml-auto flex items-center gap-1 pb-1">
+          {(['list', 'board'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => set('view', v === 'list' ? '' : v)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${view === v ? 'bg-navy text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+            >
+              {v === 'list' ? 'List' : 'Board by disposition'}
+            </button>
+          ))}
+        </span>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -77,6 +196,17 @@ export default function QueuePage() {
           placeholder="Search name or UEI, press Enter"
           className="w-64 rounded-md border border-slate-300 px-2.5 py-1.5 text-sm"
         />
+        <select value={tier} onChange={(e) => set('tier', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+          <option value="">Any tier</option>
+          <option value="any">Any tier set</option>
+          <option value="none">No tier</option>
+          {meta.data &&
+            Object.entries(meta.data.tiers).map(([k, label]) => (
+              <option key={k} value={k}>
+                {label}
+              </option>
+            ))}
+        </select>
         <select value={signal} onChange={(e) => set('signal', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any signal</option>
           {meta.data &&
@@ -96,6 +226,21 @@ export default function QueuePage() {
             </option>
           ))}
         </select>
+        <select value={owner} onChange={(e) => set('owner', e.target.value)} className="max-w-[16rem] rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+          <option value="">Any owner</option>
+          {meta.data?.owners.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+          {owner && !meta.data?.owners.includes(owner) && <option value={owner}>{owner}</option>}
+        </select>
+        <input
+          defaultValue={assignee}
+          onKeyDown={(e) => e.key === 'Enter' && set('assignee', (e.target as HTMLInputElement).value)}
+          placeholder="Assigned to, press Enter"
+          className="w-44 rounded-md border border-slate-300 px-2.5 py-1.5 text-sm"
+        />
         {data && (
           <span className="tabular ml-auto text-sm text-slate-600">
             {num(data.total)} vendors · {money(data.dollars)} under review
@@ -103,77 +248,115 @@ export default function QueuePage() {
         )}
       </div>
 
-      <Card>
-        <ErrorNote error={error} />
-        {!data && !error && <Loading />}
-        {data && data.total === 0 && <p className="py-6 text-center text-sm text-slate-500">No vendors match these filters.</p>}
-        {data && data.total > 0 && (
-          <div className="-mx-5 -my-5 overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs text-slate-500">
-                <tr>
-                  <th className="px-5 py-2 font-medium">Vendor</th>
-                  <th className="px-3 py-2 font-medium">Queue</th>
-                  <th className="px-3 py-2 font-medium">Signals</th>
-                  <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>
-                  <th className="px-3 py-2 text-right font-medium">Total</th>
-                  <th className="px-5 py-2 font-medium">Disposition</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.rows.map((r) => (
-                  <tr key={r.uei} className="align-top hover:bg-slate-50">
-                    <td className="px-5 py-2.5">
-                      <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
-                        {r.name}
-                      </Link>
-                      <div className="font-mono text-xs text-slate-500">{r.uei}</div>
-                      {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
-                      {r.lane !== 'outlier' && r.reason_code && <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="flex max-w-xs flex-wrap gap-1">
-                        {r.signals.map((s, i) => (
-                          <SignalChip key={i} s={s} />
-                        ))}
-                        {r.exclusion_flags.map((f) => (
-                          <FlagChip key={f} flag={f} />
-                        ))}
-                      </div>
-                    </td>
-                    <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
-                      {money(r.fy24)} → {money(r.fy25)}
-                    </td>
-                    <td className="tabular px-3 py-2.5 text-right font-medium">{money(r.tot)}</td>
-                    <td className="px-5 py-2.5 text-xs">
-                      {r.disposition ? (
-                        <>
-                          <div className="font-medium">{r.disposition.value}</div>
-                          <div className="text-slate-500">
-                            {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
-                          </div>
-                        </>
-                      ) : (
-                        <span className="text-slate-400">Not yet reviewed</span>
-                      )}
-                    </td>
+      {selected.size > 0 && (
+        <BulkAssign
+          runId={id}
+          selected={[...selected]}
+          onDone={() => {
+            setSelected(new Set())
+            setVersion((v) => v + 1)
+          }}
+        />
+      )}
+
+      {view === 'board' && data && meta.data ? (
+        <>
+          {data.total > data.rows.length && <p className="text-xs text-slate-500">Showing the top {num(data.rows.length)} by dollars. Narrow the filters to see the rest.</p>}
+          <Board runId={id} rows={data.rows} dispositions={meta.data.dispositions} />
+        </>
+      ) : (
+        <Card>
+          <ErrorNote error={error} />
+          {!data && !error && <Loading />}
+          {data && data.total === 0 && <p className="py-6 text-center text-sm text-slate-500">No vendors match these filters.</p>}
+          {data && data.total > 0 && (
+            <div className="-mx-5 -my-5 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                  <tr>
+                    <th className="w-8 py-2 pl-5">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all on this page"
+                        checked={allOnPage}
+                        onChange={() => setSelected(allOnPage ? new Set() : new Set(data.rows.map((r) => r.uei)))}
+                      />
+                    </th>
+                    <th className="px-3 py-2 font-medium">Vendor</th>
+                    <th className="px-3 py-2 font-medium">Queue and tier</th>
+                    <th className="px-3 py-2 font-medium">Signals</th>
+                    <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>
+                    <th className="px-3 py-2 text-right font-medium">Total</th>
+                    <th className="px-3 py-2 font-medium">Owner</th>
+                    <th className="px-5 py-2 font-medium">Disposition</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-            {data.total > data.rows.length && (
-              <div className="border-t border-slate-100 p-3 text-center">
-                <Button variant="secondary" onClick={() => setLimit(limit + PAGE)}>
-                  Show more ({num(data.total - data.rows.length)} left)
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data.rows.map((r) => (
+                    <tr key={r.uei} className={`align-top hover:bg-slate-50 ${selected.has(r.uei) ? 'bg-navy-50/50' : ''}`}>
+                      <td className="py-2.5 pl-5">
+                        <input type="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.uei)} onChange={() => toggle(r.uei)} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
+                          {r.name}
+                        </Link>
+                        <div className="font-mono text-xs text-slate-500">{r.uei}</div>
+                        {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
+                        {r.lane !== 'outlier' && r.reason_code && <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>}
+                      </td>
+                      <td className="space-y-1 px-3 py-2.5">
+                        <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />
+                        <div>
+                          <TierChip tier={r.tier} changed={!!r.tier_change} />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <div className="flex max-w-xs flex-wrap gap-1">
+                          {r.signals.map((s, i) => (
+                            <SignalChip key={i} s={s} />
+                          ))}
+                          {r.exclusion_flags.map((f) => (
+                            <FlagChip key={f} flag={f} />
+                          ))}
+                        </div>
+                      </td>
+                      <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
+                        {money(r.fy24)} → {money(r.fy25)}
+                      </td>
+                      <td className="tabular px-3 py-2.5 text-right font-medium">{money(r.tot)}</td>
+                      <td className="max-w-[14rem] px-3 py-2.5 text-xs text-slate-600">
+                        {r.owner}
+                        {r.assignee && <div className="mt-0.5 text-slate-500">Assigned to {r.assignee}</div>}
+                      </td>
+                      <td className="px-5 py-2.5 text-xs">
+                        {r.disposition ? (
+                          <>
+                            <div className="font-medium">{r.disposition.value}</div>
+                            <div className="text-slate-500">
+                              {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-slate-400">Not yet reviewed</span>
+                        )}
+                        {r.last_touched && <div className="mt-0.5 text-slate-400">Touched {new Date(r.last_touched).toLocaleDateString()}</div>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {data.total > data.rows.length && (
+                <div className="border-t border-slate-100 p-3 text-center">
+                  <Button variant="secondary" onClick={() => setLimit(limit + PAGE)}>
+                    Show more ({num(data.total - data.rows.length)} left)
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

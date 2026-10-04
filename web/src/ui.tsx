@@ -68,6 +68,37 @@ export function QueueChip({ queue }: { queue: string }) {
   return <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${color}`}>{QUEUE_LABEL[queue] ?? queue}</span>
 }
 
+export const TIER_SHORT: Record<string, string> = {
+  '1': 'Tier 1 · Elevated',
+  '2': 'Tier 2 · Moderate',
+  '3': 'Tier 3 · Exclusion',
+  '4': 'Tier 4 · Data anomaly',
+  '5': 'Tier 5 · Not reviewed',
+  explained: 'Explained',
+}
+
+export function TierChip({ tier, changed }: { tier: string; changed?: boolean }) {
+  if (!tier) return null
+  const color =
+    tier === '1'
+      ? 'bg-crimson text-white'
+      : tier === '2'
+        ? 'bg-amber-100 text-amber-900'
+        : tier === '3'
+          ? 'bg-crimson-50 text-crimson ring-1 ring-crimson/30'
+          : tier === '4'
+            ? 'bg-violet-100 text-violet-800'
+            : tier === 'explained'
+              ? 'bg-slate-100 text-slate-500'
+              : 'bg-navy-50 text-navy ring-1 ring-navy-100'
+  return (
+    <span className={`whitespace-nowrap rounded px-2 py-0.5 text-xs font-medium ${color}`} title={changed ? 'Set by an analyst' : 'Pipeline default'}>
+      {TIER_SHORT[tier] ?? tier}
+      {changed && ' ✎'}
+    </span>
+  )
+}
+
 export function DataClassBadge({ dataClass }: { dataClass: string }) {
   if (dataClass !== 'synthetic') return null
   return <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-semibold uppercase tracking-wide text-violet-800">Synthetic data</span>

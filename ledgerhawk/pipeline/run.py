@@ -12,6 +12,7 @@ from .exclusions import ExclusionsExtract, exclusion_pass, load_exclusions
 from .ingest import Validation, load_vendor_file
 from .links import relationship_bucket, sam_screen
 from .sam import SamExtract, load_sam
+from .tiering import default_tier, suggest_owner
 from .rules import RuleSet
 from .stages import CLOSEOUT, INTEGRITY, NONCOMMERCIAL, OUTLIER, SET_ASIDE, stage1, stage2
 
@@ -53,7 +54,7 @@ class RunResult:
         (out / "run.json").write_text(json.dumps(self.summary(), indent=2, default=str))
         cols = ["uei", "name", "nn", "struct", "naics", "psc", "fy24", "fy25", "tot", "lane", "reason_code", "reason",
                 "cut_stage", "restored_from", "suppression", "bucket", "queue", "signals", "exclusion_flags", "exclusion",
-                "sam", "links", "neighbors"]
+                "sam", "links", "neighbors", "tier_default", "owner_suggested"]
         with open(out / "vendors.jsonl", "w") as f:
             for rec in self.vendors[cols].to_dict(orient="records"):
                 f.write(json.dumps(rec, default=str) + "\n")
@@ -111,6 +112,13 @@ def run_pipeline(
         df["links"] = [[] for _ in range(len(df))]
         df["neighbors"] = [[] for _ in range(len(df))]
     df["queue"] = df.apply(_queue, axis=1)
+    queued = df["queue"] != ""
+    df["tier_default"] = ""
+    df["owner_suggested"] = ""
+    if queued.any():
+        recs = df.loc[queued, ["queue", "exclusion_flags", "exclusion", "signals", "sam"]].to_dict(orient="records")
+        df.loc[queued, "tier_default"] = [default_tier(r) for r in recs]
+        df.loc[queued, "owner_suggested"] = [suggest_owner(r) for r in recs]
 
     funnel = build_funnel(df)
     queue_counts = {
