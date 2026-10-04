@@ -108,3 +108,14 @@ There is no sign-in yet. Analysts type their name in the header, and that's what
 
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
 modifications), OSINT, the integrity-lane signals, the Small-Vendor workbook and the briefing deck.
+
+## Deploying on Render
+
+The `Dockerfile` builds the web app and serves it with the API from one container. `render.yaml` is the matching
+Blueprint: a Docker web service with a 1 GB disk mounted at `/var/data`, where runs, sources and the analyst database live.
+
+- `LEDGERHAWK_ACCESS_PASSWORD`: when set, every page and API call asks for this shared password (any username).
+  This is a stopgap until real sign-in exists. `/api/healthz` stays open for Render's health check.
+- `LEDGERHAWK_SEED_SYNTHETIC=1`: on an empty data directory, creates one synthetic run so a fresh deploy has
+  something to show.
+- Without a disk, everything under `/var/data` is lost on each deploy.

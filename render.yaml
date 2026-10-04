@@ -1,0 +1,20 @@
+# Render Blueprint: one Docker web service with a persistent disk for runs, sources and the analyst database.
+services:
+  - type: web
+    name: ledgerhawk
+    runtime: docker
+    plan: starter
+    region: virginia
+    branch: main
+    healthCheckPath: /api/healthz
+    disk:
+      name: ledgerhawk-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: LEDGERHAWK_DATA_DIR
+        value: /var/data/ledgerhawk
+      - key: LEDGERHAWK_SEED_SYNTHETIC
+        value: "1"
+      - key: LEDGERHAWK_ACCESS_PASSWORD
+        sync: false
