@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Breadcrumbs, usePlace } from '../nav'
 import { api, LANE_LABEL, money, num, REASON_LABEL, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
@@ -141,6 +142,7 @@ export default function QueuePage() {
   if (q) params.q = q
 
   const run = useAsync(() => api.run(id), [id])
+  usePlace(run.data ? `Queue (${run.data.meta.label})` : null)
   const meta = useAsync(() => api.meta(), [])
   const { data, error } = useAsync(() => api.vendors(id, params), [id, JSON.stringify(params), version])
 
@@ -164,6 +166,7 @@ export default function QueuePage() {
 
   return (
     <div className="space-y-4">
+      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: run.data?.meta.label ?? id, to: `/runs/${id}` }, { label: 'Queue' }]} />
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold text-navy">Queue</h1>
         {run.data && <DataClassBadge dataClass={run.data.meta.data_class} />}

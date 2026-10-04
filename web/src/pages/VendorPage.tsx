@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Breadcrumbs, queueHref, runLabel, usePlace, useRuns } from '../nav'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkGraph from '../LinkGraph'
@@ -332,6 +333,8 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
 export default function VendorPage() {
   const { id = '', uei = '' } = useParams()
   const { data: v, error, reload } = useAsync(() => api.vendor(id, uei), [id, uei])
+  const { runs } = useRuns()
+  usePlace(v ? `${v.name} (vendor)` : null)
   if (error) return <ErrorNote error={error} />
   if (!v) return <Loading />
   const scored = v.signals.filter((s) => s.id !== 'S6')
@@ -339,9 +342,7 @@ export default function VendorPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Link to={`/runs/${id}/queue`} className="text-sm text-navy hover:underline">
-          ← Queue
-        </Link>
+        <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Queue', to: queueHref(id) }, { label: v.name }]} />
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-navy">{v.name}</h1>
           <QueueChip queue={v.queue || (v.bucket === 'watch' ? 'watch' : '')} />

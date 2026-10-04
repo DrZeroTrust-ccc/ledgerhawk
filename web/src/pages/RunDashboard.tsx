@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Breadcrumbs, queueHref, usePlace } from '../nav'
 import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
@@ -383,11 +384,13 @@ function Inputs({ run }: { run: RunSummary }) {
 export default function RunDashboard() {
   const { id = '' } = useParams()
   const { data: run, error } = useAsync(() => api.run(id), [id])
+  usePlace(run ? `${run.meta.label} (run dashboard)` : null)
   if (error) return <ErrorNote error={error} />
   if (!run) return <Loading />
   const q = run.queue_counts
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: run.meta.label }]} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -408,7 +411,7 @@ export default function RunDashboard() {
             )}
           </p>
         </div>
-        <Link to={`/runs/${id}/queue`}>
+        <Link to={queueHref(id)}>
           <Button>Open queue ({num(queueTotal(q))})</Button>
         </Link>
       </div>

@@ -14,6 +14,7 @@ import {
   type SubjectScreen,
 } from '../api'
 import { useAnalystName } from '../App'
+import { Breadcrumbs, usePlace } from '../nav'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
 
 const STATUS_STYLE: Record<string, string> = {
@@ -629,6 +630,7 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
 export default function SubjectScreenPage() {
   const { id = '' } = useParams()
   const { data, error, reload } = useAsync(() => api.subjectScreen(id), [id])
+  usePlace(data ? `${data.meta.matter || 'Untitled matter'} (subject screen)` : null)
   const [status, setStatus] = useState('')
   if (error) return <ErrorNote error={error} />
   if (!data) return <Loading />
@@ -637,6 +639,7 @@ export default function SubjectScreenPage() {
   const ctx: NotesCtx = { screenId: data.meta.id, review: data.review, reload }
   return (
     <div className="space-y-6">
+      <Breadcrumbs items={[{ label: 'Subject screens', to: '/subjects' }, { label: data.meta.matter || 'Untitled matter' }]} />
       <Header data={data} reload={reload} />
       {data.changes && <Changes ch={data.changes} />}
       <Review ctx={ctx} />
