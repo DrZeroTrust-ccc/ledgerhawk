@@ -10,6 +10,7 @@ import pandas as pd
 
 from .exclusions import ExclusionsExtract, exclusion_pass, load_exclusions
 from .ingest import Validation, load_vendor_file
+from .integrity import integrity_screen
 from .links import relationship_bucket, sam_screen
 from .sam import SamExtract, load_sam
 from .tiering import default_tier, suggest_owner
@@ -54,7 +55,7 @@ class RunResult:
         (out / "run.json").write_text(json.dumps(self.summary(), indent=2, default=str))
         cols = ["uei", "name", "nn", "struct", "naics", "psc", "fy24", "fy25", "tot", "lane", "reason_code", "reason",
                 "cut_stage", "restored_from", "suppression", "bucket", "queue", "signals", "exclusion_flags", "exclusion",
-                "sam", "links", "neighbors", "tier_default", "owner_suggested"]
+                "sam", "links", "neighbors", "integrity", "tier_default", "owner_suggested"]
         with open(out / "vendors.jsonl", "w") as f:
             for rec in self.vendors[cols].to_dict(orient="records"):
                 f.write(json.dumps(rec, default=str) + "\n")
@@ -67,6 +68,8 @@ class RunResult:
 
 
 def _queue(r) -> str:
+    if r.lane == INTEGRITY:
+        return ""  # small vendors are reviewed in the integrity lane (Stage 9), set after the main queue
     if set(r.exclusion_flags) & QUEUE_EXCLUSION_FLAGS:
         return "exclusion"  # an exclusion link overrides any set-aside
     if r.bucket in ("priority", "relationship", "strong"):
@@ -112,6 +115,9 @@ def run_pipeline(
         df["links"] = [[] for _ in range(len(df))]
         df["neighbors"] = [[] for _ in range(len(df))]
     df["queue"] = df.apply(_queue, axis=1)
+    df["integrity"] = integrity_screen(df)
+    lane_lead = df["integrity"].map(lambda i: bool(i and i["tier"] in ("A", "B", "C")))
+    df.loc[lane_lead, "queue"] = "integrity"
     queued = df["queue"] != ""
     df["tier_default"] = ""
     df["owner_suggested"] = ""
@@ -119,6 +125,12 @@ def run_pipeline(
         recs = df.loc[queued, ["queue", "exclusion_flags", "exclusion", "signals", "sam"]].to_dict(orient="records")
         df.loc[queued, "tier_default"] = [default_tier(r) for r in recs]
         df.loc[queued, "owner_suggested"] = [suggest_owner(r) for r in recs]
+    lane_rest = df["integrity"].notna() & ~queued
+    if lane_rest.any():
+        recs = df.loc[lane_rest, ["integrity", "exclusion_flags", "exclusion", "signals", "sam"]].to_dict(orient="records")
+        df.loc[lane_rest, "owner_suggested"] = [
+            "Same owner as the main-list vendor" if r["integrity"]["tier"] == "D"
+            else "Awarding agency contracting officer (confirm award dates first)" for r in recs]
 
     funnel = build_funnel(df)
     queue_counts = {
@@ -132,6 +144,8 @@ def run_pipeline(
         "address_or_contact_ties": int(df["exclusion_flags"].map(lambda f: bool({"R_EXADDR", "R_EXPOC"} & set(f))).sum()),
         "sam_matched": int(df["sam"].map(bool).sum()),
         "integrity_lane": int((df["lane"] == INTEGRITY).sum()),
+        "integrity_leads": int(lane_lead.sum()),
+        "integrity_excluded": int(df["integrity"].map(lambda i: bool(i and i["excluded"])).sum()),
         "closeouts": int((df["lane"] == CLOSEOUT).sum()),
         "restored": int((df["reason_code"] == "RESTORED").sum()),
     }

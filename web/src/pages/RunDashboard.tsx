@@ -34,7 +34,14 @@ function RestoreButton({ runId, uei }: { runId: string; uei: string }) {
         }
       }}
     >
-      <input autoFocus required value={note} onChange={(e) => setNote(e.target.value)} placeholder="Why restore?" className="w-48 rounded border border-slate-300 px-2 py-1 text-sm" />
+      <input
+        autoFocus
+        required
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="Why restore?"
+        className="w-48 rounded border border-slate-300 px-2 py-1 text-sm"
+      />
       <Button type="submit" disabled={busy || !note.trim() || !analyst.trim()}>
         {busy ? 'Rerunning…' : 'Restore'}
       </Button>
@@ -56,7 +63,12 @@ function CutTable({ runId, step }: { runId: string; step: FunnelStep }) {
         <h3 className="text-sm font-semibold">
           Cut at this stage: {num(step.cut)} vendors, {money(step.cut_dollars)}
         </h3>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name or UEI" className="ml-auto w-56 rounded border border-slate-300 bg-white px-2 py-1 text-sm" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or UEI"
+          className="ml-auto w-56 rounded border border-slate-300 bg-white px-2 py-1 text-sm"
+        />
       </div>
       <ErrorNote error={error} />
       {!data && !error && <Loading />}
@@ -101,7 +113,11 @@ function CutTable({ runId, step }: { runId: string; step: FunnelStep }) {
               ))}
             </tbody>
           </table>
-          {data.total > data.rows.length && <p className="mt-2 text-xs text-slate-500">Showing the {data.rows.length} largest of {num(data.total)}. Search to find a specific vendor.</p>}
+          {data.total > data.rows.length && (
+            <p className="mt-2 text-xs text-slate-500">
+              Showing the {data.rows.length} largest of {num(data.total)}. Search to find a specific vendor.
+            </p>
+          )}
         </div>
       )}
     </div>
@@ -116,11 +132,7 @@ function Funnel({ run }: { run: RunSummary }) {
       <ol className="space-y-3">
         {run.funnel.map((s) => (
           <li key={s.key}>
-            <button
-              disabled={!s.cut}
-              onClick={() => setOpen(open === s.key ? null : s.key)}
-              className="group block w-full text-left disabled:cursor-default"
-            >
+            <button disabled={!s.cut} onClick={() => setOpen(open === s.key ? null : s.key)} className="group block w-full text-left disabled:cursor-default">
               <div className="flex items-baseline justify-between gap-4 text-sm">
                 <span className="font-medium">{s.label}</span>
                 <span className="tabular text-slate-600">
@@ -150,12 +162,22 @@ function QueueTiles({ run }: { run: RunSummary }) {
   const tiles: [string, number, string, string][] = [
     ['Priority', q.priority, `/runs/${id}/queue?queue=priority`, 'Two or more of S1–S4'],
     ...(run.meta.sam_source
-      ? ([['Relationship screen', q.relationship ?? 0, `/runs/${id}/queue?queue=relationship`, 'Two signals, one from SAM links']] as [string, number, string, string][])
+      ? ([['Relationship screen', q.relationship ?? 0, `/runs/${id}/queue?queue=relationship`, 'Two signals, one from SAM links']] as [
+          string,
+          number,
+          string,
+          string,
+        ][])
       : []),
     ['Strong single signal', q.strong, `/runs/${id}/queue?queue=strong`, 'One signal above the strong bar'],
-    ['Exclusion-linked', q.exclusion, `/runs/${id}/queue?queue=exclusion`, `${num(q.directly_excluded)} excluded · ${num(q.address_or_contact_ties ?? 0)} tied by address or contact`],
+    [
+      'Exclusion-linked',
+      q.exclusion,
+      `/runs/${id}/queue?queue=exclusion`,
+      `${num(q.directly_excluded)} excluded · ${num(q.address_or_contact_ties ?? 0)} tied by address or contact`,
+    ],
     ['Watch (deferred)', q.watch, `/runs/${id}/queue?queue=watch`, 'One signal; deferred, not cleared'],
-    ['Integrity lane', q.integrity_lane, `/runs/${id}/queue?lane=integrity`, 'Under $250K; integrity signals only'],
+    ['Integrity lane', q.integrity_leads ?? 0, `/runs/${id}/integrity`, `Leads among ${num(q.integrity_lane)} small vendors`],
     ['Data-quality review', q.closeouts, `/runs/${id}/queue?lane=closeout`, 'Net small only from deobligations'],
   ]
   return (
@@ -166,6 +188,88 @@ function QueueTiles({ run }: { run: RunSummary }) {
         </Link>
       ))}
     </div>
+  )
+}
+
+function RoiPanel({ run }: { run: RunSummary }) {
+  const { data } = useAsync(() => api.tierRollup(run.meta.id), [run.meta.id])
+  const [rates, setRates] = useState([3, 7, 15])
+  const [hrsVendor, setHrsVendor] = useState(1)
+  const [hrsLead, setHrsLead] = useState(10)
+  if (!data) return null
+  const t = Object.fromEntries(data.tiers.map((x) => [x.tier, x]))
+  const top = ['1', '2', '3'].map((k) => t[k]).filter(Boolean)
+  const lookBack = top.reduce((a, x) => a + x.dollars, 0)
+  const forward = top.reduce((a, x) => a + x.fy25, 0)
+  const t5 = t['5']?.dollars ?? 0
+  const leads = top.reduce((a, x) => a + x.vendors, 0) + (run.queue_counts.integrity_leads ?? 0)
+  const fileVendors = run.funnel[0]?.vendors ?? 0
+  const fullHours = fileVendors * hrsVendor
+  const leadHours = leads * hrsLead
+  const cut = fullHours > 0 ? 1 - leadHours / fullHours : 0
+  const field = 'w-16 rounded border border-slate-300 px-1.5 py-0.5 text-right text-sm tabular'
+  return (
+    <Card
+      title={
+        <span>
+          Risk and ROI <span className="ml-1 rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-800">Estimate</span>
+        </span>
+      }
+    >
+      <div className="grid gap-6 md:grid-cols-3">
+        <div className="space-y-2 text-sm">
+          <Stat label="Tiers 1–3, FY24–FY25 (look-back)" value={money(lookBack)} />
+          <Stat label="Tiers 1–3, FY25 only (forward run rate)" value={money(forward)} />
+          <Stat label="Tier 5, not yet reviewed (separate)" value={money(t5)} />
+        </div>
+        <div className="text-sm">
+          <p className="mb-2 font-medium text-navy">Loss-rate scenarios on tiers 1–3</p>
+          <ul className="space-y-1.5">
+            {rates.map((r, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={r}
+                  onChange={(e) => setRates(rates.map((x, j) => (j === i ? Number(e.target.value) : x)))}
+                  className={field}
+                  aria-label={`Loss rate ${i + 1} percent`}
+                />
+                <span>%</span>
+                <span className="tabular ml-auto font-medium">{money((lookBack * r) / 100)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-slate-500">
+            Tier 5 at {rates[0]}–{rates[1]}% would add {money((t5 * rates[0]) / 100)}–{money((t5 * rates[1]) / 100)}. The 3% and 7% defaults come from the range
+            in GAO-24-105833, which estimates annual government-wide losses of $233B to $521B; 15% is an illustrative concentrated-risk case. Look-back dollars
+            become recoveries only through investigation; forward dollars are protected by acting sooner.
+          </p>
+        </div>
+        <div className="text-sm">
+          <p className="mb-2 font-medium text-navy">Analyst time</p>
+          <label className="flex items-center gap-2">
+            <input type="number" min={0} step={0.25} value={hrsVendor} onChange={(e) => setHrsVendor(Number(e.target.value))} className={field} />
+            hours per vendor to review the whole file
+          </label>
+          <label className="mt-1.5 flex items-center gap-2">
+            <input type="number" min={0} step={1} value={hrsLead} onChange={(e) => setHrsLead(Number(e.target.value))} className={field} />
+            hours per final lead
+          </label>
+          <p className="mt-3">
+            {num(fileVendors)} vendors × {hrsVendor} h = <span className="tabular font-medium">{num(Math.round(fullHours))} h</span> (
+            {(fullHours / 2080).toFixed(1)} staff-years)
+          </p>
+          <p>
+            {num(leads)} leads × {hrsLead} h = <span className="tabular font-medium">{num(Math.round(leadHours))} h</span>
+          </p>
+          <p className="mt-1 font-medium text-navy">{(cut * 100).toFixed(2)}% less analyst time</p>
+          <p className="mt-2 text-xs text-slate-500">Leads are tiers 1–3 plus integrity-lane tiers A–C. A staff-year is 2,080 hours.</p>
+        </div>
+      </div>
+    </Card>
   )
 }
 
@@ -215,7 +319,13 @@ function Inputs({ run }: { run: RunSummary }) {
           {v.sha256}
         </dd>
         <dt className="text-slate-500">Exclusions extract</dt>
-        <dd>{m.exclusions_file ? `${m.exclusions_file} · as of ${m.exclusions_extract_date} · ${num(Number(m.exclusions_active_records))} active records` : <span className="text-amber-700">Not provided. The exclusion lane is empty.</span>}</dd>
+        <dd>
+          {m.exclusions_file ? (
+            `${m.exclusions_file} · as of ${m.exclusions_extract_date} · ${num(Number(m.exclusions_active_records))} active records`
+          ) : (
+            <span className="text-amber-700">Not provided. The exclusion lane is empty.</span>
+          )}
+        </dd>
         <dt className="text-slate-500">SAM entity extract</dt>
         <dd>
           {m.sam_file ? (
@@ -309,6 +419,7 @@ export default function RunDashboard() {
         </div>
         <Histogram runId={id} />
       </div>
+      <RoiPanel run={run} />
       <Inputs run={run} />
     </div>
   )

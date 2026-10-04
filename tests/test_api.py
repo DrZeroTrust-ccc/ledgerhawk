@@ -226,3 +226,28 @@ def test_seed_synthetic(tmp_path, monkeypatch):
     assert len(runs) == 1 and runs[0]["data_class"] == "synthetic"
     appmod._seed_synthetic()
     assert len(appmod.store.list_runs()) == 1
+
+
+def test_integrity_lane_endpoint_and_export(sam_ctx):
+    import io
+
+    import openpyxl
+    client, run_id, p = sam_ctx
+    d = client.get(f"/api/runs/{run_id}/integrity").json()
+    tiers = {t["tier"]: t["vendors"] for t in d["tiers"]}
+    assert tiers["A"] >= 2 and tiers["B"] >= 1 and tiers["C"] >= 1 and tiers["D"] >= 1
+    by = {r["uei"]: r for r in d["rows"]}
+    assert by[p["small_paid_after"]]["integrity"]["tier"] == "A"
+    assert [r["integrity"]["tier"] for r in d["rows"] if r["integrity"]["tier"]] == sorted(r["integrity"]["tier"] for r in d["rows"] if r["integrity"]["tier"])
+    gsa = next(g for g in d["gaps"] if g["agency"] == "GSA")
+    assert gsa["A"] >= 1 and "after the exclusion" in gsa["summary"]
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "integrity"}).json()["rows"]
+    assert p["small_suite"] in {r["uei"] for r in rows}
+    r = client.get(f"/api/runs/{run_id}/exports/small-vendor-screen.xlsx")
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert wb.sheetnames == ["Summary", "Small-Vendor Leads", "Excluded Small Vendors", "Checked and Cleared", "Read Me"]
+    assert wb.properties.creator == "LedgerHawk"
+    text = " ".join(str(c.value) for ws in wb for row in ws.iter_rows() for c in row if c.value).lower()
+    assert "fraud" not in text.replace("not findings of fraud", "") and "guilty" not in text
+    v = client.get(f"/api/runs/{run_id}/vendors/{p['small_paid_after']}").json()
+    assert "integrity lane, tier A" in v["why"]

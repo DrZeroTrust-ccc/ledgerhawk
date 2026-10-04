@@ -131,6 +131,15 @@ def make_synthetic(out_dir: str | Path, n: int = 5000, seed: int = 7) -> tuple[P
     planted["name_collision"] = row(nm_col, "LLC", 900_000, 600_000)
     # Same suite as an EPA facility-only exclusion: lawful, must not flag.
     planted["facility_neighbor"] = row(name(), "LLC", 700_000, 700_000)
+    # Small-vendor integrity lane (Stage 9).
+    planted["small_paid_after"] = row(name(), "LLC", 60_000, 45_000)       # A: excluded 2022, paid FY24 and FY25
+    planted["small_excluded_recent"] = row(name(), "INC", 80_000, 20_000)  # excluded Aug 2025: timing unknown, not tiered
+    planted["small_ex_target"] = _uei(rng)                                  # excluded firm, not in the vendor file
+    planted["small_second_uei"] = row("Synthetic Debarred Supply", "LLC", 30_000, 55_000)  # B: second UEI at its suite
+    planted["small_suite"] = row(name(), "LLC", 25_000, 40_000)            # C: same suite only
+    vendor_rows_by_uei = {r["UEI"]: r for r in rows}
+    succ = vendor_rows_by_uei[planted["succ_new"]]["Legal Business Name"]
+    planted["small_sibling"] = row(succ.rsplit(" ", 1)[0], succ.rsplit(" ", 1)[1], 20_000, 30_000)  # D: same name as a main-queue vendor
 
     vendor_path = out / "SYNTHETIC_vendors.csv"
     with open(vendor_path, "w", newline="") as f:
@@ -170,6 +179,12 @@ def make_synthetic(out_dir: str | Path, n: int = 5000, seed: int = 7) -> tuple[P
                       "Classification": "Individual", "First": "Drew", "Last": "Excludedson"})
     excl_rows.append(firm_ex(f"{nm_sup.upper()} LLC", _uei(rng), "Navy", "Ineligible (Proceedings Completed)", "1 Harbor Way", "Miami", "FL", "33101"))
     excl_rows.append(firm_ex(f"{nm_col.upper()} LLC", _uei(rng), "Navy", "Ineligible (Proceedings Completed)", "9 Elm St", "Portland", "OR", "97201"))
+    small_addr = ("500 Harbor Blvd", "Norfolk", "VA", "23510")
+    excl_rows.append(firm_ex("Synthetic Debarred Supply LLC", planted["small_ex_target"], "Army", "Ineligible (Proceedings Completed)", *small_addr))
+    excl_rows.append({**firm_ex("", planted["small_paid_after"], "GSA", "Ineligible (Proceedings Completed)", "", "Richmond", "VA", "23219"),
+                      "Active Date": "01/10/2022"})
+    excl_rows.append({**firm_ex("", planted["small_excluded_recent"], "HUD", "Ineligible (Proceedings Completed)", "", "Tampa", "FL", "33602"),
+                      "Active Date": "08/15/2025"})
     excl_rows.append(firm_ex("Synthetic Smelter Facility", "", "EPA", "Prohibition/Restriction", "77 Foundry Rd", "Dallas", "TX", "75201",
                              "INELIGIBLE FOR AWARDS TO BE PERFORMED AT THIS FACILITY ONLY."))
 
@@ -216,6 +231,11 @@ def make_synthetic(out_dir: str | Path, n: int = 5000, seed: int = 7) -> tuple[P
     ent(planted["ex_person_vendor"], name_of[planted["ex_person_vendor"]], loc=STATES[3], pocs=[("Drew", "Excludedson", "TX", "Dallas")])
     ent(planted["name_supported"], name_of[planted["name_supported"]], loc=STATES[4])
     ent(planted["name_collision"], name_of[planted["name_collision"]], loc=STATES[2])
+    nfk = ("VA", "Norfolk", "23510")
+    ent(planted["small_ex_target"], "Synthetic Debarred Supply LLC", addr=small_addr[0], addr2="Ste 210", loc=nfk)
+    ent(planted["small_second_uei"], name_of[planted["small_second_uei"]], addr=small_addr[0], addr2="Ste 210", loc=nfk)
+    ent(planted["small_suite"], name_of[planted["small_suite"]], addr=small_addr[0], addr2="Ste 210", loc=nfk)
+    ent(planted["small_sibling"], name_of[planted["small_sibling"]], loc=STATES[1])
     ent(planted["facility_neighbor"], name_of[planted["facility_neighbor"]], addr="77 Foundry Rd", loc=STATES[3])
 
     sam_path = out / "SYNTHETIC_SAM_PUBLIC_V2.dat"

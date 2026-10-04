@@ -106,8 +106,19 @@ There is no sign-in yet. Analysts type their name in the header, and that's what
   SAM registration, linked vendors, exclusions and analyst history.
 - Both name LedgerHawk as author in their metadata and carry the screening footer.
 
+## Milestone 6: small-vendor integrity lane, ROI and the Small-Vendor workbook
+
+- **Integrity lane** (Stage 9): vendors under the materiality line get integrity signals only, tiered A (excluded,
+  obligations in a fiscal year that began after the exclusion), B (tied to an excluded party: alias, site UEI, supported
+  name match, shared contact, or a second UEI at its suite), C (same suite only) and D (already on the main list).
+  Weak signals are kept as second signals and never tier a vendor alone. A–C are queued as "Integrity lane".
+- **Integrity lane page**: lane funnel, tier counts, a control-gap summary by excluding agency, and every flagged vendor.
+- **Small-Vendor Screen workbook**: Summary, Small-Vendor Leads, Excluded Small Vendors, Checked and Cleared, Read Me.
+- **Risk and ROI panel** on the run dashboard (Stage 10): look-back and forward dollars for tiers 1–3, tier 5 separately,
+  editable loss-rate scenarios (GAO-24-105833 range) and analyst-time assumptions, always labeled as an estimate.
+
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
-modifications), OSINT, the integrity-lane signals, the Small-Vendor workbook and the briefing deck.
+modifications; Tier A uses fiscal-year timing until then), OSINT, and the briefing deck.
 
 ## Deploying on Render
 

@@ -29,12 +29,22 @@ export type VendorRow = {
   owner_set: { owner: string; analyst: string; at: string } | null
   assignee: string
   last_touched: string | null
+  integrity?: Integrity | null
+}
+
+export type Integrity = { tier: string; excluded: boolean; excluded_on: string; agency: string; reasons: string[]; second: string[]; after_exclusion: number }
+
+export type IntegrityView = {
+  funnel: { key: string; label: string; vendors: number; dollars: number }[]
+  tiers: { tier: string; label: string; meaning: string; vendors: number; dollars: number; after_exclusion: number }[]
+  gaps: { agency: string; A: number; B: number; C: number; excluded: number; after_exclusion: number; dollars: number; summary: string }[]
+  rows: VendorRow[]
 }
 
 export type TierChange = { tier: string; prior: string; reason: string; analyst: string; at: string }
 
 export type TierRollup = {
-  tiers: { tier: string; label: string; meaning: string; vendors: number; dollars: number }[]
+  tiers: { tier: string; label: string; meaning: string; vendors: number; dollars: number; fy25: number }[]
   assignees: Record<string, number>
   dispositions: Record<string, number>
 }
@@ -229,8 +239,7 @@ export const api = {
   createRun: (form: FormData) => req<{ id: string }>('/api/runs', { method: 'POST', body: form }),
   vendors: (id: string, params: Record<string, string>) =>
     req<{ total: number; dollars: number; rows: VendorRow[] }>(`/api/runs/${id}/vendors?${new URLSearchParams(params)}`),
-  histogram: (id: string) =>
-    req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),
+  histogram: (id: string) => req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),
   vendor: (id: string, uei: string) => req<VendorDetail>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}`),
   setDisposition: (id: string, uei: string, body: { value: string; note: string; analyst: string }) =>
     req<Disposition>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/disposition`, json(body)),
@@ -246,6 +255,7 @@ export const api = {
     req<TierChange>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/tier`, json(body)),
   setRouting: (id: string, uei: string, body: { owner: string; analyst: string }) =>
     req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/routing`, json(body)),
+  integrity: (id: string) => req<IntegrityView>(`/api/runs/${id}/integrity`),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 
@@ -268,6 +278,7 @@ export const QUEUE_LABEL: Record<string, string> = {
   relationship: 'Relationship screen',
   strong: 'Strong single signal',
   exclusion: 'Exclusion-linked',
+  integrity: 'Integrity lane',
   watch: 'Watch (deferred)',
 }
 
@@ -282,7 +293,7 @@ export const FLAG_LABEL: Record<string, string> = {
   R_EXPOC: 'Shares contact with excluded party',
 }
 
-export const queueTotal = (q: QueueCounts) => (q.priority ?? 0) + (q.relationship ?? 0) + (q.strong ?? 0) + (q.exclusion ?? 0)
+export const queueTotal = (q: QueueCounts) => (q.priority ?? 0) + (q.relationship ?? 0) + (q.strong ?? 0) + (q.exclusion ?? 0) + (q.integrity_leads ?? 0)
 
 export const REASON_LABEL: Record<string, string> = {
   NONCOMMERCIAL: 'Not a commercial vendor',

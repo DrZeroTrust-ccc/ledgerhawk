@@ -78,7 +78,7 @@ def test_exclusion_overrides_set_aside(synthetic):
     assert v.loc[p["excluded_major"], "lane"] == "set_aside"
     assert "EXCLUDED" in v.loc[p["excluded_major"], "exclusion_flags"]
     assert v.loc[p["excluded_major"], "queue"] == "exclusion"
-    assert v.loc[p["excluded_small"], "queue"] == "exclusion"
+    assert v.loc[p["excluded_small"], "queue"] == "integrity"
     assert "STALE_PENDING" in v.loc[p["excluded_small"], "exclusion_flags"]
 
 
@@ -89,8 +89,8 @@ def test_alias_comment_links_vendor(synthetic):
 
 def test_expired_exclusions_dropped(synthetic):
     res, *_ = synthetic
-    # 11 synthetic records; only the EPA one that terminated in 2022 is inactive.
-    assert res.manifest["exclusions_active_records"] == 10
+    # 14 synthetic records; only the EPA one that terminated in 2022 is inactive.
+    assert res.manifest["exclusions_active_records"] == 13
 
 
 def test_parse_aliases():

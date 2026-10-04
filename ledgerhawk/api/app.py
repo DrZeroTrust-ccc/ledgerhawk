@@ -15,10 +15,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
+from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from ..exports.case import build_case
+from ..exports.small import build_small
 from ..exports.voi import build_voi
 from .graph import build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
@@ -89,6 +91,8 @@ def meta():
         "tiers": TIERS,
         "tier_meaning": TIER_MEANING,
         "owners": OWNERS,
+        "integrity_tiers": INTEGRITY_TIERS,
+        "integrity_meaning": INTEGRITY_MEANING,
     }
 
 
@@ -192,6 +196,7 @@ def _slim(v: dict, disp: dict, state: dict | None = None) -> dict:
         "signals": v["signals"], "exclusion_flags": v["exclusion_flags"],
         "certs": (v.get("sam") or {}).get("certs", []), "in_sam": bool(v.get("sam")),
         "disposition": disp.get(v["uei"]),
+        "integrity": v.get("integrity"),
     }
 
 
@@ -295,6 +300,33 @@ def vendor(run_id: str, uei: str):
     return out
 
 
+def _integrity_items(run_id: str) -> tuple[dict, list[dict]]:
+    data = _get(store.vendors, run_id)
+    disp = store.dispositions()
+    state = store.analyst_state()
+    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])}
+             for r in data["rows"] if r.get("integrity")]
+    return integrity_summary(data["rows"]), items
+
+
+@app.get("/api/runs/{run_id}/integrity")
+def integrity(run_id: str):
+    summary, items = _integrity_items(run_id)
+    state = store.analyst_state()
+    disp = store.dispositions()
+    order = {"A": 0, "B": 1, "C": 2, "D": 3, "": 4}
+    rows = sorted((_slim(i["v"], disp, state) for i in items), key=lambda r: (order[r["integrity"]["tier"]], -r["tot"]))
+    return {**summary, "rows": rows}
+
+
+@app.get("/api/runs/{run_id}/exports/small-vendor-screen.xlsx")
+def export_small(run_id: str):
+    summary, items = _integrity_items(run_id)
+    body = build_small(items, summary, store.summary(run_id))
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk Small-Vendor Screen {run_id}.xlsx"'})
+
+
 @app.get("/api/runs/{run_id}/exports/vendors-of-interest.xlsx")
 def export_voi(run_id: str):
     data = _get(store.vendors, run_id)
@@ -379,7 +411,7 @@ def tier_rollup(run_id: str):
     data = _get(store.vendors, run_id)
     state = store.analyst_state()
     disp = store.dispositions()
-    out = {k: {"tier": k, "label": label, "meaning": TIER_MEANING[k], "vendors": 0, "dollars": 0.0} for k, label in TIERS.items()}
+    out = {k: {"tier": k, "label": label, "meaning": TIER_MEANING[k], "vendors": 0, "dollars": 0.0, "fy25": 0.0} for k, label in TIERS.items()}
     assignees: dict[str, int] = {}
     board: dict[str, int] = {}
     for r in data["rows"]:
@@ -389,6 +421,7 @@ def tier_rollup(run_id: str):
         if wf["tier"] in out:
             out[wf["tier"]]["vendors"] += 1
             out[wf["tier"]]["dollars"] += r["tot"]
+            out[wf["tier"]]["fy25"] += r["fy25"]
         if r["queue"]:
             if wf["assignee"]:
                 assignees[wf["assignee"]] = assignees.get(wf["assignee"], 0) + 1

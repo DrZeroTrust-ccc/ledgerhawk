@@ -10,6 +10,7 @@ const TABS: [string, string][] = [
   ['relationship', 'Relationship screen'],
   ['strong', 'Strong single signal'],
   ['exclusion', 'Exclusion-linked'],
+  ['integrity', 'Integrity lane'],
   ['watch', 'Watch (deferred)'],
 ]
 const PAGE = 100
@@ -188,7 +189,9 @@ export default function QueuePage() {
             className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${queue === k && !lane ? 'border-crimson text-navy' : 'border-transparent text-slate-500 hover:text-navy'}`}
           >
             {label}
-            {run.data && k !== 'any' && <span className="tabular ml-1.5 text-xs text-slate-400">{num(run.data.queue_counts[k] ?? 0)}</span>}
+            {run.data && k !== 'any' && (
+              <span className="tabular ml-1.5 text-xs text-slate-400">{num(run.data.queue_counts[k === 'integrity' ? 'integrity_leads' : k] ?? 0)}</span>
+            )}
           </button>
         ))}
         {lane && <span className="-mb-px border-b-2 border-crimson px-3 py-2 text-sm font-medium text-navy">{LANE_LABEL[lane] ?? lane}</span>}

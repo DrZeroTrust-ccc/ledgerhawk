@@ -7,6 +7,7 @@ import QueuePage from './pages/QueuePage'
 import VendorPage from './pages/VendorPage'
 import AuditPage from './pages/AuditPage'
 import ExclusionGapsPage from './pages/ExclusionGapsPage'
+import IntegrityPage from './pages/IntegrityPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -39,6 +40,9 @@ function Nav() {
           </NavLink>
           <NavLink to={`/runs/${id}/queue`} className={link}>
             Queue
+          </NavLink>
+          <NavLink to={`/runs/${id}/integrity`} className={link}>
+            Integrity lane
           </NavLink>
           <NavLink to={`/runs/${id}/exclusion-gaps`} className={link}>
             Exclusion gaps
@@ -80,6 +84,7 @@ export default function App() {
             <Route path="/runs/:id/queue" element={<QueuePage />} />
             <Route path="/runs/:id/vendors/:uei" element={<VendorPage />} />
             <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
+            <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
             <Route path="/audit" element={<AuditPage />} />
           </Routes>
         </main>
