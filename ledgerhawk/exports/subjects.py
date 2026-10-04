@@ -73,7 +73,7 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
     info = [
         ["Matter", m.get("matter") or ""], ["Client", m.get("client") or ""], ["Prepared by", m.get("created_by", "")],
         ["Screened at", m.get("created_at", "")], ["Subjects screened", screen["counts"]["subjects"]],
-        ["Related entities found", screen["counts"]["related"]],
+        ["Related entities found", screen["counts"]["related"]], ["People screened", screen["counts"].get("people", 0)],
         ["SAM entity extract", f"{src.get('sam_file') or 'not used'}" + (f", as of {src['sam_extract_date']}, SHA-256 {src['sam_sha256']}" if src.get("sam_file") else "")],
         ["SAM exclusions extract", f"{src.get('exclusions_file') or 'not used'}" + (f", as of {src['exclusions_extract_date']}" if src.get("exclusions_file") else "")],
         ["Dollars joined from run", m.get("dollars_run") or "none"],
@@ -96,7 +96,10 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
               [10, 32, 28, 28, 70, 70])
         last = _rows(ws, 6, [[r["ref"], r["name"], r["status_before_label"], r["status_now_label"],
                               "\n".join(f"• {x}" for x in r["added"]), "\n".join(f"• {x}" for x in r["removed"])]
-                             for r in ch["subjects"]], set(), 60)
+                             for r in ch["subjects"]]
+                            + [["Person", r["name"], r["status_before_label"], r["status_now_label"],
+                                "\n".join(f"• {x}" for x in r["added"]), "\n".join(f"• {x}" for x in r["removed"])]
+                               for r in ch.get("people") or []], set(), 60)
         ws.auto_filter.ref = f"B5:G{last}"
 
     ws = wb.create_sheet("Subjects")
@@ -120,6 +123,27 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         ws.cell(6 + n, 3).font = Font(bold=True, color=NAVY)
     ws.freeze_panes = "E6"
     ws.auto_filter.ref = f"B5:O{last}"
+
+    people = screen.get("people") or []
+    if people:
+        ws = wb.create_sheet("People")
+        _banner(ws, screen)
+        _title(ws, "People", "SAM registrations that list each person as a contact, and exclusions in their name. SAM lists "
+                             "contacts, not owners, and names repeat; confirm identity before relying on a match.")
+        _head(ws, 5, ["#", "Status", "Person As Given", "Registrations Listing Them", "Individual Exclusions", "Findings", "Next Steps"],
+              [5, 30, 26, 60, 50, 80, 70])
+        body = []
+        for x in people:
+            regs = "\n".join(f"{r['name']} [{r['uei']}] ({', '.join(r['roles'])}; {r['place']})" + (" EXCLUDED" if r["excluded"] else "")
+                             for r in x["registrations"])
+            if x["registrations_total"] > len(x["registrations"]):
+                regs += f"\n… and {x['registrations_total'] - len(x['registrations'])} more"
+            exs = "\n".join(f"{h['name']} ({h['agency']}, since {h['active_date']}; {h['city']}, {h['state']}; {h['support']})"
+                            for h in x["exclusions"])
+            body.append([x["ref"], x["status_label"], x["input"], regs, exs, "\n".join(f"• {f}" for f in x["findings"]),
+                         "\n".join(f"• {f}" for f in x["next_steps"])])
+        last = _rows(ws, 6, body, set(), 90)
+        ws.auto_filter.ref = f"B5:H{last}"
 
     ws = wb.create_sheet("Related Entities")
     _banner(ws, screen)

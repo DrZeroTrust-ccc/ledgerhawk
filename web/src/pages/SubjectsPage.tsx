@@ -15,6 +15,7 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
   const [client, setClient] = useState('')
   const [privileged, setPrivileged] = useState(true)
   const [text, setText] = useState('')
+  const [peopleText, setPeopleText] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [samSource, setSamSource] = useState(samSources[0]?.id ?? '')
   const [exSource, setExSource] = useState(exSources[0]?.id ?? '')
@@ -29,6 +30,7 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
     setError(null)
     const f = new FormData()
     f.append('subjects_text', text)
+    f.append('people_text', peopleText)
     if (file) f.append('subjects_file', file)
     f.append('analyst', analyst)
     f.append('matter', matter)
@@ -71,6 +73,12 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
           <label className="space-y-1 md:col-span-2">
             <span className="block text-xs font-medium text-slate-600">Subjects, one per line: a UEI, a company name, or "UEI, name"</span>
             <textarea value={text} onChange={(e) => setText(e.target.value)} rows={6} className={`${field} font-mono`} />
+          </label>
+          <label className="space-y-1 md:col-span-2">
+            <span className="block text-xs font-medium text-slate-600">
+              People (optional), one per line: "First Last, ST". Finds every SAM registration that lists them and any exclusion in their name.
+            </span>
+            <textarea value={peopleText} onChange={(e) => setPeopleText(e.target.value)} rows={3} className={`${field} font-mono`} />
           </label>
           <label className="space-y-1">
             <span className="block text-xs font-medium text-slate-600">Or upload a list (CSV or XLSX with UEI and/or Name columns; Role is optional)</span>
@@ -121,7 +129,7 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
             </label>
           </div>
           <div className="flex flex-wrap items-center gap-3 md:col-span-2">
-            <Button type="submit" disabled={busy || !analyst.trim() || (!text.trim() && !file) || (!samSource && !exSource)}>
+            <Button type="submit" disabled={busy || !analyst.trim() || (!text.trim() && !file && !peopleText.trim()) || (!samSource && !exSource)}>
               {busy ? 'Screening…' : 'Screen subjects'}
             </Button>
             {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}

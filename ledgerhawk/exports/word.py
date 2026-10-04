@@ -228,8 +228,9 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
 
     doc.add_heading("Summary", level=2)
     doc.add_paragraph(f"{c['subjects']} subjects screened; {c['related']} related SAM registrations found through shared "
-                      "contacts, suites or legal names.")
-    _grid(doc, ["Status", "Subjects"], [[label, c.get(k, 0)] for k, label in STATUSES.items() if c.get(k)])
+                      "contacts, suites or legal names." + (f" {c['people']} people screened." if c.get("people") else ""))
+    if c["subjects"]:
+        _grid(doc, ["Status", "Subjects"], [[label, c.get(k, 0)] for k, label in STATUSES.items() if c.get(k)])
 
     ch = screen.get("changes")
     if ch:
@@ -239,7 +240,7 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             f"Compared with the screen of {ch['parent_created_at'][:10]}"
             + (f" (SAM {ps['sam_extract_date']}, exclusions {ps['exclusions_extract_date']})" if ps.get("sam_extract_date") and ps.get("exclusions_extract_date") else "")
             + f": {ch['counts']['changed']} subjects changed, {ch['counts']['worse']} got worse, {ch['counts']['unchanged']} unchanged.")
-        for r in ch["subjects"]:
+        for r in ch["subjects"] + (ch.get("people") or []):
             p = doc.add_paragraph()
             p.add_run(f"{r['ref']}. {r['name']}: ").bold = True
             p.add_run(r["status_now_label"] if r["direction"] == "same"
@@ -266,6 +267,21 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
         doc.add_heading("Investigator notes", level=3)
         doc.add_paragraph("[Add work done on this subject here.]")
 
+    for x in screen.get("people") or []:
+        doc.add_heading(f"Person {x['ref']}. {x['input']}", level=2)
+        _kv(doc, [("Status", x["status_label"]), ("Searched as", f"{x['first'].title()} {x['last'].title()}"
+                                                  + (f", {x['state']}" if x["state"] else " (any state)"))])
+        doc.add_heading("What we found", level=3)
+        _bullets(doc, x["findings"])
+        doc.add_heading("Next steps", level=3)
+        _bullets(doc, x["next_steps"], numbered=True)
+        if x["registrations"]:
+            doc.add_heading("SAM registrations listing this person", level=3)
+            _grid(doc, ["Entity", "UEI", "Role", "Place", "Excluded"],
+                  [[r["name"], r["uei"], ", ".join(r["roles"]), r["place"], "Yes" if r["excluded"] else ""] for r in x["registrations"]])
+        doc.add_heading("Investigator notes", level=3)
+        doc.add_paragraph("[Add work done on this person here.]")
+
     doc.add_heading("Method and limits", level=2)
     _bullets(doc, [
         "This is a screen of named subjects against public federal data. It finds leads to test; it does not establish "
@@ -274,6 +290,8 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
         "Related entities share a contact person, a suite or a legal name with a subject. Contacts and addresses shared by "
         "more than 5 SAM entities are treated as registered agents or shared offices and not used as links.",
         "Same-name exclusion matches with nothing else in common are shown as unconfirmed.",
+        "People are matched to SAM contacts by first and last name, and by state when one is given. SAM lists contacts, "
+        "not owners, and names repeat, so confirm identity before attributing a match.",
         "Not covered: award-level history, corporate registries, beneficial ownership, court records and media.",
         "A subject with no hits is not cleared; the sources and dates above are the scope of this check.",
     ])

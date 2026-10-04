@@ -214,3 +214,52 @@ def test_recheck_api(syn, tmp_path):
         assert client.get("/api/subject-screens").json()[0]["change_counts"]["changed"] == 2
     finally:
         mp.undo()
+
+
+def test_people(syn):
+    from ledgerhawk.pipeline.subjects import parse_people, people_screen
+    sam, ex, _, _ = syn
+    people = parse_people("Reese Fosterling, NY\nDrew Excludedson, TX\nDrew Excludedson\nPat Synthetic, CA\nAvery Agentworth\nNobody Here")
+    assert people[0] == {"input": "Reese Fosterling, NY", "first": "REESE", "last": "FOSTERLING", "state": "NY", "ref": 1}
+    with pytest.raises(ValueError):
+        parse_people("Cher")
+    r = {x["ref"]: x for x in people_screen(people, sam, ex)}
+    assert r[1]["status"] == "tied" and sum(x["excluded"] for x in r[1]["registrations"]) == 3
+    assert r[2]["status"] == "excluded"
+    assert r[3]["status"] == "name_only"  # no state given: a name alone never confirms
+    assert r[4]["status"] == "name_only" and "different state (TX)" in r[4]["exclusions"][0]["support"]
+    assert r[5]["status"] == "listed" and r[5]["common"]  # registered-agent contact on 9 registrations
+    assert r[6]["status"] == "clear"
+
+
+def test_people_only_screen_api(syn, tmp_path):
+    from docx import Document
+    _, _, p, (vendors, excl, sam) = syn
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+    client = TestClient(appmod.app)
+    try:
+        ids = {}
+        for kind, path, d in (("sam", sam, "2026-09-06"), ("exclusions", excl, "2026-10-02")):
+            with open(path, "rb") as f:
+                ids[kind] = client.post("/api/sources", files={"file": f}, data={"kind": kind, "as_of": d, "analyst": "T"}).json()["id"]
+        base = {"analyst": "T", "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]}
+        assert client.post("/api/subject-screens", data={**base, "people_text": "Cher"}).status_code == 400
+        r = client.post("/api/subject-screens", data={**base, "people_text": "Reese Fosterling, NY"})
+        assert r.status_code == 200, r.text
+        sid = r.json()["id"]
+        got = client.get(f"/api/subject-screens/{sid}").json()
+        assert got["subjects"] == [] and got["people"][0]["status"] == "tied" and got["counts"]["people"] == 1
+        wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.xlsx").content))
+        assert "People" in wb.sheetnames
+        doc = Document(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.docx").content))
+        assert any(par.text.startswith("Person 1.") for par in doc.paragraphs)
+        r = client.post(f"/api/subject-screens/{sid}/recheck", data={"analyst": "T"})
+        assert r.status_code == 200, r.text
+        again = client.get(f"/api/subject-screens/{r.json()['id']}").json()
+        assert again["people"][0]["status"] == "tied" and again["changes"]["people"] == []
+    finally:
+        mp.undo()

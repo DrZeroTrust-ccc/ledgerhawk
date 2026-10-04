@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, money, SUBJECT_STATUS, type SubjectChanges, type SubjectResult, type SubjectScreen } from '../api'
+import { api, money, SUBJECT_STATUS, type PersonResult, type SubjectChanges, type SubjectResult, type SubjectScreen } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
 
@@ -14,8 +14,65 @@ const STATUS_STYLE: Record<string, string> = {
   clear: 'bg-slate-100 text-slate-600',
 }
 
-function StatusChip({ status }: { status: string }) {
-  return <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[status] ?? ''}`}>{SUBJECT_STATUS[status] ?? status}</span>
+function StatusChip({ status, label }: { status: string; label?: string }) {
+  return <span className={`rounded px-2 py-0.5 text-xs font-medium ${STATUS_STYLE[status] ?? ''}`}>{label ?? SUBJECT_STATUS[status] ?? status}</span>
+}
+
+const PERSON_STYLE: Record<string, string> = { listed: 'signals' }
+
+function Person({ p }: { p: PersonResult }) {
+  return (
+    <Card
+      title={
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-slate-400">Person {p.ref}</span>
+          <span>{p.input}</span>
+          <StatusChip status={PERSON_STYLE[p.status] ?? p.status} label={p.status_label} />
+        </span>
+      }
+    >
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="space-y-4">
+          <section>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">What we found</h3>
+            <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
+              {p.findings.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ul>
+          </section>
+          <section>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Next steps</h3>
+            <ol className="list-decimal space-y-1 pl-5 text-sm text-ink">
+              {p.next_steps.map((f, i) => (
+                <li key={i}>{f}</li>
+              ))}
+            </ol>
+          </section>
+        </div>
+        {p.registrations.length > 0 && (
+          <section>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              SAM registrations listing this person ({p.registrations_total}
+              {p.registrations_total > p.registrations.length ? `, first ${p.registrations.length} shown` : ''})
+            </h3>
+            <ul className="divide-y divide-slate-100 text-sm">
+              {p.registrations.map((r) => (
+                <li key={r.uei} className="py-1.5">
+                  <span className="font-medium">{r.name}</span> <span className="font-mono text-xs text-slate-500">{r.uei}</span>{' '}
+                  {r.excluded && <FlagChip flag="EXCLUDED" />}
+                  <div className="text-xs text-slate-500">
+                    {r.roles.join(', ')} · {r.place}
+                    {!r.active && ' · registration not active'}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+    </Card>
+  )
 }
 
 function Subject({ s, withDollars }: { s: SubjectResult; withDollars: boolean }) {
@@ -125,12 +182,12 @@ function Changes({ ch }: { ch: SubjectChanges }) {
         Compared with the <Link to={`/subjects/${ch.parent_id}`} className="text-navy underline">screen of {ch.parent_created_at.slice(0, 10)}</Link>
         {since && ` (${since})`}. {ch.counts.changed} changed, {ch.counts.worse} got worse, {ch.counts.better} improved, {ch.counts.unchanged} unchanged.
       </p>
-      {ch.subjects.length === 0 ? (
+      {ch.subjects.length + (ch.people?.length ?? 0) === 0 ? (
         <p className="mt-3 text-sm text-slate-500">Nothing changed for any subject.</p>
       ) : (
         <ul className="mt-3 divide-y divide-slate-100">
-          {ch.subjects.map((r) => (
-            <li key={r.ref} className="py-2 text-sm">
+          {[...ch.subjects, ...(ch.people ?? [])].map((r) => (
+            <li key={`${'status_before' in r ? 's' : 'p'}${r.ref}${r.name}`} className="py-2 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-slate-400">#{r.ref}</span>
                 <span className="font-medium">{r.name}</span>
@@ -248,7 +305,7 @@ export default function SubjectScreenPage() {
           <Stat label="Subjects" value={c.subjects} />
           <Stat label="Excluded or tied to an excluded party" value={(c.excluded ?? 0) + (c.tied ?? 0)} />
           <Stat label="Related entity excluded" value={c.related_excluded ?? 0} />
-          <Stat label="Related entities found" value={c.related} />
+          <Stat label="Related entities found" value={c.related} sub={c.people ? `${c.people} people screened` : undefined} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           <button onClick={() => setStatus('')} className={`rounded px-2 py-1 text-xs ${status === '' ? 'bg-navy text-white' : 'bg-slate-100 text-slate-700'}`}>
@@ -266,6 +323,14 @@ export default function SubjectScreenPage() {
       {shown.map((s) => (
         <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} />
       ))}
+      {(data.people?.length ?? 0) > 0 && (
+        <>
+          <h2 className="pt-2 text-lg font-semibold text-ink">People</h2>
+          {data.people!.map((p) => (
+            <Person key={p.ref} p={p} />
+          ))}
+        </>
+      )}
       <p className="text-xs text-slate-500">
         Public federal data only. Shared contacts, addresses and names are leads to test, not proof of common ownership or control. A subject with no hits is
         not cleared; the sources and dates above are the scope of this check.

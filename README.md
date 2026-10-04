@@ -76,7 +76,9 @@ status, plain-language findings and investigator next steps. The **Subject Scree
 Related Entities, Exclusion Records, Read Me) names the matter, the sources with their as-of dates and hash, and can
 carry a "Privileged and Confidential" header. **Re-check with latest data** re-runs the same subjects against the
 newest extracts and records what changed since the last check (new or dropped exclusions, ties, signals and related
-entities, and status moves), shown on the page and in the workbook and Word report. Logic in `pipeline/subjects.py`;
+entities, and status moves), shown on the page and in the workbook and Word report. **People** ("First Last, ST",
+one per line) lists every SAM registration naming the person as a contact and any individual exclusion in their name;
+a name without a matching state is never treated as confirmed. Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)
