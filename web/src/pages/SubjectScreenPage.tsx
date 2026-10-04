@@ -7,6 +7,7 @@ import {
   type AwardEntity,
   type PersonResult,
   type ScreenAwards,
+  type ScreenContext,
   type ScreenNote,
   type ScreenReview,
   type SubjectChanges,
@@ -15,6 +16,7 @@ import {
 } from '../api'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
+import { ContextPanel } from '../Context'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
 
 const STATUS_STYLE: Record<string, string> = {
@@ -254,7 +256,8 @@ function Review({ ctx }: { ctx: NotesCtx }) {
 
 const PERSON_STYLE: Record<string, string> = { listed: 'signals' }
 
-function Person({ p, ctx }: { p: PersonResult; ctx: NotesCtx }) {
+function Person({ p, ctx, context }: { p: PersonResult; ctx: NotesCtx; context: ScreenContext | null }) {
+  const outside = context?.entities.find((c) => c.person_ref === p.ref)
   return (
     <Card
       title={
@@ -283,6 +286,7 @@ function Person({ p, ctx }: { p: PersonResult; ctx: NotesCtx }) {
               ))}
             </ol>
           </section>
+          {outside && <ContextPanel c={outside} />}
           <Notes target={`p:${p.ref}`} ctx={ctx} />
         </div>
         {p.registrations.length > 0 && (
@@ -310,7 +314,8 @@ function Person({ p, ctx }: { p: PersonResult; ctx: NotesCtx }) {
   )
 }
 
-function Subject({ s, withDollars, ctx, awards }: { s: SubjectResult; withDollars: boolean; ctx: NotesCtx; awards: ScreenAwards | null }) {
+function Subject({ s, withDollars, ctx, awards, context }: { s: SubjectResult; withDollars: boolean; ctx: NotesCtx; awards: ScreenAwards | null; context: ScreenContext | null }) {
+  const outside = context?.entities.filter((c) => c.ref === s.ref) ?? []
   const awardEntities = awards?.entities.filter((e) => e.refs.includes(s.ref)) ?? []
   const noteCount = ctx.review.notes.filter((n) => n.target === `s:${s.ref}`).length
   const [open, setOpen] = useState(s.status !== 'clear')
@@ -403,6 +408,9 @@ function Subject({ s, withDollars, ctx, awards }: { s: SubjectResult; withDollar
               </section>
             )}
             {awards && awardEntities.length > 0 && <AwardBlock entities={awardEntities} awards={awards} />}
+            {outside.map((c) => (
+              <ContextPanel key={c.uei || c.name} c={c} title={outside.length > 1 ? `Outside context: ${c.name}` : 'Outside context'} />
+            ))}
           </div>
         </div>
       )}
@@ -452,6 +460,38 @@ function Changes({ ch }: { ch: SubjectChanges }) {
         </ul>
       )}
     </Card>
+  )
+}
+
+function ContextButton({ id, has, reload }: { id: string; has: boolean; reload: () => void }) {
+  const [analyst] = useAnalystName()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <span className="flex flex-col items-end gap-1">
+      <Button
+        variant="secondary"
+        disabled={busy || !analyst.trim()}
+        title={analyst.trim() ? 'News, DOJ press releases, federal court records, SEC filings and the OFAC list for every subject and person' : 'Enter your name in the header first'}
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          const f = new FormData()
+          f.append('analyst', analyst)
+          try {
+            await api.fetchScreenContext(id, f)
+            reload()
+          } catch (err) {
+            setError((err as Error).message)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? 'Searching outside sources…' : has ? 'Refresh outside context' : 'Search news, courts, DOJ, SEC, OFAC'}
+      </Button>
+      <ErrorNote error={error} />
+    </span>
   )
 }
 
@@ -597,9 +637,11 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
               .filter(Boolean)
               .join(' · ')}
             {data.awards && ` · awards from USAspending as of ${data.awards.fetched_at.slice(0, 16).replace('T', ' ')} UTC`}
+            {data.context && ` · outside context as of ${data.context.fetched_at.slice(0, 16).replace('T', ' ')} UTC`}
           </p>
         </div>
         <div className="flex flex-wrap items-start gap-2">
+          <ContextButton id={m.id} has={!!data.context} reload={reload} />
           {data.subjects.length > 0 && <AwardsButton id={m.id} has={!!data.awards} reload={reload} />}
           <Recheck id={m.id} />
           <a
@@ -664,13 +706,13 @@ export default function SubjectScreenPage() {
         </div>
       </Card>
       {shown.map((s) => (
-        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} ctx={ctx} awards={data.awards} />
+        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} ctx={ctx} awards={data.awards} context={data.context} />
       ))}
       {(data.people?.length ?? 0) > 0 && (
         <>
           <h2 className="pt-2 text-lg font-semibold text-ink">People</h2>
           {data.people!.map((p) => (
-            <Person key={p.ref} p={p} ctx={ctx} />
+            <Person key={p.ref} p={p} ctx={ctx} context={data.context} />
           ))}
         </>
       )}

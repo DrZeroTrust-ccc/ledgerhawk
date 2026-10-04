@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Breadcrumbs, queueHref, runLabel, usePlace, useRuns } from '../nav'
+import { ContextPanel } from '../Context'
+import { useAnalystName } from '../App'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkGraph from '../LinkGraph'
-import { useAnalystName } from '../App'
 import { Button, Card, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const KIND_LABEL: Record<string, string> = {
@@ -330,6 +331,53 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
   )
 }
 
+function OutsideContextCard({ v }: { v: VendorDetail }) {
+  const [analyst] = useAnalystName()
+  const got = useAsync(() => api.context({ uei: v.uei }), [v.uei])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const c = got.data?.context
+  const look = async () => {
+    setBusy(true)
+    setError(null)
+    const f = new FormData()
+    f.append('analyst', analyst)
+    f.append('name', v.sam?.legal_name || v.name)
+    f.append('uei', v.uei)
+    f.append('state', v.sam?.state ?? '')
+    try {
+      await api.lookupContext(f)
+      got.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card
+      title="Outside context"
+      action={
+        <Button variant="secondary" disabled={busy || !analyst.trim()} onClick={look} title={analyst.trim() ? undefined : 'Enter your name in the header first'}>
+          {busy ? 'Searching…' : c ? 'Refresh' : 'Search news, courts, DOJ, SEC, OFAC'}
+        </Button>
+      }
+    >
+      <ErrorNote error={error || got.error} />
+      {c ? (
+        <ContextPanel c={c} title="Results" />
+      ) : (
+        !busy && (
+          <p className="text-sm text-slate-500">
+            Not searched yet. Looks for news coverage, DOJ press releases, federal court dockets and opinions, SEC filings and the OFAC sanctions
+            list that name this vendor.
+          </p>
+        )
+      )}
+    </Card>
+  )
+}
+
 export default function VendorPage() {
   const { id = '', uei = '' } = useParams()
   const { data: v, error, reload } = useAsync(() => api.vendor(id, uei), [id, uei])
@@ -461,6 +509,8 @@ export default function VendorPage() {
               </div>
             )}
           </Card>
+
+          <OutsideContextCard v={v} />
         </div>
 
         <div className="min-w-0 space-y-6">

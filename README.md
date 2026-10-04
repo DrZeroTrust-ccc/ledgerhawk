@@ -86,7 +86,13 @@ unchanged `screen.json`, and a re-check carries them forward. **Link chart (i2 /
 Entities sheet and a one-row-per-link Links sheet (organizations, contacts, suites, exclusion records) ready to import. **Look up awards (USAspending)** pulls the largest contracts
 and IDVs for each subject UEI and each excluded related firm from the public USAspending API, stores the dated
 result beside the screen, marks awards that started on or after an exclusion of the same UEI, and adds them to the
-page, the Word report and an Awards sheet (`pipeline/awards.py`). Logic in `pipeline/subjects.py`;
+page, the Word report and an Awards sheet (`pipeline/awards.py`).
+
+**Outside context** (vendor page, and every subject and person on a subject screen) searches news (Google News),
+DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), SEC
+EDGAR full text and the OFAC SDN list by name. Results are dated snapshots kept per entity, with enforcement and
+litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS),
+and a section in the Word case file, the subject report and an Outside Context sheet (`pipeline/context.py`). Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)

@@ -310,6 +310,7 @@ export type SubjectScreen = {
   changes?: SubjectChanges
   review: ScreenReview
   awards: ScreenAwards | null
+  context: ScreenContext | null
 }
 
 export type Award = {
@@ -342,6 +343,36 @@ export type AwardEntity = {
   first: string
   last: string
 }
+
+export type ContextItem = {
+  source: string
+  title: string
+  url: string
+  date: string
+  where: string
+  snippet: string
+  match: string
+  tags: string[]
+}
+
+export type OutsideContext = {
+  name: string
+  uei: string
+  query: string
+  person: boolean
+  fetched_at: string
+  fetched_by?: string
+  sources: Record<string, { items: ContextItem[]; error: string }>
+  labels: Record<string, string>
+  count: number
+  adverse: number
+  errors: number
+  manual: { label: string; url: string }[]
+  ref?: number | null
+  person_ref?: number | null
+}
+
+export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
 
 export type ScreenAwards = { fetched_at: string; fetched_by: string; entities: AwardEntity[]; skipped: number; errors: number }
 
@@ -437,6 +468,13 @@ export const api = {
     req<ScreenNote>(`/api/subject-screens/${encodeURIComponent(id)}/notes`, { method: 'POST', body: form }),
   deleteScreenNote: (id: string, nid: string, form: FormData) =>
     req<unknown>(`/api/subject-screens/${encodeURIComponent(id)}/notes/${nid}/delete`, { method: 'POST', body: form }),
+  context: (q: { uei?: string; name?: string; person?: boolean }) =>
+    req<{ context: OutsideContext | null }>(
+      `/api/context?${new URLSearchParams(Object.entries(q).filter(([, v]) => v).map(([k, v]) => [k, String(v)]))}`,
+    ),
+  lookupContext: (form: FormData) => req<OutsideContext>('/api/context', { method: 'POST', body: form }),
+  fetchScreenContext: (id: string, form: FormData) =>
+    req<ScreenContext>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>
     req<ScreenAwards>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
   reviewScreen: (id: string, form: FormData) =>

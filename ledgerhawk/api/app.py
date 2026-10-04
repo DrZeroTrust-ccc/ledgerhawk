@@ -290,6 +290,36 @@ def fetch_screen_awards(sid: str, analyst: str = Form("")):
         raise HTTPException(502, str(exc))
 
 
+@app.post("/api/subject-screens/{sid}/context")
+def screen_context(sid: str, analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the lookup is attributed.")
+    try:
+        return store.screen_context(sid, analyst)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    except ConnectionError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@app.get("/api/context")
+def get_context(uei: str = "", name: str = "", person: bool = False):
+    return {"context": store.context(uei=uei, name=name, person=person)}
+
+
+@app.post("/api/context")
+def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = Form(""), state: str = Form(""),
+                   person: bool = Form(False)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the lookup is attributed.")
+    try:
+        return store.lookup_context(analyst=analyst, name=name, uei=uei, state=state, person=person)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except ConnectionError as exc:
+        raise HTTPException(502, str(exc))
+
+
 @app.post("/api/subject-screens/{sid}/review")
 def review_screen(sid: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
     if not analyst.strip():
@@ -528,7 +558,7 @@ def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool =
         raise HTTPException(404, "Vendor not in this run")
     wf = _workflow(v, store.analyst_state().get(uei, {}))
     body = build_case_docx(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id),
-                           matter=matter.strip(), privileged=privileged)
+                           matter=matter.strip(), privileged=privileged, context=store.context(uei=uei))
     return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.docx"'})
 
 
