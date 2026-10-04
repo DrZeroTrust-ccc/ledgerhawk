@@ -240,7 +240,7 @@ def subject_screen(
     related_out = {}
     for u, d in related.items():
         e = entity(u)
-        related_out[u] = {"uei": u, "name": e["name"], "via": sorted(d["via"].values()), "of": sorted(d["of"]),
+        related_out[u] = {"uei": u, "name": e["name"], "via": sorted(d["via"].values()), "via_keys": sorted(d["via"]), "of": sorted(d["of"]),
                           "excluded": "EXCLUDED" in e["exclusion_flags"],
                           "flags": [f for f in e["exclusion_flags"] if f != "NAME_MATCH_CANDIDATE"],
                           "exclusion": [h for h in e["exclusion"] if h["kind"] in ("direct", "alias")],

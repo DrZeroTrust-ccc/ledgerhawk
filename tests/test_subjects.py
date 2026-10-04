@@ -119,6 +119,8 @@ def test_api(syn, tmp_path):
         assert x.status_code == 200 and x.content[:2] == b"PK"
         w = client.get(f"/api/subject-screens/{sid}/subject-screen.docx")
         assert w.status_code == 200 and w.content[:2] == b"PK"
+        lc = client.get(f"/api/subject-screens/{sid}/link-chart.xlsx")
+        assert lc.status_code == 200 and "Links" in load_workbook(io.BytesIO(lc.content)).sheetnames
         assert client.get("/api/subject-screens/nope").status_code == 404
         assert any(a["action"] == "subject_screen" for a in client.get("/api/audit").json())
     finally:
@@ -331,3 +333,31 @@ def test_notes_evidence_and_signoff(syn, tmp_path):
         assert client.post(f"{base}/review", data={"analyst": "Rev", "action": "reopen", "comment": "New filing"}).json()["state"] == "draft"
     finally:
         mp.undo()
+
+
+def test_link_chart(syn, tmp_path):
+    from ledgerhawk.exports.linkchart import build_chart, build_linkchart
+    from ledgerhawk.pipeline.subjects import parse_people, people_screen
+    sam, ex, p, _ = syn
+    res = subject_screen(parse_subjects(f"{p['ex_affiliate']}\n{p['excluded_major']}"), sam, ex).to_dict()
+    res["people"] = people_screen(parse_people("Reese Fosterling, NY"), sam, ex)
+    res["meta"] = {"id": "x", "matter": "M", "privileged": True, "data_class": "synthetic"}
+    ch = build_chart(res)
+    ents, links = ch.entities, ch.links
+    sub = next(s for s in res["subjects"] if s["input_uei"] == p["ex_affiliate"] or s["input_name"] == p["ex_affiliate"])
+    org = f"ORG:{sub['entities'][0]['uei']}"
+    assert ents[org]["subjects"] == {sub["ref"]}
+    # the shared contact and suite become entities that related excluded firms also link to
+    contact = next(x["to"] for x in links if x["from"] == org and x["type"] == "Has SAM contact")
+    suite = next(x["to"] for x in links if x["from"] == org and x["type"] == "Registered at")
+    rel = [r for r in sub["related"] if r["excluded"]]
+    assert rel and all({"from": f"ORG:{r['uei']}", "to": contact} in [{"from": x["from"], "to": x["to"]} for x in links] for r in rel)
+    assert any(x["from"] == f"ORG:{rel[0]['uei']}" and x["to"] == suite for x in links)
+    assert any(x["type"] == "Excluded under this UEI" for x in links)
+    assert contact == "PER:REESE|FOSTERLING|NY" and "Screened person 1" in ents[contact]["description"]  # screened person merges with the SAM contact
+    assert all(x["from"] in ents and x["to"] in ents for x in links)
+    wb = load_workbook(io.BytesIO(build_linkchart(res)))
+    assert wb.sheetnames == ["Read Me", "Entities", "Links"]
+    assert wb["Read Me"]["A1"].value == PRIVILEGED
+    assert [c.value for c in wb["Links"][1]][:4] == ["From ID", "From Type", "From Label", "Link Type"]
+    assert wb["Links"].max_row == len(links) + 1 and wb["Entities"].max_row == len(ents) + 1
