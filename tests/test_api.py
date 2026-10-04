@@ -259,3 +259,11 @@ def test_integrity_lane_endpoint_and_export(sam_ctx):
     assert "fraud" not in text.replace("not findings of fraud", "") and "guilty" not in text
     v = client.get(f"/api/runs/{run_id}/vendors/{p['small_paid_after']}").json()
     assert "integrity lane, tier A" in v["why"]
+
+
+def test_case_docx(sam_ctx):
+    client, run_id, p = sam_ctx
+    r = client.get(f"/api/runs/{run_id}/vendors/{p['succ_new']}/case.docx?matter=M-1&privileged=true")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    assert "wordprocessingml" in r.headers["content-type"]
+    assert client.get(f"/api/runs/{run_id}/vendors/NOPE/case.docx").status_code == 404

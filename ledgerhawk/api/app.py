@@ -23,10 +23,12 @@ from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, sugges
 from ..exports.case import build_case
 from ..exports.small import build_small
 from ..exports.subjects import build_subjects
+from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from .graph import build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 DATA_DIR = Path(os.environ.get("LEDGERHAWK_DATA_DIR", "data/app"))
 WEB_DIST = Path(os.environ.get("LEDGERHAWK_WEB_DIST", Path(__file__).resolve().parents[2] / "web" / "dist"))
@@ -235,6 +237,16 @@ def export_subject_screen(sid: str):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/subject-screens/{sid}/subject-screen.docx")
+def export_subject_screen_docx(sid: str):
+    try:
+        s = store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    return Response(build_subjects_docx(s), media_type=DOCX,
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk-Subject-Screen-{sid}.docx"'})
+
+
 @app.get("/api/runs/{run_id}")
 def run_summary(run_id: str):
     return _get(store.summary, run_id)
@@ -419,6 +431,18 @@ def export_case(run_id: str, uei: str):
     body = build_case(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id))
     return Response(body, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.pdf"'})
+
+
+@app.get("/api/runs/{run_id}/vendors/{uei}/case.docx")
+def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool = False):
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this run")
+    wf = _workflow(v, store.analyst_state().get(uei, {}))
+    body = build_case_docx(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id),
+                           matter=matter.strip(), privileged=privileged)
+    return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.docx"'})
 
 
 @app.get("/api/runs/{run_id}/vendors/{uei}/graph")

@@ -132,12 +132,20 @@ function Header({ data }: { data: SubjectScreen }) {
               .join(' · ')}
           </p>
         </div>
-        <a
-          href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.xlsx`}
-          className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
-        >
-          Download workbook
-        </a>
+        <div className="flex flex-wrap gap-2">
+          <a
+            href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`}
+            className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
+          >
+            Download report (Word)
+          </a>
+          <a
+            href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.xlsx`}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+          >
+            Workbook (Excel)
+          </a>
+        </div>
       </div>
     </div>
   )
