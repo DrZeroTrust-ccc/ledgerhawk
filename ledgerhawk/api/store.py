@@ -17,6 +17,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 from ..pipeline import awards as awards_mod
+from ..pipeline import context as context_mod
+from ..pipeline.normalize import normalize_name
 from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
@@ -67,8 +69,10 @@ class Store:
         (self.root / "runs").mkdir(parents=True, exist_ok=True)
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
         (self.root / "subjects").mkdir(parents=True, exist_ok=True)
+        (self.root / "context").mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict] = {}
         self.awards_post = None  # tests swap in a fake USAspending
+        self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self._lock = threading.Lock()
         self.db_path = self.root / "state.db"
         with self._db() as db:
@@ -291,7 +295,69 @@ class Store:
         screen["review"] = self._review(sid)
         aw = d / "awards.json"
         screen["awards"] = json.loads(aw.read_text()) if aw.exists() else None
+        cx = d / "context.json"
+        screen["context"] = json.loads(cx.read_text()) if cx.exists() else None
         return screen
+
+    # ---- outside context (news, courts, DOJ, SEC, OFAC) -------------------------------------------------------
+    # Snapshots are kept per entity (by UEI, or by name for people and unregistered firms) so they carry across runs
+    # and screens; each lookup adds a dated file and the newest is shown.
+    @staticmethod
+    def _context_key(uei: str, name: str, person: bool) -> str:
+        if uei and not person:
+            return "uei-" + re.sub(r"[^A-Z0-9]", "", uei.upper())
+        return ("person-" if person else "name-") + re.sub(r"[^A-Z0-9]+", "-", normalize_name(name)).strip("-")[:80]
+
+    def _save_context(self, res: dict) -> None:
+        d = self.root / "context" / self._context_key(res["uei"], res["name"], res["person"])
+        d.mkdir(parents=True, exist_ok=True)
+        (d / (res["fetched_at"].replace(":", "") + ".json")).write_text(json.dumps(res, indent=2))
+
+    def context(self, *, uei: str = "", name: str = "", person: bool = False) -> dict | None:
+        d = self.root / "context" / self._context_key(uei, name, person)
+        files = sorted(d.glob("*.json")) if d.exists() else []
+        return json.loads(files[-1].read_text()) if files else None
+
+    def lookup_context(self, *, analyst: str, name: str, uei: str = "", state: str = "", person: bool = False) -> dict:
+        if not name.strip():
+            raise ValueError("A name is needed to search outside sources.")
+        res = context_mod.lookup(name, uei=uei, state=state, person=person,
+                                 fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
+        if res["errors"] == len(res["sources"]):
+            raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
+        res["fetched_by"] = analyst.strip()
+        self._save_context(res)
+        self.audit(analyst, "context_lookup", uei or None, None, f"Outside context for {name}: {res['count']} items, "
+                   f"{res['adverse']} with enforcement or litigation language")
+        return res
+
+    def screen_context(self, sid: str, analyst: str) -> dict:
+        """Outside context for every subject entity and screened person on a screen, kept with the screen."""
+        screen = self.subject_screen(sid)
+        targets, seen = [], set()
+        for s in screen["subjects"]:
+            for e in s["entities"]:
+                card = e.get("sam") or {}
+                name = card.get("legal_name") or e["name"]
+                if name and (e["uei"] or name) not in seen:
+                    seen.add(e["uei"] or name)
+                    targets.append({"name": name, "uei": e["uei"], "state": card.get("state", ""), "ref": s["ref"]})
+        for x in screen.get("people") or []:
+            nm = f"{x['first']} {x['last']}".title()
+            targets.append({"name": nm, "person": True, "state": x["state"], "person_ref": x["ref"]})
+        targets = targets[:40]
+        found = context_mod.lookup_many(targets, fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
+        if found and all(f["errors"] == len(f["sources"]) for f in found):
+            raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
+        for t, f in zip(targets, found):
+            f["fetched_by"] = analyst.strip()
+            f["ref"], f["person_ref"] = t.get("ref"), t.get("person_ref")
+            self._save_context(f)
+        out = {"fetched_at": _now(), "fetched_by": analyst.strip(), "entities": found, "skipped": 0}
+        (self.root / "subjects" / sid / "context.json").write_text(json.dumps(out, indent=2))
+        self.audit(analyst, "context_lookup", None, None, f"Outside context for screen {sid}: {sum(f['count'] for f in found)} items "
+                   f"across {len(found)} names, {sum(f['adverse'] for f in found)} with enforcement or litigation language")
+        return out
 
     def fetch_screen_awards(self, sid: str, analyst: str) -> dict:
         """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""

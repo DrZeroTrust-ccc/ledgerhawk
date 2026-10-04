@@ -20,7 +20,7 @@ from ..pipeline.normalize import money
 from ..pipeline.subjects import STATUSES, next_steps
 from ..pipeline.tiering import TIERS, category
 from .case import POC_ROLE, TIE_LABEL
-from .subjects import award_line, awards_for, note_byline, notes_for, signoff_lines
+from .subjects import award_line, awards_for, context_items, context_line, context_summary, note_byline, notes_for, signoff_lines
 from .voi import FOOTER
 
 PRIVILEGED = "Privileged and Confidential. Prepared at the direction of counsel."
@@ -121,6 +121,16 @@ def _notes(doc: Document, notes: list[dict], placeholder: str) -> None:
         _small(doc, note_byline(n))
 
 
+def _context(doc: Document, cx: dict | None, level: int = 3) -> None:
+    """Outside context: the summary line, then up to 8 items with enforcement or litigation language first."""
+    if not cx:
+        return
+    doc.add_heading("Outside context", level=level)
+    doc.add_paragraph(context_summary(cx))
+    _bullets(doc, [context_line(i) for i in context_items(cx, 8)])
+    _small(doc, "Matched by name only; confirm each item refers to this entity before relying on it.")
+
+
 def _save(doc: Document) -> bytes:
     buf = io.BytesIO()
     doc.save(buf)
@@ -128,7 +138,8 @@ def _save(doc: Document) -> bytes:
 
 
 def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[dict], summary: dict, *,
-                    matter: str = "", privileged: bool = False, generated_at: datetime | None = None) -> bytes:
+                    matter: str = "", privileged: bool = False, generated_at: datetime | None = None,
+                    context: dict | None = None) -> bytes:
     """One-vendor case file, the same facts as the PDF, with investigator next steps and room for analyst notes."""
     generated_at = generated_at or datetime.now(timezone.utc)
     meta = summary.get("meta", {})
@@ -199,6 +210,8 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
                 f"{h.get('type', '')}; active {h.get('active_date', '')}", h.get("evidence", "") or h.get("comments", "")] for h in hits])
     else:
         doc.add_paragraph("No active exclusion record is tied to this vendor by UEI, name or alias, or by a shared suite or contact.")
+
+    _context(doc, context, level=2)
 
     if history:
         doc.add_heading("Analyst history", level=2)
@@ -290,6 +303,8 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
                 _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],
                       [[a["award_id"], a["agency"], a["start"], f"${a['amount']:,.0f}", "Yes" if a["after_exclusion"] else ""] for a in top])
             _small(doc, f"USAspending.gov, looked up {aw['fetched_at'][:10]}. Largest awards shown; the workbook lists all retrieved.")
+        for cx in [c for c in (screen.get("context") or {}).get("entities", []) if c.get("ref") == s["ref"]]:
+            _context(doc, cx)
         doc.add_heading("Investigator notes", level=3)
         _notes(doc, notes_for(screen, f"s:{s['ref']}"), "[Add work done on this subject here.]")
 
@@ -305,6 +320,8 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             doc.add_heading("SAM registrations listing this person", level=3)
             _grid(doc, ["Entity", "UEI", "Role", "Place", "Excluded"],
                   [[r["name"], r["uei"], ", ".join(r["roles"]), r["place"], "Yes" if r["excluded"] else ""] for r in x["registrations"]])
+        for cx in [c for c in (screen.get("context") or {}).get("entities", []) if c.get("person_ref") == x["ref"]]:
+            _context(doc, cx)
         doc.add_heading("Investigator notes", level=3)
         _notes(doc, notes_for(screen, f"p:{x['ref']}"), "[Add work done on this person here.]")
 

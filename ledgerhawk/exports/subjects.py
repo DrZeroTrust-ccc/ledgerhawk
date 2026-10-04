@@ -80,6 +80,25 @@ def award_line(e: dict) -> str:
     return line + "."
 
 
+def context_items(cx: dict, limit: int | None = None) -> list[dict]:
+    """Items from one outside-context lookup, enforcement and litigation language first, then newest."""
+    items = [i for src in cx["sources"].values() for i in src["items"]]
+    items.sort(key=lambda i: i["date"] or "", reverse=True)
+    items.sort(key=lambda i: not i["tags"])
+    return items[:limit] if limit else items
+
+
+def context_summary(cx: dict) -> str:
+    errs = [s["error"] for s in cx["sources"].values() if s["error"]]
+    return (f"{cx['count']} items found for \"{cx['query']}\", {cx['adverse']} with enforcement or litigation language "
+            f"(looked up {cx['fetched_at'][:10]})." + (f" Not checked: {'; '.join(errs)}." if errs else ""))
+
+
+def context_line(i: dict) -> str:
+    return (f"{i['source']}: {i['title']}" + (f" ({i['where']})" if i["where"] else "") + (f", {i['date']}" if i["date"] else "")
+            + (f" [{', '.join(i['tags'])}]" if i["tags"] else "") + f". {i['url']}")
+
+
 def _sam_status(e: dict) -> str:
     c = e.get("sam")
     if not c:
@@ -248,6 +267,28 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
                              a["description"], a["url"]])
         last = _rows(ws, 6, body, {12}, 30)
         ws.auto_filter.ref = f"B5:Q{last}"
+
+    cxs = (screen.get("context") or {}).get("entities") or []
+    if cxs:
+        ws = wb.create_sheet("Outside Context")
+        _banner(ws, screen)
+        cx0 = screen["context"]
+        _title(ws, "Outside Context", f"News, DOJ press releases, federal court records, SEC filings and the OFAC list, searched by "
+               f"name {cx0['fetched_at'][:16].replace('T', ' ')} UTC by {cx0.get('fetched_by', '')}. A name match is not an identity "
+               "match; confirm each item before relying on it.")
+        _head(ws, 5, ["About", "Searched As", "Source", "Title", "Where", "Date", "Flags", "Link"],
+              [16, 30, 22, 70, 30, 11, 26, 60])
+        body = []
+        for cx in cxs:
+            about = f"Person {cx['person_ref']}" if cx.get("person_ref") else f"Subject {cx.get('ref', '')}"
+            items = context_items(cx)
+            if not items:
+                body.append([about, cx["query"], "", "Nothing found" + (f" ({cx['errors']} sources did not answer)" if cx["errors"] else ""),
+                             "", "", "", ""])
+            for i in items:
+                body.append([about, cx["query"], i["source"], i["title"], i["where"], i["date"], ", ".join(i["tags"]), i["url"]])
+        last = _rows(ws, 6, body, set(), 30)
+        ws.auto_filter.ref = f"B5:I{last}"
 
     notes = (screen.get("review") or {}).get("notes") or []
     if notes:
