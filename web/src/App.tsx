@@ -8,6 +8,8 @@ import VendorPage from './pages/VendorPage'
 import AuditPage from './pages/AuditPage'
 import ExclusionGapsPage from './pages/ExclusionGapsPage'
 import IntegrityPage from './pages/IntegrityPage'
+import SubjectsPage from './pages/SubjectsPage'
+import SubjectScreenPage from './pages/SubjectScreenPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -49,6 +51,9 @@ function Nav() {
           </NavLink>
         </>
       )}
+      <NavLink to="/subjects" className={link}>
+        Subject screen
+      </NavLink>
       <NavLink to="/audit" className={link}>
         Audit log
       </NavLink>
@@ -85,6 +90,8 @@ export default function App() {
             <Route path="/runs/:id/vendors/:uei" element={<VendorPage />} />
             <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
             <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
+            <Route path="/subjects" element={<SubjectsPage />} />
+            <Route path="/subjects/:id" element={<SubjectScreenPage />} />
             <Route path="/audit" element={<AuditPage />} />
           </Routes>
         </main>

@@ -18,9 +18,11 @@ from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
+from ..pipeline.subjects import STATUSES, parse_subjects
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from ..exports.case import build_case
 from ..exports.small import build_small
+from ..exports.subjects import build_subjects
 from ..exports.voi import build_voi
 from .graph import build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
@@ -94,6 +96,7 @@ def meta():
         "owners": OWNERS,
         "integrity_tiers": INTEGRITY_TIERS,
         "integrity_meaning": INTEGRITY_MEANING,
+        "subject_statuses": STATUSES,
     }
 
 
@@ -166,6 +169,70 @@ async def create_run(
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     return {"id": run_id}
+
+
+@app.get("/api/subject-screens")
+def list_subject_screens():
+    return store.list_subject_screens()
+
+
+@app.post("/api/subject-screens")
+async def create_subject_screen(
+    subjects_text: str = Form(""),
+    subjects_file: UploadFile | None = File(None),
+    analyst: str = Form(""),
+    matter: str = Form(""),
+    client: str = Form(""),
+    privileged: bool = Form(False),
+    synthetic: bool = Form(False),
+    sam_source: str = Form(""),
+    exclusions_source: str = Form(""),
+    dollars_run: str = Form(""),
+):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the screen is attributed.")
+    if not sam_source and not exclusions_source:
+        raise HTTPException(400, "Pick a SAM entity extract, an exclusions extract, or both.")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = None
+        if subjects_file is not None and subjects_file.filename:
+            path = Path(tmp) / Path(subjects_file.filename).name
+            path.write_bytes(await subjects_file.read())
+        try:
+            subjects = parse_subjects(subjects_text, path)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    try:
+        if dollars_run:
+            store.run_dir(dollars_run)
+        sid = store.create_subject_screen(
+            subjects, analyst=analyst, matter=matter, client=client, privileged=privileged, synthetic=synthetic,
+            sam_source=sam_source or None, exclusions_source=exclusions_source or None, dollars_run=dollars_run or None)
+    except KeyError:
+        raise HTTPException(400, "That source or run no longer exists.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"id": sid}
+
+
+@app.get("/api/subject-screens/{sid}")
+def subject_screen(sid: str):
+    try:
+        return store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+
+
+@app.get("/api/subject-screens/{sid}/subject-screen.xlsx")
+def export_subject_screen(sid: str):
+    try:
+        s = store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    body = build_subjects(s)
+    name = f"LedgerHawk-Subject-Screen-{sid}.xlsx"
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/runs/{run_id}")
