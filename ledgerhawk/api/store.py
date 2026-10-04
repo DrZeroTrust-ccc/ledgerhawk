@@ -14,8 +14,11 @@ import threading
 from datetime import date, datetime, timezone
 from pathlib import Path
 
+from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
+from ..pipeline.sam import load_sam
+from ..pipeline.subjects import subject_screen
 from ..pipeline.tiering import TIERS
 
 DISPOSITIONS = [
@@ -46,6 +49,7 @@ class Store:
         self.root = Path(root)
         (self.root / "runs").mkdir(parents=True, exist_ok=True)
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
+        (self.root / "subjects").mkdir(parents=True, exist_ok=True)
         self._cache: dict[str, dict] = {}
         self._lock = threading.Lock()
         self.db_path = self.root / "state.db"
@@ -185,6 +189,47 @@ class Store:
                                  sam_source=meta.get("sam_source"))
         self.audit(analyst, "restored", uei, new_id, note)
         return new_id
+
+    # ---- subject screens (named targets or a client's list) -------------------
+    def create_subject_screen(self, subjects: list[dict], *, analyst: str, matter: str = "", client: str = "",
+                              privileged: bool = False, synthetic: bool = False, sam_source: str | None = None,
+                              exclusions_source: str | None = None, dollars_run: str | None = None) -> str:
+        sam_meta = self.source(sam_source) if sam_source else None
+        ex_meta = self.source(exclusions_source) if exclusions_source else None
+        sam = load_sam(sam_meta["path"], date.fromisoformat(sam_meta["as_of"]), Path(sam_meta["path"]).parent) if sam_meta else None
+        ex = load_exclusions(ex_meta["path"], date.fromisoformat(ex_meta["as_of"])) if ex_meta else None
+        dollars = None
+        if dollars_run:
+            dollars = {u: {k: r.get(k) for k in ("fy24", "fy25", "struct", "naics", "naicsd", "psc", "pscd")}
+                       for u, r in self.vendors(dollars_run)["by_uei"].items()}
+        res = subject_screen(subjects, sam, ex, dollars=dollars).to_dict()
+        sid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(4)
+        res["meta"] = {
+            "id": sid, "created_at": _now(), "created_by": analyst, "matter": matter.strip(), "client": client.strip(),
+            "privileged": privileged, "data_class": "synthetic" if synthetic else "production",
+            "sam_source": sam_source, "exclusions_source": exclusions_source, "dollars_run": dollars_run,
+            "input": [{k: s[k] for k in ("ref", "uei", "name", "role")} for s in subjects],
+        }
+        d = self.root / "subjects" / sid
+        d.mkdir(parents=True)
+        (d / "screen.json").write_text(json.dumps(res, indent=2, default=str))
+        label = matter.strip() or f"{len(subjects)} subjects"
+        self.audit(analyst, "subject_screen", None, None, f"Subject screen {sid}: {label} ({len(subjects)} subjects)")
+        return sid
+
+    def subject_screen(self, sid: str) -> dict:
+        d = (self.root / "subjects" / sid).resolve()
+        if d.parent != (self.root / "subjects").resolve() or not (d / "screen.json").exists():
+            raise KeyError(sid)
+        return json.loads((d / "screen.json").read_text())
+
+    def list_subject_screens(self) -> list[dict]:
+        out = []
+        for d in sorted((self.root / "subjects").iterdir(), reverse=True):
+            if (d / "screen.json").exists():
+                s = json.loads((d / "screen.json").read_text())
+                out.append({**{k: v for k, v in s["meta"].items() if k != "input"}, "counts": s["counts"], "sources": s["sources"]})
+        return out
 
     # ---- analyst state ------------------------------------------------------
     def set_disposition(self, uei: str, value: str, note: str, analyst: str, run_id: str) -> dict:

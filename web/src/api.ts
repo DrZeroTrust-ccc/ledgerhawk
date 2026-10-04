@@ -211,6 +211,75 @@ export type Meta = {
   owners: string[]
 }
 
+export type SubjectEntity = {
+  uei: string
+  name: string
+  fy24: number
+  fy25: number
+  tot: number
+  in_dollars_run: boolean
+  sam: SamCard | null
+  exclusion: ExclusionHit[]
+  exclusion_flags: string[]
+  signals: Signal[]
+}
+
+export type RelatedEntity = { uei: string; name: string; via: string[]; of: string[]; excluded: boolean; flags: string[]; exclusion: ExclusionHit[]; tot: number }
+
+export type SubjectResult = {
+  ref: number
+  input_uei: string
+  input_name: string
+  role: string
+  resolution: string
+  status: string
+  status_label: string
+  entities: SubjectEntity[]
+  related: RelatedEntity[]
+  related_total: number
+  findings: string[]
+  next_steps: string[]
+}
+
+export type SubjectScreenMeta = {
+  id: string
+  created_at: string
+  created_by: string
+  matter: string
+  client: string
+  privileged: boolean
+  data_class: string
+  dollars_run: string | null
+}
+
+export type SubjectScreenSources = {
+  sam_file: string | null
+  sam_extract_date: string | null
+  sam_sha256: string | null
+  exclusions_file: string | null
+  exclusions_extract_date: string | null
+  rule_set_version: string
+}
+
+export type SubjectScreen = {
+  meta: SubjectScreenMeta
+  sources: SubjectScreenSources
+  counts: Record<string, number>
+  subjects: SubjectResult[]
+}
+
+export type SubjectScreenListItem = SubjectScreenMeta & { counts: Record<string, number>; sources: SubjectScreenSources }
+
+export const SUBJECT_STATUS: Record<string, string> = {
+  excluded: 'Excluded',
+  tied: 'Tied to an excluded party',
+  related_excluded: 'A related entity is excluded',
+  name_only: 'Same name as an excluded party (unconfirmed)',
+  signals: 'Other signals to review',
+  registration: 'Registration question',
+  clear: 'No hits in these sources',
+}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init)
   if (!r.ok) {
@@ -256,6 +325,9 @@ export const api = {
   setRouting: (id: string, uei: string, body: { owner: string; analyst: string }) =>
     req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/routing`, json(body)),
   integrity: (id: string) => req<IntegrityView>(`/api/runs/${id}/integrity`),
+  subjectScreens: () => req<SubjectScreenListItem[]>('/api/subject-screens'),
+  subjectScreen: (id: string) => req<SubjectScreen>(`/api/subject-screens/${encodeURIComponent(id)}`),
+  createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 
