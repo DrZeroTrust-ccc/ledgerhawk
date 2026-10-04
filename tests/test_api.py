@@ -171,3 +171,32 @@ def test_routing_assignment_and_rollup(sam_ctx):
     tiers = {t["tier"]: t for t in roll["tiers"]}
     assert tiers["3"]["vendors"] >= 1 and tiers["5"]["vendors"] >= 2 and roll["assignees"]["Pat"] == 2
     assert sum(roll["dispositions"].values()) >= tiers["5"]["vendors"]
+
+
+def test_vendors_of_interest_export(sam_ctx):
+    import io
+
+    import openpyxl
+    client, run_id, p = sam_ctx
+    r = client.get(f"/api/runs/{run_id}/exports/vendors-of-interest.xlsx")
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert wb.properties.creator == "LedgerHawk" and wb.properties.lastModifiedBy == "LedgerHawk"
+    ws = wb["Vendors of Interest"]
+    assert [c.value for c in ws[5]][1:5] == ["#", "Tier", "Category", "Vendor UEI"]
+    assert "not findings of fraud" in ws["B3"].value and "SYNTHETIC" in ws["B2"].value
+    rows = [[c.value for c in row][1:] for row in ws.iter_rows(min_row=6) if row[1].value]
+    tiers = [r[1] for r in rows]
+    assert tiers == sorted(tiers) and all(t[0] in "12345" for t in tiers)
+    assert any(r[3] == p["succ_new"] for r in rows)
+    text = " ".join(str(c) for r in rows for c in r).lower()
+    assert "fraud" not in text and "guilty" not in text
+    assert "Read Me" in wb.sheetnames
+
+
+def test_case_pdf(sam_ctx):
+    client, run_id, p = sam_ctx
+    r = client.get(f"/api/runs/{run_id}/vendors/{p['succ_new']}/case.pdf")
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    assert b"LedgerHawk" in r.content
+    assert client.get(f"/api/runs/{run_id}/vendors/NOPE/case.pdf").status_code == 404

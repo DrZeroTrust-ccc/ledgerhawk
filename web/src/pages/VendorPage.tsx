@@ -25,7 +25,8 @@ function groupHits(hits: ExclusionHit[]): { h: ExclusionHit; ties: ExclusionHit[
 }
 
 function ExclusionRecord({ h, ties }: { h: ExclusionHit; ties: ExclusionHit[] }) {
-  const scopeColor = h.scope === 'Firm-wide' ? 'bg-crimson text-white' : h.scope === 'Facility-only' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-900'
+  const scopeColor =
+    h.scope === 'Firm-wide' ? 'bg-crimson text-white' : h.scope === 'Facility-only' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-900'
   return (
     <div className={`rounded-md border p-4 ${h.kind === 'name_match' ? 'border-dashed border-slate-300' : 'border-crimson/30'}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -89,7 +90,9 @@ const ROLE: Record<string, string> = {
 function Count({ n, what }: { n: number; what: string }) {
   const hub = n > 5
   return (
-    <span className={`rounded px-1.5 py-0.5 text-xs ${hub ? 'bg-slate-100 text-slate-500' : n > 1 ? 'bg-amber-50 text-amber-800' : 'bg-slate-50 text-slate-500'}`}>
+    <span
+      className={`rounded px-1.5 py-0.5 text-xs ${hub ? 'bg-slate-100 text-slate-500' : n > 1 ? 'bg-amber-50 text-amber-800' : 'bg-slate-50 text-slate-500'}`}
+    >
       {n <= 1 ? `only this entity ${what}` : `${n} SAM entities ${what}${hub ? ', hub suppressed' : ''}`}
     </span>
   )
@@ -101,7 +104,9 @@ function SamProfile({ c }: { c: SamCard }) {
     <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
       <dt className="text-slate-500">Registration</dt>
       <dd>
-        <span className={`mr-2 rounded px-1.5 py-0.5 text-xs font-medium ${c.active ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>{c.active ? 'Active' : 'Expired'}</span>
+        <span className={`mr-2 rounded px-1.5 py-0.5 text-xs font-medium ${c.active ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+          {c.active ? 'Active' : 'Expired'}
+        </span>
         registered {c.reg_date || '?'}, expires {c.exp_date || '?'}, updated {c.last_update || '?'}
       </dd>
       <dt className="text-slate-500">Business start date</dt>
@@ -136,7 +141,8 @@ function SamProfile({ c }: { c: SamCard }) {
           {c.pocs.map((p) => (
             <li key={p.role}>
               <span className="font-medium">{p.name}</span>
-              {p.title && <span className="text-slate-600">, {p.title}</span>} <span className="text-slate-500">({[p.city, p.state].filter(Boolean).join(', ')})</span>
+              {p.title && <span className="text-slate-600">, {p.title}</span>}{' '}
+              <span className="text-slate-500">({[p.city, p.state].filter(Boolean).join(', ')})</span>
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                 {ROLE[p.role] ?? p.role} <Count n={p.universe} what="list this person" />
               </div>
@@ -306,7 +312,14 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
           <option key={d}>{d}</option>
         ))}
       </select>
-      <textarea required value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Note (required): what you checked and why" className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm" />
+      <textarea
+        required
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={3}
+        placeholder="Note (required): what you checked and why"
+        className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+      />
       <Button type="submit" disabled={busy || !value || !note.trim() || !analyst.trim()} className="w-full">
         {v.disposition ? 'Update disposition' : 'Save disposition'}
       </Button>
@@ -336,9 +349,16 @@ export default function VendorPage() {
           {v.exclusion_flags.map((f) => (
             <FlagChip key={f} flag={f} />
           ))}
+          <a
+            href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`}
+            className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+          >
+            Download case file (PDF)
+          </a>
         </div>
         <p className="mt-1 font-mono text-sm text-slate-500">
-          UEI {v.uei} {v.struct && <span className="font-sans">· {v.struct}</span>} {v.naics && <span className="font-sans">· NAICS {v.naics}</span>} {v.psc && <span className="font-sans">· PSC {v.psc}</span>}
+          UEI {v.uei} {v.struct && <span className="font-sans">· {v.struct}</span>} {v.naics && <span className="font-sans">· NAICS {v.naics}</span>}{' '}
+          {v.psc && <span className="font-sans">· PSC {v.psc}</span>}
         </p>
       </div>
 
@@ -367,7 +387,11 @@ export default function VendorPage() {
             <ul className="space-y-3">
               {[...scored, ...context].map((s, i) => (
                 <li key={i} className="flex gap-3">
-                  <span className={`h-fit whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-xs font-semibold ${s.id === 'S6' || s.id === 'R_split' ? 'bg-slate-100 text-slate-500' : 'bg-navy-50 text-navy'}`}>{s.id}</span>
+                  <span
+                    className={`h-fit whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-xs font-semibold ${s.id === 'S6' || s.id === 'R_split' ? 'bg-slate-100 text-slate-500' : 'bg-navy-50 text-navy'}`}
+                  >
+                    {s.id}
+                  </span>
                   <div className="text-sm">
                     <div className="font-medium">
                       {s.label}
@@ -379,20 +403,26 @@ export default function VendorPage() {
                 </li>
               ))}
             </ul>
-            {v.suppression && <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>}
+            {v.suppression && (
+              <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>
+            )}
           </Card>
 
           <Card title="SAM profile">
             {v.sam ? (
               <SamProfile c={v.sam} />
             ) : (
-              <p className="text-sm text-slate-500">No SAM registration in this run's extract. Unmatched vendors usually have lapsed registrations, or the run had no SAM extract.</p>
+              <p className="text-sm text-slate-500">
+                No SAM registration in this run's extract. Unmatched vendors usually have lapsed registrations, or the run had no SAM extract.
+              </p>
             )}
           </Card>
 
           {v.links.length > 0 && (
             <Card title="Linked vendors">
-              <p className="mb-3 text-sm text-slate-600">Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof of common control.</p>
+              <p className="mb-3 text-sm text-slate-600">
+                Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof of common control.
+              </p>
               <ul className="divide-y divide-slate-100 text-sm">
                 {v.links.map((l) => (
                   <li key={l.uei} className="py-2">
