@@ -200,3 +200,29 @@ def test_case_pdf(sam_ctx):
     assert r.status_code == 200 and r.content.startswith(b"%PDF")
     assert b"LedgerHawk" in r.content
     assert client.get(f"/api/runs/{run_id}/vendors/NOPE/case.pdf").status_code == 404
+
+
+def test_access_gate(ctx, monkeypatch):
+    import base64
+
+    from ledgerhawk.api import app as appmod
+    client = ctx[0]
+    monkeypatch.setattr(appmod, "ACCESS_PASSWORD", "s3cret")
+    assert client.get("/api/healthz").status_code == 200
+    r = client.get("/api/runs")
+    assert r.status_code == 401 and "Basic" in r.headers["www-authenticate"]
+    bad = base64.b64encode(b"chase:nope").decode()
+    assert client.get("/api/runs", headers={"Authorization": f"Basic {bad}"}).status_code == 401
+    good = base64.b64encode(b"chase:s3cret").decode()
+    assert client.get("/api/runs", headers={"Authorization": f"Basic {good}"}).status_code == 200
+
+
+def test_seed_synthetic(tmp_path, monkeypatch):
+    from ledgerhawk.api import app as appmod
+    from ledgerhawk.api.store import Store
+    monkeypatch.setattr(appmod, "store", Store(tmp_path))
+    appmod._seed_synthetic()
+    runs = appmod.store.list_runs()
+    assert len(runs) == 1 and runs[0]["data_class"] == "synthetic"
+    appmod._seed_synthetic()
+    assert len(appmod.store.list_runs()) == 1

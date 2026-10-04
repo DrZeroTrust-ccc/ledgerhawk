@@ -1,12 +1,15 @@
 """HTTP API for the analyst UI. Serves the built web app from web/dist when present."""
 from __future__ import annotations
 
+import base64
 import os
+import secrets
 import tempfile
+import threading
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,8 +27,47 @@ FOOTER = "Screening signals and dollars under review, not findings of fraud."
 DATA_DIR = Path(os.environ.get("LEDGERHAWK_DATA_DIR", "data/app"))
 WEB_DIST = Path(os.environ.get("LEDGERHAWK_WEB_DIST", Path(__file__).resolve().parents[2] / "web" / "dist"))
 
+ACCESS_PASSWORD = os.environ.get("LEDGERHAWK_ACCESS_PASSWORD", "")
+
 store = Store(DATA_DIR)
 app = FastAPI(title="LedgerHawk", version="0.2.0")
+
+
+@app.middleware("http")
+async def access_gate(request: Request, call_next):
+    """Shared-password gate (HTTP Basic, any username) when LEDGERHAWK_ACCESS_PASSWORD is set. Stopgap until sign-in."""
+    if ACCESS_PASSWORD and request.url.path != "/api/healthz":
+        ok = False
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("basic "):
+            try:
+                _, _, pw = base64.b64decode(auth[6:]).decode("utf-8").partition(":")
+                ok = secrets.compare_digest(pw.encode(), ACCESS_PASSWORD.encode())
+            except (ValueError, UnicodeDecodeError):
+                ok = False
+        if not ok:
+            return Response("Sign in to LedgerHawk.", status_code=401, headers={"WWW-Authenticate": 'Basic realm="LedgerHawk"'})
+    return await call_next(request)
+
+
+@app.get("/api/healthz")
+def healthz():
+    return {"ok": True}
+
+
+def _seed_synthetic() -> None:
+    """On an empty data directory, add one synthetic run so a fresh deploy has something to show."""
+    if store.list_runs():
+        return
+    from ..pipeline.synthetic import make_synthetic
+    work = Path(tempfile.mkdtemp(prefix="lh-seed-"))
+    vendor_path, excl_path, sam_path, _ = make_synthetic(work)
+    sam = store.add_source("sam", sam_path, date(2026, 9, 6), "system")
+    store.create_run(vendor_path, excl_path, date(2026, 10, 2), synthetic=True, analyst="system", sam_source=sam["id"])
+
+
+if os.environ.get("LEDGERHAWK_SEED_SYNTHETIC") == "1":
+    threading.Thread(target=_seed_synthetic, daemon=True).start()
 
 
 def _get(fn, *a):
