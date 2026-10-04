@@ -15,6 +15,8 @@ const TABS: [string, string][] = [
 ]
 const PAGE = 100
 const NOT_YET = 'Not yet dispositioned'
+// The pipeline never assigns these tiers; they fill in as analysts review tier 5 and tier 3 vendors.
+const REVIEW_ONLY = new Set(['1', '2', '4', 'explained'])
 
 function TierStrip({ runId, active, onPick, version }: { runId: string; active: string; onPick: (t: string) => void; version: number }) {
   const { data } = useAsync(() => api.tierRollup(runId), [runId, version])
@@ -30,7 +32,7 @@ function TierStrip({ runId, active, onPick, version }: { runId: string; active: 
         >
           <div className="text-xs font-medium text-slate-500">{TIER_SHORT[t.tier]}</div>
           <div className="tabular mt-0.5 text-lg font-semibold">{num(t.vendors)}</div>
-          <div className="tabular text-xs text-slate-500">{money(t.dollars)}</div>
+          <div className="tabular text-xs text-slate-500">{t.vendors === 0 && REVIEW_ONLY.has(t.tier) ? 'Set by analysts at review' : money(t.dollars)}</div>
         </button>
       ))}
     </div>
