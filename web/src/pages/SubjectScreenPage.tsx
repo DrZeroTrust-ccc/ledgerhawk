@@ -517,6 +517,13 @@ function Header({ data }: { data: SubjectScreen }) {
           >
             Workbook (Excel)
           </a>
+          <a
+            href={`/api/subject-screens/${encodeURIComponent(m.id)}/link-chart.xlsx`}
+            title="Entities and links to import into i2 Analyst's Notebook or Maltego"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+          >
+            Link chart (i2 / Maltego)
+          </a>
         </div>
       </div>
     </div>

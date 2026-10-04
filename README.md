@@ -82,7 +82,8 @@ a name without a matching state is never treated as confirmed. **Notes and sign-
 each subject, person or the whole screen, with a cited source and an evidence file (stored with its SHA-256). The
 screen is then submitted, and a second person approves it or returns it with comments; approval locks the notes and
 the sign-off prints in the Word report and workbook (Analyst Notes sheet). Notes live in `review.json` beside the
-unchanged `screen.json`, and a re-check carries them forward. Logic in `pipeline/subjects.py`;
+unchanged `screen.json`, and a re-check carries them forward. **Link chart (i2 / Maltego)** downloads the screen as an
+Entities sheet and a one-row-per-link Links sheet (organizations, contacts, suites, exclusion records) ready to import. Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)

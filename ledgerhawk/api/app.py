@@ -22,6 +22,7 @@ from ..pipeline.subjects import PERSON_STATUSES, STATUSES, parse_people, parse_s
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from ..exports.case import build_case
 from ..exports.small import build_small
+from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
@@ -309,6 +310,16 @@ def export_subject_screen_docx(sid: str):
         raise HTTPException(404, "Subject screen not found")
     return Response(build_subjects_docx(s), media_type=DOCX,
                     headers={"Content-Disposition": f'attachment; filename="LedgerHawk-Subject-Screen-{sid}.docx"'})
+
+
+@app.get("/api/subject-screens/{sid}/link-chart.xlsx")
+def export_link_chart(sid: str):
+    try:
+        s = store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    return Response(build_linkchart(s), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk-Link-Chart-{sid}.xlsx"'})
 
 
 @app.get("/api/runs/{run_id}")
