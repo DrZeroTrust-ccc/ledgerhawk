@@ -297,6 +297,8 @@ class Store:
         screen["awards"] = json.loads(aw.read_text()) if aw.exists() else None
         cx = d / "context.json"
         screen["context"] = json.loads(cx.read_text()) if cx.exists() else None
+        if screen["context"]:
+            screen["context"]["entities"] = [self._with_verdicts(e) for e in screen["context"]["entities"]]
         return screen
 
     # ---- outside context (news, courts, DOJ, SEC, OFAC) -------------------------------------------------------
@@ -313,23 +315,67 @@ class Store:
         d.mkdir(parents=True, exist_ok=True)
         (d / (res["fetched_at"].replace(":", "") + ".json")).write_text(json.dumps(res, indent=2))
 
-    def context(self, *, uei: str = "", name: str = "", person: bool = False) -> dict | None:
-        d = self.root / "context" / self._context_key(uei, name, person)
-        files = sorted(d.glob("*.json")) if d.exists() else []
-        return json.loads(files[-1].read_text()) if files else None
+    def _context_dir(self, uei: str, name: str, person: bool) -> Path:
+        return self.root / "context" / self._context_key(uei, name, person)
 
-    def lookup_context(self, *, analyst: str, name: str, uei: str = "", state: str = "", person: bool = False) -> dict:
+    def _verdicts(self, uei: str, name: str, person: bool) -> dict:
+        f = self._context_dir(uei, name, person) / "verdicts.json"
+        return json.loads(f.read_text()) if f.exists() else {}
+
+    def _with_verdicts(self, res: dict) -> dict:
+        return context_mod.apply_verdicts(res, self._verdicts(res.get("uei", ""), res["name"], res.get("person", False)))
+
+    def context(self, *, uei: str = "", name: str = "", person: bool = False) -> dict | None:
+        d = self._context_dir(uei, name, person)
+        files = sorted(f for f in d.glob("*.json") if f.name != "verdicts.json") if d.exists() else []
+        return self._with_verdicts(json.loads(files[-1].read_text())) if files else None
+
+    def lookup_context(self, *, analyst: str, name: str, uei: str = "", state: str = "", person: bool = False,
+                       clues: dict | None = None) -> dict:
         if not name.strip():
             raise ValueError("A name is needed to search outside sources.")
-        res = context_mod.lookup(name, uei=uei, state=state, person=person,
+        c = context_mod.clues_for(name, uei=uei, state=state, person=person, **(clues or {}))
+        res = context_mod.lookup(name, uei=uei, state=state, person=person, clues=c,
                                  fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
         if res["errors"] == len(res["sources"]):
             raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
         res["fetched_by"] = analyst.strip()
         self._save_context(res)
-        self.audit(analyst, "context_lookup", uei or None, None, f"Outside context for {name}: {res['count']} items, "
-                   f"{res['adverse']} with enforcement or litigation language")
-        return res
+        out = self._with_verdicts(res)
+        t = out["tally"]
+        self.audit(analyst, "context_lookup", uei or None, None, f"Outside context for {name}: {res['count']} items "
+                   f"({t['strong']} strong, {t['possible']} possible, {t['weak']} name only), {out['adverse']} with "
+                   "enforcement or litigation language")
+        return out
+
+    def context_verdict(self, *, analyst: str, item: str, verdict: str, note: str = "", uei: str = "", name: str = "",
+                        person: bool = False) -> dict:
+        """An analyst's call on one hit: the same entity, not our subject, or unsure ('' clears it). Kept per entity so
+        it holds across refreshes, the vendor page and every screen that includes the entity."""
+        if verdict and verdict not in context_mod.VERDICTS:
+            raise ValueError("Unknown verdict.")
+        if verdict == "not" and not note.strip():
+            raise ValueError("Say why this isn't our subject (for example: different state, different industry).")
+        cur = self.context(uei=uei, name=name, person=person)
+        if cur is None:
+            raise KeyError(name or uei)
+        hit = next((i for s in cur["sources"].values() for i in s["items"] if i["id"] == item), None)
+        if hit is None:
+            raise KeyError(item)
+        d = self._context_dir(uei, name, person)
+        verdicts = self._verdicts(uei, name, person)
+        if verdict:
+            verdicts[item] = {"verdict": verdict, "note": note.strip(), "by": analyst.strip(), "at": _now(),
+                              "title": hit["title"], "url": hit["url"], "source": hit["source"]}
+        else:
+            verdicts.pop(item, None)
+        tmp = d / "verdicts.tmp"
+        tmp.write_text(json.dumps(verdicts, indent=2))
+        tmp.replace(d / "verdicts.json")
+        label = context_mod.VERDICTS.get(verdict, "cleared")
+        self.audit(analyst, "context_verdict", uei or None, None,
+                   f"{label}: {hit['source']} \"{hit['title'][:120]}\" for {cur['name']}" + (f" ({note.strip()})" if note.strip() else ""))
+        return self.context(uei=uei, name=name, person=person)
 
     def screen_context(self, sid: str, analyst: str) -> dict:
         """Outside context for every subject entity and screened person on a screen, kept with the screen."""
@@ -341,10 +387,16 @@ class Store:
                 name = card.get("legal_name") or e["name"]
                 if name and (e["uei"] or name) not in seen:
                     seen.add(e["uei"] or name)
-                    targets.append({"name": name, "uei": e["uei"], "state": card.get("state", ""), "ref": s["ref"]})
+                    clues = context_mod.clues_for(
+                        name, uei=e["uei"], state=card.get("state", ""), city=card.get("city", ""), cage=card.get("cage", ""),
+                        other_names=[card.get("dba", ""), e["name"], s.get("input_name", "")],
+                        people=[p["name"] for p in card.get("pocs") or []], related=[r["name"] for r in s["related"]])
+                    targets.append({"name": name, "uei": e["uei"], "state": card.get("state", ""), "ref": s["ref"], "clues": clues})
         for x in screen.get("people") or []:
             nm = f"{x['first']} {x['last']}".title()
-            targets.append({"name": nm, "person": True, "state": x["state"], "person_ref": x["ref"]})
+            clues = context_mod.clues_for(nm, state=x["state"], person=True,
+                                          related=[r["name"] for r in x.get("registrations") or []])
+            targets.append({"name": nm, "person": True, "state": x["state"], "person_ref": x["ref"], "clues": clues})
         targets = targets[:40]
         found = context_mod.lookup_many(targets, fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
         if found and all(f["errors"] == len(f["sources"]) for f in found):
@@ -354,10 +406,12 @@ class Store:
             f["ref"], f["person_ref"] = t.get("ref"), t.get("person_ref")
             self._save_context(f)
         out = {"fetched_at": _now(), "fetched_by": analyst.strip(), "entities": found, "skipped": 0}
+        found = [self._with_verdicts(f) for f in found]
         (self.root / "subjects" / sid / "context.json").write_text(json.dumps(out, indent=2))
         self.audit(analyst, "context_lookup", None, None, f"Outside context for screen {sid}: {sum(f['count'] for f in found)} items "
-                   f"across {len(found)} names, {sum(f['adverse'] for f in found)} with enforcement or litigation language")
-        return out
+                   f"across {len(found)} names, {sum(f['tally']['strong'] for f in found)} strong matches, "
+                   f"{sum(f['adverse'] for f in found)} with enforcement or litigation language")
+        return out | {"entities": found}
 
     def fetch_screen_awards(self, sid: str, analyst: str) -> dict:
         """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""

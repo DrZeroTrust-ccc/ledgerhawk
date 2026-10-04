@@ -130,10 +130,13 @@ def test_context_api_and_subject_exports(tmp_path):
         assert [e.get("ref") for e in ents] == [1, None] and ents[1]["person_ref"] == 1 and ents[1]["person"]
         wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.xlsx").content))
         ws = wb["Outside Context"]
-        assert ws["B6"].value == "Subject 1" and ws["H6"].value  # adverse items first
+        assert ws["B6"].value == "Subject 1" and ws["D6"].value  # every row says how it matched
         doc = Document(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.docx").content))
         text = "\n".join(par.text for par in doc.paragraphs)
-        assert text.count("Outside context") == 2 and "kickback scheme" in text
+        # The fake news is about Ridge Analytics, not this subject: a name-only hit stays out of the written report.
+        assert text.count("Outside context") == 2 and "kickback scheme" not in text and "name-only (not listed)" in text
+        assert "FOSTERLING, Reese" in text  # the same-name sanctions entry is reported, labeled unverified
+        assert "[Possible match, not verified] OFAC SDN list" in text
         assert any(a["action"] == "context_lookup" for a in client.get("/api/audit").json())
     finally:
         mp.undo()
@@ -144,3 +147,74 @@ def test_parallel_lookups_share_one_ofac_download(tmp_path):
     found = cx.lookup_many([{"name": f"Firm Number {n} LLC"} for n in range(6)], fetch=fake_sources(calls), cache_dir=tmp_path)
     assert all(f["errors"] == 0 for f in found)
     assert sum(1 for c in calls if c[1] == cx.OFAC_URL) == 1
+
+
+def test_match_strength():
+    c = cx.clues_for("RIDGE ANALYTICS LLC", uei="SYNG6LE0B3VU", state="VA", city="Reston", cage="7ABC1",
+                     people=["Dana Whitfield"], related=["Ridge Data Partners LLC"])
+    def conf(title, snippet="", where=""):
+        return cx.score({"title": title, "snippet": snippet, "where": where, "match": "name"}, c)["confidence"]
+    assert conf("Ridge Analytics LLC wins Army task order", where="Reston, Virginia") == "strong"  # name and city
+    assert conf("Ridge Analytics CEO Dana Whitfield indicted") == "strong"  # name and an officer
+    assert conf("Contract to CAGE 7ABC1 protested") == "strong"  # an identifier alone is decisive
+    assert conf("Ridge Analytics opens Denver office") == "possible"  # distinctive name, nothing else
+    assert conf("Ridge Analytics sued", where="E.D. Va.") == "possible"  # the state alone is a weak tie
+    assert conf("Local ridge hiking analytics app launches") == "weak"  # words apart, no corroboration
+    other = cx.score({"title": "Smith v. Ridge Analytics Realty LLC", "snippet": "", "where": "", "match": "name"}, c)
+    assert other["confidence"] == "weak" and other["why"] == ["names a different business (Ridge Analytics Realty)"]
+    assert conf("Ridge Analytics Inc. hires CFO") == "possible"  # a legal suffix is not another business
+    assert conf("10-K filed by BIGCO HOLDINGS") == "weak"  # name not shown at all
+    g = cx.clues_for("GLOBAL SOLUTIONS GROUP LLC")
+    assert g["generic"]
+    hit = cx.score({"title": "Global Solutions Group fined", "snippet": "", "where": "", "match": "name"}, g)
+    assert hit["confidence"] == "weak" and "common business name" in hit["why"]
+    p = cx.clues_for("Reese Fosterling", state="NY", person=True, related=["Ridge Analytics LLC"])
+    pc = lambda t: cx.score({"title": t, "snippet": "", "where": "", "match": "name"}, p)["confidence"]  # noqa: E731
+    assert pc("Reese Fosterling named in suit") == "weak"  # a person's name alone proves little
+    assert pc("New York man Reese Fosterling charged") == "possible"
+    assert pc("Ridge Analytics founder Reese Fosterling charged") == "strong"
+
+
+def test_ofac_type_must_match(tmp_path):
+    # An individual named like a company, or a company named like a person, is not a match.
+    rows = b'40,"HARBOR LANE","individual","SDGT",-0-\n41,"HARBOR LANE","-0- ","SDGT",-0-\n'
+    fetch = lambda url, h: rows if url == cx.OFAC_URL else b""  # noqa: E731
+    assert [i["title"] for i in cx.ofac("Harbor Lane LLC", fetch, tmp_path)] == ["HARBOR LANE"]
+    assert len(cx.ofac("Harbor Lane", fetch, tmp_path, person=True)) == 1
+    assert cx.ofac("Harbor Lane LLC", fetch, tmp_path)[0]["where"].startswith("entity")
+
+
+def test_verdicts(tmp_path):
+    mp, appmod, client = _client(tmp_path)
+    try:
+        appmod.store.context_fetch = fake_sources()
+        q = {"uei": "SYNG6LE0B3VU", "name": "Ridge Analytics LLC"}
+        got = client.post("/api/context", data={"analyst": "A", **q, "state": "VA", "city": "Reston",
+                                                "people": "Dana Whitfield\n"}).json()
+        assert got["clues"]["city"] == "Reston" and got["clues"]["people"] == ["Dana Whitfield"]
+        items = {i["title"]: i for s in got["sources"].values() for i in s["items"]}
+        doj = next(i for t, i in items.items() if t.startswith("Virginia Contractor"))
+        assert doj["confidence"] == "possible" and "mentions state Virginia" in doj["why"]
+        news = items["Ridge Analytics opens new office"]
+        r = client.post("/api/context/verdict", data={"analyst": "B", **q, "item": news["id"], "verdict": "not"})
+        assert r.status_code == 400  # ruling a hit out needs a reason
+        r = client.post("/api/context/verdict", data={"analyst": "B", **q, "item": news["id"], "verdict": "not",
+                                                      "note": "Different company in Ohio"})
+        assert r.status_code == 200, r.text
+        r = client.post("/api/context/verdict", data={"analyst": "B", **q, "item": doj["id"], "verdict": "same"})
+        t = r.json()["tally"]
+        assert t["dismissed"] == 1 and t["confirmed"] == 1
+        # A refresh keeps both calls.
+        client.post("/api/context", data={"analyst": "A", **q})
+        again = client.get("/api/context", params={"uei": q["uei"]}).json()["context"]
+        assert again["tally"]["dismissed"] == 1 and again["tally"]["confirmed"] == 1
+        ranked = cx.ranked(again)
+        assert ranked[0]["id"] == doj["id"] and ranked[-1]["id"] == news["id"]
+        from ledgerhawk.exports.subjects import context_items, context_line
+        assert news["id"] not in [i["id"] for i in context_items(again)]
+        assert context_line(ranked[0]).startswith("[Confirmed by B]")
+        assert client.post("/api/context/verdict", data={"analyst": "B", **q, "item": "nope", "verdict": "same"}).status_code == 404
+        log = [a for a in client.get("/api/audit").json() if a["action"] == "context_verdict"]
+        assert len(log) == 2 and any("Different company in Ohio" in a["detail"] for a in log)
+    finally:
+        mp.undo()

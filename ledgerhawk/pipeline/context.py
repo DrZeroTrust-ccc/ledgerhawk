@@ -13,6 +13,7 @@ COURTLISTENER_TOKEN.
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import os
@@ -91,6 +92,202 @@ def _iso(s: str) -> str:
         pass
     m = re.match(r"(\d{4})-?(\d{2})-?(\d{2})", s)
     return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
+
+
+# ---- match strength ---------------------------------------------------------------------------------------------------
+# Search engines match on a name anywhere in a page, so most hits for a common name are about someone else. Each item is
+# scored against what we already know about the subject (identifiers, city and state, officers, related firms, other
+# names). Only a corroborating detail makes a hit "strong"; a bare name is "name only" and is never reported as a finding.
+CONFIDENCE = {"strong": "Strong match", "possible": "Possible match", "weak": "Name only"}
+VERDICTS = {"same": "Same entity", "not": "Not our subject", "unsure": "Unsure"}
+
+US_STATES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas", "CA": "California", "CO": "Colorado",
+    "CT": "Connecticut", "DE": "Delaware", "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana",
+    "ME": "Maine", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MS": "Mississippi",
+    "MO": "Missouri", "MT": "Montana", "NE": "Nebraska", "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey",
+    "NM": "New Mexico", "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio", "OK": "Oklahoma",
+    "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota",
+    "TN": "Tennessee", "TX": "Texas", "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming", "PR": "Puerto Rico", "GU": "Guam",
+}
+# Court and press abbreviations for states ("E.D. Va.", "N.D. Tex."), flattened.
+_STATE_ABBR = {"VA": "VA", "TX": "TEX", "CA": "CAL", "FL": "FLA", "PA": "PA", "NY": "N Y", "MD": "MD", "GA": "GA",
+               "IL": "ILL", "MI": "MICH", "OH": "OHIO", "NJ": "N J", "NC": "N C", "MA": "MASS", "WA": "WASH",
+               "CO": "COLO", "AL": "ALA", "AZ": "ARIZ", "LA": "LA", "MO": "MO", "TN": "TENN", "KY": "KY", "OK": "OKLA"}
+# Words that make a company name too ordinary to identify it on its own.
+GENERIC = set("""ADVANCED ALLIED AMERICA AMERICAN ASSOCIATES BUILDERS BUSINESS CAPITAL CENTER COMPANY CONSTRUCTION CONSULTANTS
+CONSULTING CONTRACTORS CORPORATE DATA DEFENSE DEVELOPMENT ELECTRIC ENGINEERING ENTERPRISES ENVIRONMENTAL FEDERAL FIRST
+GENERAL GLOBAL GOVERNMENT GROUP HEALTH HOLDINGS INDUSTRIES INFORMATION INNOVATIONS INTEGRATED INTERNATIONAL LOGISTICS
+MANAGEMENT MEDICAL NATIONAL NETWORK PARTNERS PREMIER PROFESSIONAL PROJECT RESOURCES SECURITY SERVICES SOLUTIONS
+STRATEGIC SUPPLY SUPPORT SYSTEMS TECH TECHNICAL TECHNOLOGIES TECHNOLOGY TRADING UNITED US USA WORLDWIDE AND OF THE""".split())
+
+
+# Words that, right after our name, show the text is about a different business ("Acme Realty" when we screen
+# "Acme Engineering LLC").
+OTHER_BUSINESS = GENERIC | set("""ACADEMY AUTO AUTOMOTIVE BAKERY BANK BAR BREWING CAFE CHURCH CLINIC COLLEGE DENTAL DINER
+FARM FARMS FITNESS FOODS FOUNDATION FUNERAL GRILL HOMES HOSPITAL HOTEL INSURANCE INVESTMENTS LAW LANDSCAPING MARKET
+MINISTRIES MOTORS PHARMACY PLUMBING PROPERTIES REALTY RESTAURANT ROOFING SALON SCHOOL STORE STUDIO TRUCKING
+UNIVERSITY""".split())
+LEGAL_WORDS = set("LLC INC CORP CORPORATION INCORPORATED CO COMPANY LTD LP LLP PLLC PC PA".split())
+
+
+def _flat(s: str) -> str:
+    return " " + re.sub(r"[^A-Z0-9]+", " ", (s or "").upper().replace("&", " AND ")).strip() + " "
+
+
+def _has(text: str, phrase: str) -> bool:
+    p = _flat(phrase).strip()
+    return bool(p) and f" {p} " in text
+
+
+def clues_for(name: str, *, uei: str = "", state: str = "", city: str = "", cage: str = "", other_names=(),
+              people=(), related=(), person: bool = False) -> dict:
+    """What we already know about a subject, used to tell its hits from same-name strangers."""
+    core = normalize_name(name)
+    toks = core.split()
+    st = (state or "").strip().upper()
+    return {
+        "name": name, "person": person, "uei": (uei or "").strip().upper(), "cage": (cage or "").strip().upper(),
+        "state": st, "city": (city or "").strip().title(),
+        "other_names": [n for n in dict.fromkeys(x.strip() for x in other_names if x and x.strip()) if normalize_name(n) != core],
+        "people": [p for p in dict.fromkeys(x.strip().title() for x in people if x and x.strip()) if len(p.split()) >= 2],
+        "related": [r for r in dict.fromkeys(x.strip() for x in related if x and x.strip())
+                    if len(normalize_name(r).split()) >= 2 and normalize_name(r) != core],
+        "generic": (not person) and (len(toks) < 2 or all(t in GENERIC for t in toks)),
+    }
+
+
+def _name_hit(text: str, c: dict) -> str:
+    """'exact' (the full legal name, or a person's first and last name together), 'name' (core name, or both name
+    words apart) or '' when the visible text doesn't show the name at all (the source matched deeper in the page)."""
+    if c["person"]:
+        words = normalize_name(c["name"].replace(",", " ")).split()
+        if len(words) < 2:
+            return "name" if words and _has(text, words[0]) else ""
+        first, last = words[0], words[-1]
+        if _has(text, f"{first} {last}") or _has(text, f"{last} {first}") or _has(text, " ".join(words)):
+            return "exact"
+        return "name" if _has(text, first) and _has(text, last) else ""
+    if _has(text, c["name"]) or any(_has(text, n) for n in c["other_names"]):
+        return "exact"
+    return "name" if _has(text, normalize_name(c["name"])) else ""
+
+
+def _other_business(text: str, c: dict) -> str:
+    """The name as the text uses it when it runs on into another business ('Acme Realty'), else ''."""
+    if c["person"]:
+        return ""
+    core = _flat(normalize_name(c["name"])).strip()
+    ours = set(_flat(c["name"]).split())
+    for m in re.finditer(rf" {re.escape(core)} (\w+) ", text):
+        nxt = m.group(1)
+        if nxt in OTHER_BUSINESS and nxt not in ours and nxt not in LEGAL_WORDS:
+            return f"{core} {nxt}".title()
+    return ""
+
+
+def score(item: dict, c: dict) -> dict:
+    """Adds confidence ('strong', 'possible', 'weak') and the reasons, from the item's visible text."""
+    text = _flat(" ".join([item.get("title", ""), item.get("snippet", ""), item.get("where", "")]))
+    hit = "exact" if item.get("match") == "same name" else _name_hit(text, c)
+    other = _other_business(text, c) if hit == "name" else ""
+    if other:
+        return item | {"confidence": "weak", "why": [f"names a different business ({other})"]}
+    why, corr = [], []
+    if hit == "exact":
+        why.append("full name" if c["person"] else "full legal name")
+    elif hit == "name":
+        why.append("name words" if c["person"] else "name without legal suffix")
+    else:
+        why.append("name not shown in the headline or summary")
+    if c["uei"] and _has(text, c["uei"]):
+        corr.append("UEI")
+    if c["cage"] and len(c["cage"]) == 5 and _has(text, c["cage"]):
+        corr.append("CAGE code")
+    for n in c["other_names"]:
+        if hit != "exact" and _has(text, n):
+            corr.append(f"other name {n}")
+    if c["city"] and len(c["city"]) >= 4 and _has(text, c["city"]):
+        corr.append(f"city {c['city']}")
+    st = c["state"]
+    if st in US_STATES and (_has(text, US_STATES[st]) or (st in _STATE_ABBR and _has(text, f"D {_STATE_ABBR[st]}"))):
+        corr.append(f"state {US_STATES[st]}")
+    for p in c["people"]:
+        if _has(text, p):
+            corr.append(f"officer {p}")
+    for r in c["related"]:
+        if _has(text, normalize_name(r)):
+            corr.append(f"related firm {r}")
+    why += [f"mentions {x}" for x in corr]
+    ids = any(x in ("UEI", "CAGE code") for x in corr)
+    specific = any(x.startswith(("officer ", "related firm ", "other name ")) for x in corr)
+    city = any(x.startswith("city ") for x in corr)
+    place = city or any(x.startswith("state ") for x in corr)
+    if ids or (hit and specific) or (hit and city and not c["person"]):
+        conf = "strong"
+    elif (hit and place) or (hit and not c["person"] and not c["generic"]) or item.get("match") == "same name":
+        conf = "possible"  # a same-name sanctions entry is always worth a look
+    else:
+        conf = "weak"
+    if c["generic"] and conf != "strong":
+        why.append("common business name")
+    return item | {"confidence": conf, "why": why}
+
+
+def item_id(i: dict) -> str:
+    """Stable id for a hit, so an analyst's verdict survives a refresh of the same lookup."""
+    return hashlib.sha1(f"{i['source']}|{i['url']}|{i['title']}".encode()).hexdigest()[:12]
+
+
+_RANK = {"strong": 0, "possible": 1, "weak": 2}
+
+
+def apply_verdicts(res: dict, verdicts: dict | None) -> dict:
+    """The lookup with each item's id, score (scored on the fly for snapshots taken before scoring) and analyst verdict,
+    plus the counts that matter: confirmed, strong, possible, name-only and dismissed, and enforcement language among the
+    hits that aren't name-only or dismissed."""
+    verdicts = verdicts or {}
+    c = res.get("clues") or clues_for(res["name"], uei=res.get("uei", ""), person=res.get("person", False))
+    out = {k: v for k, v in res.items() if k != "sources"}
+    out["sources"] = {}
+    tally = {"confirmed": 0, "strong": 0, "possible": 0, "weak": 0, "dismissed": 0, "unsure": 0}
+    adverse = 0
+    for key, src in res["sources"].items():
+        items = []
+        for i in src["items"]:
+            i = i if "confidence" in i else score(i, c)
+            i = i | {"id": i.get("id") or item_id(i)}
+            v = verdicts.get(i["id"])
+            i["verdict"] = v if v and v.get("verdict") in VERDICTS else None
+            vv = i["verdict"]["verdict"] if i["verdict"] else ""
+            if vv == "not":
+                tally["dismissed"] += 1
+            else:
+                tally["confirmed" if vv == "same" else i["confidence"]] += 1
+                tally["unsure"] += vv == "unsure"
+                adverse += bool(i["tags"]) and (vv == "same" or i["confidence"] != "weak")
+            items.append(i)
+        out["sources"][key] = {**src, "items": items}
+    out["tally"] = tally
+    out["adverse"] = adverse
+    out["generic"] = c.get("generic", False)
+    return out
+
+
+def ranked(res: dict) -> list[dict]:
+    """Items in reading order: confirmed, then strong, possible and name-only; enforcement language first within each,
+    then newest. Dismissed items last."""
+    items = [i for s in res["sources"].values() for i in s["items"]]
+    items.sort(key=lambda i: i["date"] or "", reverse=True)
+    items.sort(key=lambda i: not i["tags"])
+
+    def band(i):
+        v = (i.get("verdict") or {}).get("verdict")
+        return 9 if v == "not" else -1 if v == "same" else _RANK.get(i.get("confidence", "weak"), 2)
+    items.sort(key=band)
+    return items
 
 
 # ---- sources ---------------------------------------------------------------------------------------------------------
@@ -199,10 +396,13 @@ def ofac(name: str, fetch: Fetch, cache_dir: Path | None = None, person: bool = 
     target = _tokens(name) if person else normalize_name(name)
     out = []
     for r in _ofac_rows(fetch, cache_dir):
+        individual = r["type"].strip().lower() == "individual"
+        if individual != person:  # an individual on the list is never a company match, and the reverse
+            continue
         if (_tokens(r["name"]) if person else normalize_name(r["name"])) == target:
             title = r["name"] + (f" (alias of {r['alias_of']})" if r.get("alias_of") else "")
             out.append(_item("OFAC SDN list", title, f"https://sanctionssearch.ofac.treas.gov/Details.aspx?id={r['id']}", "",
-                             where=f"{r['type'].strip() or 'entity'} · program {r['program']}", match="same name") | {"tags": ["sanctions"]})
+                             where=f"{'individual' if person else 'entity'} · program {r['program']}", match="same name") | {"tags": ["sanctions"]})
     return out
 
 
@@ -228,9 +428,11 @@ def manual_links(name: str, state: str = "", person: bool = False) -> list[dict]
 
 
 def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, fetch: Fetch = _fetch,
-           cache_dir: Path | None = None) -> dict:
-    """All sources for one name. A failing source records its error and the rest still run."""
+           cache_dir: Path | None = None, clues: dict | None = None) -> dict:
+    """All sources for one name, each item scored against the clues. A failing source records its error and the rest
+    still run."""
     q = name.strip().title() if person else query_name(name)
+    c = clues or clues_for(name, uei=uei, state=state, person=person)
     sources = {}
     for key, fn in SOURCES.items():
         try:
@@ -241,6 +443,8 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         sources["ofac"] = {"items": ofac(name, fetch, cache_dir, person), "error": ""}
     except (urllib.error.URLError, OSError, ValueError) as exc:
         sources["ofac"] = {"items": [], "error": f"OFAC list could not be loaded ({getattr(exc, 'code', '') or type(exc).__name__})"}
+    for src in sources.values():
+        src["items"] = [score(i, c) | {"id": item_id(i)} for i in src["items"]]
     items = [i for s in sources.values() for i in s["items"]]
     return {
         "name": name, "uei": uei, "query": q, "person": person,
@@ -248,7 +452,7 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         "sources": sources, "labels": SOURCE_LABELS,
         "count": len(items), "adverse": sum(1 for i in items if i["tags"]),
         "errors": sum(1 for s in sources.values() if s["error"]),
-        "manual": manual_links(name, state, person),
+        "manual": manual_links(name, state, person), "clues": c,
     }
 
 
@@ -256,4 +460,5 @@ def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | No
     """targets: [{name, uei?, state?, person?}]. Runs a few at a time to stay polite to the free APIs."""
     with ThreadPoolExecutor(max_workers=3) as pool:
         return list(pool.map(lambda t: lookup(t["name"], uei=t.get("uei", ""), state=t.get("state", ""),
-                                              person=bool(t.get("person")), fetch=fetch, cache_dir=cache_dir), targets))
+                                              person=bool(t.get("person")), fetch=fetch, cache_dir=cache_dir,
+                                              clues=t.get("clues")), targets))

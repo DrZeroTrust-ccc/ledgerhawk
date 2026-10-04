@@ -353,7 +353,13 @@ export type ContextItem = {
   snippet: string
   match: string
   tags: string[]
+  id: string
+  confidence: 'strong' | 'possible' | 'weak'
+  why: string[]
+  verdict: { verdict: 'same' | 'not' | 'unsure'; note: string; by: string; at: string } | null
 }
+
+export type ContextTally = { confirmed: number; strong: number; possible: number; weak: number; dismissed: number; unsure: number }
 
 export type OutsideContext = {
   name: string
@@ -368,6 +374,8 @@ export type OutsideContext = {
   adverse: number
   errors: number
   manual: { label: string; url: string }[]
+  tally: ContextTally
+  generic: boolean
   ref?: number | null
   person_ref?: number | null
 }
@@ -473,6 +481,7 @@ export const api = {
       `/api/context?${new URLSearchParams(Object.entries(q).filter(([, v]) => v).map(([k, v]) => [k, String(v)]))}`,
     ),
   lookupContext: (form: FormData) => req<OutsideContext>('/api/context', { method: 'POST', body: form }),
+  contextVerdict: (form: FormData) => req<OutsideContext>('/api/context/verdict', { method: 'POST', body: form }),
   fetchScreenContext: (id: string, form: FormData) =>
     req<ScreenContext>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>
