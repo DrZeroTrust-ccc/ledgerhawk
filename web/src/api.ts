@@ -308,12 +308,36 @@ export type SubjectScreen = {
   subjects: SubjectResult[]
   people?: PersonResult[]
   changes?: SubjectChanges
+  review: ScreenReview
+}
+
+export type ScreenNote = {
+  id: string
+  target: string
+  text: string
+  source: string
+  analyst: string
+  at: string
+  file?: string
+  file_bytes?: number
+  file_sha256?: string
+  carried_from?: { id: string; created_at: string }
+}
+
+export type ReviewState = 'draft' | 'submitted' | 'returned' | 'approved'
+
+export type ScreenReview = {
+  state: ReviewState
+  state_label: string
+  notes: ScreenNote[]
+  history: { action: 'submit' | 'approve' | 'return' | 'reopen'; state: ReviewState; by: string; at: string; comment: string }[]
 }
 
 export type SubjectScreenListItem = SubjectScreenMeta & {
   counts: Record<string, number>
   sources: SubjectScreenSources
   change_counts: ChangeCounts | null
+  review_state: ReviewState
 }
 
 export const SUBJECT_STATUS: Record<string, string> = {
@@ -375,6 +399,12 @@ export const api = {
   subjectScreen: (id: string) => req<SubjectScreen>(`/api/subject-screens/${encodeURIComponent(id)}`),
   recheckSubjectScreen: (id: string, form: FormData) =>
     req<{ id: string }>(`/api/subject-screens/${encodeURIComponent(id)}/recheck`, { method: 'POST', body: form }),
+  addScreenNote: (id: string, form: FormData) =>
+    req<ScreenNote>(`/api/subject-screens/${encodeURIComponent(id)}/notes`, { method: 'POST', body: form }),
+  deleteScreenNote: (id: string, nid: string, form: FormData) =>
+    req<unknown>(`/api/subject-screens/${encodeURIComponent(id)}/notes/${nid}/delete`, { method: 'POST', body: form }),
+  reviewScreen: (id: string, form: FormData) =>
+    req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }

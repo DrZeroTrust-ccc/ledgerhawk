@@ -242,6 +242,53 @@ def subject_screen(sid: str):
         raise HTTPException(404, "Subject screen not found")
 
 
+@app.post("/api/subject-screens/{sid}/notes")
+async def add_screen_note(sid: str, analyst: str = Form(""), target: str = Form("screen"), text: str = Form(""),
+                          source: str = Form(""), file: UploadFile | None = File(None)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the note is attributed.")
+    body = await file.read() if file is not None and file.filename else None
+    try:
+        return store.add_screen_note(sid, analyst=analyst, target=target, text=text, source=source,
+                                     file_name=file.filename if body else None, file_bytes=body)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/subject-screens/{sid}/notes/{nid}/delete")
+def delete_screen_note(sid: str, nid: str, analyst: str = Form("")):
+    try:
+        store.delete_screen_note(sid, nid, analyst)
+    except KeyError:
+        raise HTTPException(404, "Note not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True}
+
+
+@app.get("/api/subject-screens/{sid}/evidence/{nid}")
+def screen_evidence(sid: str, nid: str):
+    try:
+        path, name = store.evidence_path(sid, nid)
+    except KeyError:
+        raise HTTPException(404, "Evidence not found")
+    return FileResponse(path, filename=name)
+
+
+@app.post("/api/subject-screens/{sid}/review")
+def review_screen(sid: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the sign-off is attributed.")
+    try:
+        return store.review_screen(sid, analyst=analyst, action=action, comment=comment)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.get("/api/subject-screens/{sid}/subject-screen.xlsx")
 def export_subject_screen(sid: str):
     try:

@@ -6,8 +6,10 @@ reproducible. Dispositions and the audit log are keyed by UEI so they carry acro
 """
 from __future__ import annotations
 
-import secrets
+import hashlib
 import json
+import re
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -29,6 +31,19 @@ DISPOSITIONS = [
     "Insufficient evidence",
     "Refer",
 ]
+
+
+REVIEW_STATES = {
+    "draft": "Draft, not yet reviewed",
+    "submitted": "Submitted for review",
+    "returned": "Returned for more work",
+    "approved": "Reviewed and approved",
+}
+EVIDENCE_MAX_BYTES = 25 * 1024 * 1024
+
+
+def _same_person(a: str, b: str) -> bool:
+    return " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
 
 
 SOURCE_KINDS = {
@@ -250,16 +265,29 @@ class Store:
             newest.setdefault(src["kind"], src["id"])  # list_sources is newest first within each kind
         sam = sam_source or (newest.get("sam") if m.get("sam_source") else None)
         ex = exclusions_source or (newest.get("exclusions") if m.get("exclusions_source") else None)
-        return self.create_subject_screen(
+        new_id = self.create_subject_screen(
             m["input"], analyst=analyst, matter=m.get("matter", ""), client=m.get("client", ""),
             privileged=bool(m.get("privileged")), synthetic=m.get("data_class") == "synthetic", sam_source=sam,
             exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid, people=m.get("input_people") or [])
+        # Earlier notes and evidence carry forward (same subjects, same refs); sign-off starts again.
+        notes = old["review"]["notes"]
+        if notes:
+            src, dst = self.root / "subjects" / sid / "evidence", self.root / "subjects" / new_id / "evidence"
+            for n in notes:
+                if n.get("file"):
+                    dst.mkdir(exist_ok=True)
+                    shutil.copy2(src / f"{n['id']}-{n['file']}", dst / f"{n['id']}-{n['file']}")
+            carried = [{**n, "carried_from": n.get("carried_from") or {"id": sid, "created_at": m["created_at"]}} for n in notes]
+            self._write_review(new_id, lambda r: r["notes"].extend(carried))
+        return new_id
 
     def subject_screen(self, sid: str) -> dict:
         d = (self.root / "subjects" / sid).resolve()
         if d.parent != (self.root / "subjects").resolve() or not (d / "screen.json").exists():
             raise KeyError(sid)
-        return json.loads((d / "screen.json").read_text())
+        screen = json.loads((d / "screen.json").read_text())
+        screen["review"] = self._review(sid)
+        return screen
 
     def list_subject_screens(self) -> list[dict]:
         out = []
@@ -267,7 +295,115 @@ class Store:
         for d in sorted(dirs, key=lambda d: ((d / "screen.json").stat().st_mtime_ns, d.name), reverse=True):
             s = json.loads((d / "screen.json").read_text())
             out.append({**{k: v for k, v in s["meta"].items() if k not in ("input", "input_people")}, "counts": s["counts"], "sources": s["sources"],
-                        "change_counts": (s.get("changes") or {}).get("counts")})
+                        "change_counts": (s.get("changes") or {}).get("counts"), "review_state": self._review(d.name)["state"]})
+        return out
+
+    # ---- analyst notes, evidence and reviewer sign-off on a subject screen ------------------
+    # screen.json is never edited after it is written; notes and sign-off live beside it in review.json.
+    def _review(self, sid: str) -> dict:
+        f = self.root / "subjects" / sid / "review.json"
+        r = json.loads(f.read_text()) if f.exists() else {}
+        r.setdefault("state", "draft")
+        r.setdefault("notes", [])
+        r.setdefault("history", [])
+        r["state_label"] = REVIEW_STATES[r["state"]]
+        r["notes"] = [n for n in r["notes"] if not n.get("deleted_at")]
+        return r
+
+    def _write_review(self, sid: str, change) -> dict:
+        f = self.root / "subjects" / sid / "review.json"
+        with self._lock:
+            r = json.loads(f.read_text()) if f.exists() else {"state": "draft", "notes": [], "history": []}
+            change(r)
+            f.write_text(json.dumps(r, indent=2))
+        return self._review(sid)
+
+    def _note_target(self, screen: dict, target: str) -> str:
+        """Notes attach to the whole screen, a subject ("s:3") or a person ("p:1"). Returns a readable label."""
+        if target == "screen":
+            return "Whole screen"
+        kind, _, ref = target.partition(":")
+        if kind == "s":
+            for x in screen["subjects"]:
+                if str(x["ref"]) == ref:
+                    return f"Subject {ref}"
+        if kind == "p":
+            for x in screen.get("people") or []:
+                if str(x["ref"]) == ref:
+                    return f"Person {ref}"
+        raise ValueError("Pick a subject, a person or the whole screen for this note.")
+
+    def add_screen_note(self, sid: str, *, analyst: str, target: str, text: str, source: str = "",
+                        file_name: str | None = None, file_bytes: bytes | None = None) -> dict:
+        screen = self.subject_screen(sid)
+        label = self._note_target(screen, target)
+        if screen["review"]["state"] == "approved":
+            raise ValueError("This screen has been approved, so its notes are locked. Reopen it to add more.")
+        if not text.strip() and not file_bytes:
+            raise ValueError("Write a note or attach a file.")
+        note = {"id": secrets.token_hex(4), "target": target, "text": text.strip(), "source": source.strip(),
+                "analyst": analyst.strip(), "at": _now()}
+        if file_bytes:
+            if len(file_bytes) > EVIDENCE_MAX_BYTES:
+                raise ValueError("Evidence files can be up to 25 MB.")
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(file_name or "evidence").name).strip("._") or "evidence"
+            d = self.root / "subjects" / sid / "evidence"
+            d.mkdir(exist_ok=True)
+            (d / f"{note['id']}-{safe}").write_bytes(file_bytes)
+            note.update(file=safe, file_bytes=len(file_bytes), file_sha256=hashlib.sha256(file_bytes).hexdigest())
+        self._write_review(sid, lambda r: r["notes"].append(note))
+        self.audit(analyst, "screen_note", None, None, f"Note on {label} of screen {sid}"
+                   + (f" with evidence {note['file']} (SHA-256 {note['file_sha256'][:12]})" if file_bytes else ""))
+        return note
+
+    def delete_screen_note(self, sid: str, nid: str, analyst: str) -> None:
+        review = self.subject_screen(sid)["review"]
+        note = next((n for n in review["notes"] if n["id"] == nid), None)
+        if note is None:
+            raise KeyError(nid)
+        if review["state"] == "approved":
+            raise ValueError("This screen has been approved, so its notes are locked. Reopen it first.")
+        if not _same_person(note["analyst"], analyst):
+            raise ValueError(f"Only {note['analyst']} can remove this note.")
+
+        def mark(r):  # kept in review.json for the record, hidden from the screen and its exports
+            for n in r["notes"]:
+                if n["id"] == nid:
+                    n.update(deleted_at=_now(), deleted_by=analyst.strip())
+        self._write_review(sid, mark)
+        self.audit(analyst, "screen_note_removed", None, None, f"Removed note {nid} on screen {sid}")
+
+    def evidence_path(self, sid: str, nid: str) -> tuple[Path, str]:
+        note = next((n for n in self.subject_screen(sid)["review"]["notes"] if n["id"] == nid and n.get("file")), None)
+        if note is None:
+            raise KeyError(nid)
+        return self.root / "subjects" / sid / "evidence" / f"{nid}-{note['file']}", note["file"]
+
+    def review_screen(self, sid: str, *, analyst: str, action: str, comment: str = "") -> dict:
+        """Two-person sign-off: an analyst submits, someone else approves or returns it; approval locks the notes."""
+        review = self.subject_screen(sid)["review"]
+        state = review["state"]
+        submitter = next((h["by"] for h in reversed(review["history"]) if h["action"] == "submit"), "")
+        moves = {"submit": ({"draft", "returned"}, "submitted"), "approve": ({"submitted"}, "approved"),
+                 "return": ({"submitted"}, "returned"), "reopen": ({"approved"}, "draft")}
+        if action not in moves:
+            raise ValueError("Unknown review action.")
+        allowed, new = moves[action]
+        if state not in allowed:
+            raise ValueError(f"This screen is {REVIEW_STATES[state].lower()}, so it can't be {'re' if action == 'reopen' else ''}"
+                             + {"submit": "submitted", "approve": "approved", "return": "returned", "reopen": "opened"}[action] + ".")
+        if action in ("approve", "return") and _same_person(submitter, analyst):
+            raise ValueError("A second person must review this. The analyst who submitted it can't approve or return it.")
+        if action in ("return", "reopen") and not comment.strip():
+            raise ValueError("Say what needs to change.")
+        entry = {"action": action, "state": new, "by": analyst.strip(), "at": _now(), "comment": comment.strip()}
+
+        def move(r):
+            r["state"] = new
+            r["history"].append(entry)
+        out = self._write_review(sid, move)
+        self.audit(analyst, f"screen_{action}", None, None, f"Screen {sid}: {REVIEW_STATES[new]}"
+                   + (f": {comment.strip()}" if comment.strip() else ""))
         return out
 
     # ---- analyst state ------------------------------------------------------

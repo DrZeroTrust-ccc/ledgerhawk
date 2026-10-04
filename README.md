@@ -78,7 +78,11 @@ carry a "Privileged and Confidential" header. **Re-check with latest data** re-r
 newest extracts and records what changed since the last check (new or dropped exclusions, ties, signals and related
 entities, and status moves), shown on the page and in the workbook and Word report. **People** ("First Last, ST",
 one per line) lists every SAM registration naming the person as a contact and any individual exclusion in their name;
-a name without a matching state is never treated as confirmed. Logic in `pipeline/subjects.py`;
+a name without a matching state is never treated as confirmed. **Notes and sign-off**: investigators add notes to
+each subject, person or the whole screen, with a cited source and an evidence file (stored with its SHA-256). The
+screen is then submitted, and a second person approves it or returns it with comments; approval locks the notes and
+the sign-off prints in the Word report and workbook (Analyst Notes sheet). Notes live in `review.json` beside the
+unchanged `screen.json`, and a re-check carries them forward. Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)
