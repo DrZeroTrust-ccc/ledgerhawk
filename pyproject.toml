@@ -1,0 +1,16 @@
+[project]
+name = "ledgerhawk"
+version = "0.1.0"
+description = "Vendor screening pipeline: screening signals and dollars under review, not findings of fraud."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.1",
+    "numpy>=1.26",
+    "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
