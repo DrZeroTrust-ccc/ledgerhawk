@@ -345,6 +345,11 @@ function OutsideContextCard({ v }: { v: VendorDetail }) {
     f.append('name', v.sam?.legal_name || v.name)
     f.append('uei', v.uei)
     f.append('state', v.sam?.state ?? '')
+    // What we already know about the vendor, so its hits can be told from same-name strangers.
+    f.append('city', v.sam?.city ?? '')
+    f.append('cage', v.sam?.cage ?? '')
+    f.append('other_names', [v.sam?.dba, v.name].filter(Boolean).join('\n'))
+    f.append('people', (v.sam?.pocs ?? []).map((p) => p.name).join('\n'))
     try {
       await api.lookupContext(f)
       got.reload()
@@ -365,7 +370,7 @@ function OutsideContextCard({ v }: { v: VendorDetail }) {
     >
       <ErrorNote error={error || got.error} />
       {c ? (
-        <ContextPanel c={c} title="Results" />
+        <ContextPanel key={c.fetched_at} c={c} title="Results" />
       ) : (
         !busy && (
           <p className="text-sm text-slate-500">

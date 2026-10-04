@@ -309,15 +309,33 @@ def get_context(uei: str = "", name: str = "", person: bool = False):
 
 @app.post("/api/context")
 def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = Form(""), state: str = Form(""),
-                   person: bool = Form(False)):
+                   person: bool = Form(False), city: str = Form(""), cage: str = Form(""), other_names: str = Form(""),
+                   people: str = Form(""), related: str = Form("")):
+    """Lines in other_names, people and related are details already known about the subject; they tell its hits from
+    same-name strangers."""
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
+    lines = lambda v: [x for x in v.splitlines() if x.strip()]  # noqa: E731
+    clues = {"city": city, "cage": cage, "other_names": lines(other_names), "people": lines(people), "related": lines(related)}
     try:
-        return store.lookup_context(analyst=analyst, name=name, uei=uei, state=state, person=person)
+        return store.lookup_context(analyst=analyst, name=name, uei=uei, state=state, person=person, clues=clues)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except ConnectionError as exc:
         raise HTTPException(502, str(exc))
+
+
+@app.post("/api/context/verdict")
+def context_verdict(analyst: str = Form(""), item: str = Form(""), verdict: str = Form(""), note: str = Form(""),
+                    uei: str = Form(""), name: str = Form(""), person: bool = Form(False)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the decision is attributed.")
+    try:
+        return store.context_verdict(analyst=analyst, item=item, verdict=verdict, note=note, uei=uei, name=name, person=person)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except KeyError:
+        raise HTTPException(404, "That result is no longer in the latest lookup. Refresh and try again.")
 
 
 @app.post("/api/subject-screens/{sid}/review")

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
+from ..pipeline import context as context_mod
 from ..pipeline.subjects import STATUSES
 from .small import _head, _rows, _title
 from .voi import FOOTER, NAVY
@@ -80,23 +81,49 @@ def award_line(e: dict) -> str:
     return line + "."
 
 
-def context_items(cx: dict, limit: int | None = None) -> list[dict]:
-    """Items from one outside-context lookup, enforcement and litigation language first, then newest."""
-    items = [i for src in cx["sources"].values() for i in src["items"]]
-    items.sort(key=lambda i: i["date"] or "", reverse=True)
-    items.sort(key=lambda i: not i["tags"])
+def context_items(cx: dict, limit: int | None = None, *, reportable: bool = False) -> list[dict]:
+    """Items from one outside-context lookup: confirmed, then strong, possible and name-only matches, enforcement and
+    litigation language first in each. Hits an analyst dismissed are left out. reportable also leaves out name-only hits
+    nobody confirmed, which is what goes in a written report."""
+    cx = cx if "tally" in cx else context_mod.apply_verdicts(cx, {})
+    items = [i for i in context_mod.ranked(cx) if verdict_of(i) != "not"]
+    if reportable:
+        items = [i for i in items if verdict_of(i) == "same" or i["confidence"] != "weak"]
     return items[:limit] if limit else items
 
 
+def verdict_of(i: dict) -> str:
+    return (i.get("verdict") or {}).get("verdict", "")
+
+
+def match_label(i: dict) -> str:
+    """How far to trust a hit: the analyst's call when there is one, otherwise the match strength."""
+    v = i.get("verdict") or {}
+    if v.get("verdict") == "same":
+        return f"Confirmed by {v['by']}"
+    if v.get("verdict") == "unsure":
+        return f"Unsure ({v['by']}); not verified"
+    return context_mod.CONFIDENCE[i["confidence"]] + ", not verified"
+
+
 def context_summary(cx: dict) -> str:
+    cx = cx if "tally" in cx else context_mod.apply_verdicts(cx, {})
+    t = cx["tally"]
     errs = [s["error"] for s in cx["sources"].values() if s["error"]]
-    return (f"{cx['count']} items found for \"{cx['query']}\", {cx['adverse']} with enforcement or litigation language "
-            f"(looked up {cx['fetched_at'][:10]})." + (f" Not checked: {'; '.join(errs)}." if errs else ""))
+    parts = [f"{t['confirmed']} confirmed by an analyst"] if t["confirmed"] else []
+    parts += [f"{t['strong']} strong matches", f"{t['possible']} possible", f"{t['weak']} name-only (not listed)"]
+    if t["dismissed"]:
+        parts.append(f"{t['dismissed']} ruled out by analysts")
+    return (f"{cx['count']} items found for \"{cx['query']}\" (looked up {cx['fetched_at'][:10]}): {', '.join(parts)}. "
+            f"{cx['adverse']} of the listed items use enforcement or litigation language."
+            + (" This is a common business name, so expect unrelated hits." if cx.get("generic") else "")
+            + (f" Not checked: {'; '.join(errs)}." if errs else "")
+            + " A match on name is not proof of identity; unconfirmed items are leads to verify, not findings.")
 
 
 def context_line(i: dict) -> str:
-    return (f"{i['source']}: {i['title']}" + (f" ({i['where']})" if i["where"] else "") + (f", {i['date']}" if i["date"] else "")
-            + (f" [{', '.join(i['tags'])}]" if i["tags"] else "") + f". {i['url']}")
+    return (f"[{match_label(i)}] {i['source']}: {i['title']}" + (f" ({i['where']})" if i["where"] else "")
+            + (f", {i['date']}" if i["date"] else "") + (f" [{', '.join(i['tags'])}]" if i["tags"] else "") + f". {i['url']}")
 
 
 def _sam_status(e: dict) -> str:
@@ -274,21 +301,24 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         _banner(ws, screen)
         cx0 = screen["context"]
         _title(ws, "Outside Context", f"News, DOJ press releases, federal court records, SEC filings and the OFAC list, searched by "
-               f"name {cx0['fetched_at'][:16].replace('T', ' ')} UTC by {cx0.get('fetched_by', '')}. A name match is not an identity "
-               "match; confirm each item before relying on it.")
-        _head(ws, 5, ["About", "Searched As", "Source", "Title", "Where", "Date", "Flags", "Link"],
-              [16, 30, 22, 70, 30, 11, 26, 60])
+               f"name {cx0['fetched_at'][:16].replace('T', ' ')} UTC by {cx0.get('fetched_by', '')}. Match says how far to trust "
+               "each hit: Strong means it also names something we know about the subject (UEI, CAGE, city, an officer or a "
+               "related firm); Name only means nothing but the name matched. Only items an analyst confirmed are verified. "
+               "Hits analysts ruled out are not listed.")
+        _head(ws, 5, ["About", "Searched As", "Match", "Why", "Source", "Title", "Where", "Date", "Flags", "Analyst Note", "Link"],
+              [16, 28, 26, 40, 22, 70, 30, 11, 26, 36, 60])
         body = []
         for cx in cxs:
             about = f"Person {cx['person_ref']}" if cx.get("person_ref") else f"Subject {cx.get('ref', '')}"
             items = context_items(cx)
             if not items:
-                body.append([about, cx["query"], "", "Nothing found" + (f" ({cx['errors']} sources did not answer)" if cx["errors"] else ""),
-                             "", "", "", ""])
+                body.append([about, cx["query"], "", "", "", "Nothing found" + (f" ({cx['errors']} sources did not answer)" if cx["errors"] else ""),
+                             "", "", "", "", ""])
             for i in items:
-                body.append([about, cx["query"], i["source"], i["title"], i["where"], i["date"], ", ".join(i["tags"]), i["url"]])
+                body.append([about, cx["query"], match_label(i), "; ".join(i.get("why") or []), i["source"], i["title"], i["where"],
+                             i["date"], ", ".join(i["tags"]), (i.get("verdict") or {}).get("note", ""), i["url"]])
         last = _rows(ws, 6, body, set(), 30)
-        ws.auto_filter.ref = f"B5:I{last}"
+        ws.auto_filter.ref = f"B5:L{last}"
 
     notes = (screen.get("review") or {}).get("notes") or []
     if notes:

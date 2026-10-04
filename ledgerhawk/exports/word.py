@@ -122,13 +122,15 @@ def _notes(doc: Document, notes: list[dict], placeholder: str) -> None:
 
 
 def _context(doc: Document, cx: dict | None, level: int = 3) -> None:
-    """Outside context: the summary line, then up to 8 items with enforcement or litigation language first."""
+    """Outside context: the summary line, then up to 8 reportable items (confirmed first, then strong and possible
+    matches). Name-only hits nobody confirmed and hits an analyst ruled out stay out of the report."""
     if not cx:
         return
     doc.add_heading("Outside context", level=level)
     doc.add_paragraph(context_summary(cx))
-    _bullets(doc, [context_line(i) for i in context_items(cx, 8)])
-    _small(doc, "Matched by name only; confirm each item refers to this entity before relying on it.")
+    _bullets(doc, [context_line(i) for i in context_items(cx, 8, reportable=True)])
+    _small(doc, "Each item is labeled with how it was matched. Only items marked Confirmed were checked by an analyst; the "
+                "rest are leads to verify before relying on them.")
 
 
 def _save(doc: Document) -> bytes:

@@ -92,7 +92,14 @@ page, the Word report and an Awards sheet (`pipeline/awards.py`).
 DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), SEC
 EDGAR full text and the OFAC SDN list by name. Results are dated snapshots kept per entity, with enforcement and
 litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS),
-and a section in the Word case file, the subject report and an Outside Context sheet (`pipeline/context.py`). Logic in `pipeline/subjects.py`;
+and a section in the Word case file, the subject report and an Outside Context sheet (`pipeline/context.py`).
+To keep same-name strangers out, every hit is scored against what we know about the subject (UEI, CAGE, city and
+state, officers, related firms, other names): **Strong** needs a corroborating detail, **Possible** is a distinctive
+name alone, **Name only** covers hits that don't show the name, use a common name, or name a different business
+("Acme Realty" for "Acme Engineering LLC"). OFAC entries must match the type (individual or entity). Analysts mark each
+hit Same entity, Not our subject (with a reason) or Unsure; the call is kept per entity, survives refreshes and is
+audited. Reports list only confirmed, strong and possible hits, each labeled unverified until confirmed, and leave out
+ruled-out ones. Logic in `pipeline/subjects.py`;
 workbook in `exports/subjects.py`.
 
 ## Analyst app (milestone 2)
