@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { api, money, num } from '../api'
 import { useAnalystName } from '../App'
-import { Card, ErrorNote, Loading, TierChip, useAsync } from '../ui'
+import { Card, ErrorNote, LeadLine, Loading, TierChip, useAsync } from '../ui'
 
 /** Everything assigned to you, across runs. Each lead shows in the newest run that carries it, tagged with that run. */
 export default function MyCasesPage() {
@@ -43,7 +43,7 @@ export default function MyCasesPage() {
                     <Link to={`/runs/${run.id}/vendors/${encodeURIComponent(r.uei)}`} className="font-medium text-navy hover:underline">
                       {r.name}
                     </Link>
-                    {r.headline && <div className="text-xs text-ink">{r.headline}</div>}
+                    <LeadLine hawk={r.hawk} headline={r.headline} className="text-xs text-ink" />
                   </div>
                   <TierChip tier={r.tier} changed={!!r.tier_change} />
                   <span className="tabular w-20 text-right">{money(r.tot)}</span>
