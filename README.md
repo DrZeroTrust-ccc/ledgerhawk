@@ -131,6 +131,15 @@ run never changes another. A restore continues the same run's work.
   them ("Keep") or decides again.
 - Decisions made before this change move to the run they were made in, once, on startup.
 
+### Fast triage
+
+- **Queue rows** carry a one-line reason (the strongest facts first) so most leads can be judged from the list.
+- **Side pane:** click a row (or press j/k) to see why it flagged, its signals and current decision, and decide it there.
+  1–5 picks a disposition, Ctrl+Enter saves and moves to the next lead, Enter opens the full case, Esc closes the pane.
+- **Bulk actions:** select rows to assign them, or decide them all with one disposition and one note (each logged).
+- **Progress** above the queue: open, decided in this run, decided today and by you, carried, and assigned to you.
+- **My cases** (top bar): every lead assigned to you across runs, each shown in the newest run that carries it.
+
 ```bash
 pip install -e '.[dev]'
 (cd web && npm ci && npm run build)

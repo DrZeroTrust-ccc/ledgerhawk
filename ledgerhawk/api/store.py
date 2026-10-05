@@ -832,6 +832,16 @@ class Store:
             out.setdefault(uei, {})["last_touched"] = at
         return out
 
+    def assigned_runs(self, assignee: str) -> list[dict]:
+        """Runs where something is assigned to this analyst (directly, or carried into a follow-up), newest first."""
+        with self._db() as db:
+            ids = {r[0] for r in db.execute("SELECT DISTINCT run_id FROM run_assignment WHERE lower(trim(assignee)) = ?",
+                                            (assignee.strip().casefold(),))}
+        runs = self.list_runs()
+        lin = {r["id"]: {x for x, _ in self.lineage(r["id"])} for r in runs}
+        superseded = {x for r, xs in lin.items() for x in xs if x != r}  # a later restore or follow-up continues it
+        return [r for r in runs if r["id"] not in superseded and ids & lin[r["id"]]]
+
     def dispositions(self, run_id: str) -> dict[str, dict]:
         ids = [r for r, _ in self.lineage(run_id)]
         with self._db() as db:

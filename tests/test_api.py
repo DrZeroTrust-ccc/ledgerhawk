@@ -353,3 +353,27 @@ def test_old_decisions_move_to_their_run(tmp_path):
         assert db.execute("SELECT run_id, value FROM run_disposition").fetchall() == [("R1", "Review")]
         assert db.execute("SELECT run_id, owner FROM run_routing").fetchall() == [("R1", "GSA OIG")]
     Store(tmp_path)  # runs once
+
+
+def test_fast_queue_endpoints(sam_ctx):
+    client, run_id, p = sam_ctx
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any"}).json()["rows"]
+    assert all(r["headline"] for r in rows)
+    ex = next(r for r in rows if "EXCLUDED" in r["exclusion_flags"])
+    assert ex["headline"].startswith("On the SAM exclusions list")
+
+    ueis = [r["uei"] for r in rows if not r["disposition"]][:3]
+    assert client.post(f"/api/runs/{run_id}/dispositions", json={"ueis": ueis, "value": "Review", "note": " ", "analyst": "Q"}).status_code == 400
+    assert client.post(f"/api/runs/{run_id}/dispositions", json={"ueis": ["NOPE"], "value": "Review", "note": "x", "analyst": "Q"}).status_code == 404
+    before = client.get(f"/api/runs/{run_id}/progress", params={"analyst": "q"}).json()
+    r = client.post(f"/api/runs/{run_id}/dispositions", json={"ueis": ueis, "value": "Review", "note": "Batch: pull files", "analyst": "Q"})
+    assert r.json() == {"decided": 3}
+    after = client.get(f"/api/runs/{run_id}/progress", params={"analyst": "q"}).json()
+    assert after["open"] == before["open"] - 3 and after["mine_today"] == before["mine_today"] + 3
+
+    client.post(f"/api/runs/{run_id}/assign", json={"ueis": ueis[:2], "assignee": "Quinn", "analyst": "Q"})
+    mine = client.get("/api/my-cases", params={"analyst": "quinn"}).json()["rows"]
+    # shown once, in the newest run that continues this one (an earlier test started a follow-up)
+    latest = ([r["id"] for r in client.get(f"/api/runs/{run_id}").json()["followed_by"]] or [run_id])[-1]
+    assert sorted(m["uei"] for m in mine) == sorted(ueis[:2]) and all(m["run"]["id"] == latest for m in mine)
+    assert client.get("/api/my-cases").status_code == 400

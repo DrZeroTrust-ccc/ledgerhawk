@@ -13,6 +13,7 @@ export type VendorRow = {
   lane: string
   reason_code: string
   reason: string
+  headline?: string
   cut_stage: string
   restored_from: string
   suppression: string
@@ -216,6 +217,16 @@ export type ChangeWhat =
   | { kind: 'tier'; from: string; to: string }
   | { kind: 'dollars'; from: number; to: number }
 export type RunChanges = { new: ChangeItem[]; dropped: ChangeItem[]; changed: ChangeItem[]; counts: { new: number; dropped: number; changed: number } }
+
+export type QueueProgress = {
+  total: number
+  open: number
+  decided: number
+  carried: number
+  decided_today: number
+  mine_today: number
+  assigned_to_me_open: number
+}
 
 export type RunRecord = {
   meta: RunMeta
@@ -527,6 +538,10 @@ export const api = {
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
+  bulkDisposition: (id: string, body: { ueis: string[]; value: string; note: string; analyst: string }) =>
+    req<{ decided: number }>(`/api/runs/${id}/dispositions`, json(body)),
+  progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),
+  myCases: (analyst: string) => req<{ rows: (VendorRow & { run: RunRef })[] }>(`/api/my-cases?${new URLSearchParams({ analyst })}`),
   record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
   followUp: (id: string, form: FormData) => req<{ id: string }>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
   confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>

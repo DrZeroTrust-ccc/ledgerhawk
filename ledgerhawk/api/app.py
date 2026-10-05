@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
+from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
@@ -519,7 +519,7 @@ def _slim(v: dict, disp: dict, state: dict | None = None) -> dict:
     return {
         **_workflow(v, (state or {}).get(v["uei"], {})),
         "uei": v["uei"], "name": v["name"], "queue": v["queue"], "bucket": v["bucket"], "lane": v["lane"],
-        "reason_code": v["reason_code"], "reason": v["reason"], "cut_stage": v["cut_stage"],
+        "reason_code": v["reason_code"], "reason": v["reason"], "cut_stage": v["cut_stage"], "headline": headline(v),
         "restored_from": v["restored_from"], "suppression": v["suppression"],
         "fy24": v["fy24"], "fy25": v["fy25"], "tot": v["tot"],
         "signals": v["signals"], "exclusion_flags": v["exclusion_flags"],
@@ -835,6 +835,76 @@ def set_disposition(run_id: str, uei: str, body: DispositionIn):
         return store.set_disposition(uei, body.value, body.note, body.analyst, run_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+class BulkDispositionIn(BaseModel):
+    ueis: list[str]
+    value: str
+    note: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/dispositions")
+def bulk_disposition(run_id: str, body: BulkDispositionIn):
+    """The same disposition and note for several leads at once, each logged separately."""
+    data = _get(store.vendors, run_id)
+    if not body.ueis:
+        raise HTTPException(400, "Select at least one vendor.")
+    if len(body.ueis) > 1000:
+        raise HTTPException(400, "Decide at most 1,000 vendors at a time.")
+    missing = [u for u in body.ueis if u not in data["by_uei"]]
+    if missing:
+        raise HTTPException(404, f"Not in this run: {', '.join(missing[:5])}")
+    try:
+        for u in dict.fromkeys(body.ueis):
+            store.set_disposition(u, body.value, body.note, body.analyst, run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"decided": len(set(body.ueis))}
+
+
+@app.get("/api/runs/{run_id}/progress")
+def progress(run_id: str, analyst: str = ""):
+    """How much of the queue is left: open, decided in this run (today and by you), carried from an earlier run."""
+    data = _get(store.vendors, run_id)
+    disp = store.dispositions(run_id)
+    today = date.today().isoformat()
+    queued = [r["uei"] for r in data["rows"] if r["queue"]]
+    mine = analyst.strip().casefold()
+    here = [disp[u] for u in queued if u in disp and not disp[u].get("carried_from")]
+    carried = sum(1 for u in queued if u in disp and disp[u].get("carried_from"))
+    state = store.analyst_state(run_id)
+    return {
+        "total": len(queued), "open": len(queued) - len(here) - carried, "decided": len(here), "carried": carried,
+        "decided_today": sum(1 for d in here if d["at"][:10] == today),
+        "mine_today": sum(1 for d in here if d["at"][:10] == today and d["analyst"].strip().casefold() == mine) if mine else 0,
+        "assigned_to_me_open": sum(1 for u in queued if mine and u not in disp
+                                   and state.get(u, {}).get("assignee", {}).get("assignee", "").strip().casefold() == mine),
+    }
+
+
+@app.get("/api/my-cases")
+def my_cases(analyst: str = ""):
+    """Every lead assigned to an analyst, across runs, newest run first, each tagged with its run."""
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name to see your cases.")
+    runs = store.assigned_runs(analyst)
+    out = []
+    for run in runs:
+        rid = run["id"]
+        try:
+            data = store.vendors(rid)
+        except KeyError:
+            continue
+        disp = store.dispositions(rid)
+        state = store.analyst_state(rid)
+        for u, st in state.items():
+            if st.get("assignee", {}).get("assignee", "").strip().casefold() != analyst.strip().casefold():
+                continue
+            v = data["by_uei"].get(u)
+            if v:
+                out.append({**_slim(v, disp, state), "run": store.run_ref(rid)})
+    return {"rows": out}
 
 
 class RestoreIn(BaseModel):

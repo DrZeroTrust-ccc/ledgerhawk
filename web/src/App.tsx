@@ -13,6 +13,7 @@ import IntegrityPage from './pages/IntegrityPage'
 import SubjectsPage from './pages/SubjectsPage'
 import SubjectScreenPage from './pages/SubjectScreenPage'
 import RunRecordPage from './pages/RunRecordPage'
+import MyCasesPage from './pages/MyCasesPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -40,6 +41,9 @@ function Nav() {
       </NavLink>
       <NavLink to="/subjects" className={tab}>
         Subject screens
+      </NavLink>
+      <NavLink to="/my-cases" className={tab}>
+        My cases
       </NavLink>
       <NavLink to="/audit" className={tab}>
         Audit log
@@ -145,6 +149,7 @@ export default function App() {
             <Route path="/subjects" element={<SubjectsPage />} />
             <Route path="/subjects/:id" element={<SubjectScreenPage />} />
             <Route path="/audit" element={<AuditPage />} />
+            <Route path="/my-cases" element={<MyCasesPage />} />
           </Routes>
         </main>
         <footer className="border-t border-slate-200 bg-white">
