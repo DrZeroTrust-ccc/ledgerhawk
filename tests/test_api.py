@@ -380,7 +380,7 @@ def test_fast_queue_endpoints(sam_ctx):
 
 
 def test_case_notes_evidence_signoff_awards_and_ledger(sam_ctx):
-    from tests.test_subjects import _fake_usaspending
+    from test_subjects import _fake_usaspending
     import ledgerhawk.api.app as appmod
     client, run_id, p = sam_ctx
     uei = p["excluded_major"]
