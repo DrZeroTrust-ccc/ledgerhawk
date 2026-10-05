@@ -149,6 +149,8 @@ export type VendorDetail = VendorRow & {
   why: string
   exclusion: ExclusionHit[]
   history: HistoryItem[]
+  case: { review: ScreenReview; earlier_notes: CaseNote[]; awards: ScreenAwards | null }
+  ledger: Ledger
   sam: SamCard | null
   links: LinkedVendor[]
 }
@@ -446,10 +448,18 @@ export type ScreenNote = {
 
 export type ReviewState = 'draft' | 'submitted' | 'returned' | 'approved'
 
+export type CaseNote = ScreenNote & { lean?: string; run?: RunRef }
+
+export type LedgerRow = { kind: string; lean: 'strengthens' | 'weakens' | 'context'; text: string; source: string; link: string; at: string; by: string; weight: number }
+export type Ledger = {
+  rows: LedgerRow[]
+  balance: { for: number; against: number; lean: 'strengthens' | 'weakens' | 'mixed' | 'none'; counts: Record<'strengthens' | 'weakens' | 'context', number> }
+}
+
 export type ScreenReview = {
   state: ReviewState
   state_label: string
-  notes: ScreenNote[]
+  notes: CaseNote[]
   history: { action: 'submit' | 'approve' | 'return' | 'reopen'; state: ReviewState; by: string; at: string; comment: string }[]
 }
 
@@ -538,6 +548,14 @@ export const api = {
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
+  caseNote: (id: string, uei: string, form: FormData) =>
+    req<CaseNote>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/notes`, { method: 'POST', body: form }),
+  deleteCaseNote: (id: string, uei: string, nid: string, form: FormData) =>
+    req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/notes/${nid}/delete`, { method: 'POST', body: form }),
+  reviewCase: (id: string, uei: string, form: FormData) =>
+    req<ScreenReview>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/review`, { method: 'POST', body: form }),
+  caseAwards: (id: string, uei: string, form: FormData) =>
+    req<ScreenAwards>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/awards`, { method: 'POST', body: form }),
   bulkDisposition: (id: string, body: { ueis: string[]; value: string; note: string; analyst: string }) =>
     req<{ decided: number }>(`/api/runs/${id}/dispositions`, json(body)),
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),

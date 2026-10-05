@@ -141,8 +141,9 @@ def _save(doc: Document) -> bytes:
 
 def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[dict], summary: dict, *,
                     matter: str = "", privileged: bool = False, generated_at: datetime | None = None,
-                    context: dict | None = None) -> bytes:
-    """One-vendor case file, the same facts as the PDF, with investigator next steps and room for analyst notes."""
+                    context: dict | None = None, case: dict | None = None, ledger: dict | None = None) -> bytes:
+    """One-vendor case file, the same facts as the PDF, with investigator next steps, the evidence ledger and the analyst's
+    notes and sign-off for this run."""
     generated_at = generated_at or datetime.now(timezone.utc)
     meta = summary.get("meta", {})
     man = summary.get("manifest", {})
@@ -172,6 +173,14 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
 
     doc.add_heading("Why it flagged", level=2)
     doc.add_paragraph(why_it_flagged(v))
+    if ledger and ledger["rows"]:
+        b = ledger["balance"]
+        doc.add_heading("Evidence ledger", level=2)
+        _small(doc, f"{b['counts']['strengthens']} findings strengthen the lead, {b['counts']['weakens']} weaken it, "
+                    f"{b['counts']['context']} are context. Outside items count only once an analyst confirms they are about this vendor.")
+        lean = {"strengthens": "Strengthens", "weakens": "Weakens", "context": "Context"}
+        _grid(doc, ["Effect", "Finding", "Source"], [[lean[r["lean"]], r["text"], r["source"] + (f" ({r['by']})" if r.get("by") else "")]
+                                                    for r in ledger["rows"]])
     doc.add_heading("Next steps", level=2)
     _bullets(doc, next_steps([v], [], bool(man.get("sam_extract_date"))), numbered=True)
 
@@ -221,7 +230,18 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
               [[h["at"][:16].replace("T", " "), h["analyst"], (f"[Run {h['other_run']['label']}, {h['other_run']['created_at'][:10]}] " if h.get("other_run") else "") + f"{h['action']}: {h['detail']}"] for h in history])
 
     doc.add_heading("Investigator notes", level=2)
-    doc.add_paragraph("[Add interviews, registry and court searches, and other work here.]")
+    review = (case or {}).get("review") or {}
+    notes = review.get("notes") or []
+    if notes:
+        _grid(doc, ["When", "Analyst", "Note", "Evidence"],
+              [[n["at"][:10], n["analyst"], n.get("text") or "", (f"{n['file']} (SHA-256 {n['file_sha256'][:16]}…)" if n.get("file") else "")
+                + (f" Source: {n['source']}" if n.get("source") else "")] for n in notes])
+    else:
+        doc.add_paragraph("[Add interviews, registry and court searches, and other work here.]")
+    if review.get("history"):
+        last = review["history"][-1]
+        _small(doc, f"Sign-off: {review.get('state_label', '')}, {last['by']} on {last['at'][:10]}"
+               + (f" ({last['comment']})" if last.get("comment") else "") + ".")
 
     src = [f"vendor file {man.get('input_file', '')}"]
     if man.get("sam_extract_date"):
