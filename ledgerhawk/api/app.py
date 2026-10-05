@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
 from ..pipeline.ledger import build_ledger
+from ..pipeline import summary as summary_mod
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
@@ -632,6 +633,10 @@ def vendor(run_id: str, uei: str):
     out["history"] = _history(run_id, uei)
     out["case"] = store.case(run_id, uei)
     out["ledger"] = _ledger(v, out["case"])
+    out["summary_enabled"] = summary_mod.enabled() or store.summary_client is not None
+    sm = out["case"]["summary"]
+    if sm:
+        sm["stale"] = sm.get("ledger_fp") != summary_mod.ledger_fingerprint(out["ledger"])
     return out
 
 
@@ -685,6 +690,41 @@ def fetch_case_awards(run_id: str, uei: str, analyst: str = Form("")):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
     return _case_call(store.fetch_case_awards, run_id, uei, analyst)
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/summary/draft")
+def draft_case_summary(run_id: str, uei: str, analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the draft is attributed.")
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this run")
+    v = {**v, "why": why_it_flagged(v)}
+    ledger = _ledger(v, store.case(run_id, uei))
+    try:
+        return _case_call(store.draft_case_summary, run_id, uei, analyst, v, ledger, store.dispositions(run_id).get(uei))
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc))
+
+
+class SummaryLine(BaseModel):
+    text: str
+    sources: list[str] = []
+
+
+class SummaryIn(BaseModel):
+    analyst: str
+    sentences: list[SummaryLine]
+    next_steps: list[SummaryLine] = []
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/summary")
+def save_case_summary(run_id: str, uei: str, body: SummaryIn):
+    if not body.analyst.strip():
+        raise HTTPException(400, "Enter your name so the edit is attributed.")
+    return _case_call(store.save_case_summary, run_id, uei, body.analyst, [x.model_dump() for x in body.sentences],
+                      [x.model_dump() for x in body.next_steps])
 
 
 def _integrity_items(run_id: str) -> tuple[dict, list[dict]]:

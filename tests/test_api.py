@@ -424,3 +424,66 @@ def test_case_notes_evidence_signoff_awards_and_ledger(sam_ctx):
     assert client.get(f"/api/runs/{fid}/vendors/{uei}/evidence/{note['id']}").status_code == 200
     assert client.get(f"{base}/case.docx").status_code == 200
     assert client.get(f"/api/runs/{run_id}/vendors/NOPE/notes").status_code in (404, 405)
+
+
+class _FakeClaude:
+    """Stands in for anthropic.Anthropic(): returns a canned structured answer and records the prompt."""
+
+    def __init__(self, answer: dict, stop_reason: str = "end_turn"):
+        import json
+        from types import SimpleNamespace as NS
+        self.calls = []
+        outer = self
+
+        def create(**kw):
+            outer.calls.append(kw)
+            return NS(stop_reason=stop_reason, model="claude-opus-5-5", content=[NS(type="text", text=json.dumps(answer))])
+        self.beta = NS(messages=NS(create=create))
+
+
+def test_case_summary_drafted_sourced_edited_and_exported(sam_ctx):
+    import ledgerhawk.api.app as appmod
+    client, run_id, p = sam_ctx
+    uei = p["excluded_small"]
+    base = f"/api/runs/{run_id}/vendors/{uei}"
+    v = client.get(base).json()
+    assert v["case"]["summary"] is None and v["ledger"]["rows"][0]["id"] == "E1"
+
+    fake = _FakeClaude({"sentences": [{"text": "Screening ties this vendor to an excluded firm.", "sources": ["E1"]},
+                                      {"text": "An unsourced claim.", "sources": []},
+                                      {"text": "A claim citing nothing real.", "sources": ["E99"]}],
+                        "next_steps": [{"text": "Pull the exclusion record.", "sources": ["E1"]}]})
+    appmod.store.summary_client = fake
+    try:
+        assert client.post(f"{base}/summary/draft", data={"analyst": ""}).status_code == 400
+        r = client.post(f"{base}/summary/draft", data={"analyst": "Ana"})
+        assert r.status_code == 200, r.text
+        s = r.json()
+        # only sentences tied to real ledger rows survive
+        assert [x["text"] for x in s["sentences"]] == ["Screening ties this vendor to an excluded firm."]
+        assert s["requested_by"] == "Ana" and not s["edited_by"] and s["cited"]["E1"]
+        sent = fake.calls[0]
+        assert "E1 [strengthens]" in sent["messages"][0]["content"] and sent["fallbacks"] == "default"
+        got = client.get(base).json()
+        assert got["summary_enabled"] and got["case"]["summary"]["stale"] is False
+
+        r = client.post(f"{base}/summary", json={"analyst": "Ben", "sentences": [
+            {"text": "Screening links this vendor to an excluded firm with the same owner.", "sources": ["E1"]}, {"text": " ", "sources": []}],
+            "next_steps": []})
+        assert r.status_code == 200 and r.json()["edited_by"] == "Ben" and len(r.json()["sentences"]) == 1
+
+        # new evidence makes the summary out of date
+        client.post(f"{base}/notes", data={"analyst": "Ana", "text": "Registry shows a different owner", "lean": "weakens"})
+        assert client.get(base).json()["case"]["summary"]["stale"] is True
+
+        log = {h["action"] for h in client.get(f"/api/runs/{run_id}/record").json()["log"]}
+        assert {"case_summary_drafted", "case_summary_edited"} <= log
+        import io
+        from docx import Document
+        text = "\n".join(par.text for par in Document(io.BytesIO(client.get(f"{base}/case.docx").content)).paragraphs)
+        assert "same owner. [E1]" in text and "edited by Ben" in text
+
+        appmod.store.summary_client = _FakeClaude({}, stop_reason="refusal")
+        assert client.post(f"{base}/summary/draft", data={"analyst": "Ana"}).status_code == 503
+    finally:
+        appmod.store.summary_client = None

@@ -173,14 +173,23 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
 
     doc.add_heading("Why it flagged", level=2)
     doc.add_paragraph(why_it_flagged(v))
+    sm = (case or {}).get("summary")
+    if sm and sm.get("sentences"):
+        doc.add_heading("Summary", level=2)
+        doc.add_paragraph(" ".join(f"{x['text']} [{', '.join(x['sources'])}]" for x in sm["sentences"]))
+        if sm.get("next_steps"):
+            _bullets(doc, [f"{x['text']} [{', '.join(x['sources'])}]" for x in sm["next_steps"]], numbered=True)
+        by = f"Drafted by Claude for {sm['requested_by']} on {sm['drafted_at'][:10]}"
+        by += f"; edited by {sm['edited_by']} on {sm['edited_at'][:10]}." if sm.get("edited_by") else "; not yet edited by an analyst."
+        _small(doc, by + " Bracketed ids point to the evidence ledger below. A draft, not a finding.")
     if ledger and ledger["rows"]:
         b = ledger["balance"]
         doc.add_heading("Evidence ledger", level=2)
         _small(doc, f"{b['counts']['strengthens']} findings strengthen the lead, {b['counts']['weakens']} weaken it, "
                     f"{b['counts']['context']} are context. Outside items count only once an analyst confirms they are about this vendor.")
         lean = {"strengthens": "Strengthens", "weakens": "Weakens", "context": "Context"}
-        _grid(doc, ["Effect", "Finding", "Source"], [[lean[r["lean"]], r["text"], r["source"] + (f" ({r['by']})" if r.get("by") else "")]
-                                                    for r in ledger["rows"]])
+        _grid(doc, ["Id", "Effect", "Finding", "Source"], [[r.get("id", ""), lean[r["lean"]], r["text"], r["source"] + (f" ({r['by']})" if r.get("by") else "")]
+                                                          for r in ledger["rows"]])
     doc.add_heading("Next steps", level=2)
     _bullets(doc, next_steps([v], [], bool(man.get("sam_extract_date"))), numbered=True)
 

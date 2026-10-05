@@ -75,6 +75,8 @@ def build_ledger(v: dict, *, context: dict | None = None, awards: dict | None = 
 
     order = {"strengthens": 0, "weakens": 1, "context": 2}
     rows.sort(key=lambda r: (order[r["lean"]], -r["weight"]))
+    for i, r in enumerate(rows, 1):
+        r["id"] = f"E{i}"  # what a written summary cites
     up = sum(r["weight"] for r in rows if r["lean"] == "strengthens")
     down = sum(r["weight"] for r in rows if r["lean"] == "weakens")
     lean = "strengthens" if up > down * 2 else "weakens" if down > up else "mixed" if up or down else "none"

@@ -148,6 +148,11 @@ Every lead in a run opens into one case page (the old vendor page):
 - **Summary and evidence ledger:** the one-line reason and "why it flagged", then every finding marked as strengthening
   the lead, weakening it, or context, with a balance bar. Exclusion findings, signals, lawful patterns, address type,
   awards after an exclusion, outside-context hits an analyst confirmed, and analyst notes all feed it.
+- **Written summary:** with `ANTHROPIC_API_KEY` set in the server's environment, "Draft a summary with Claude" writes a
+  short theory of the case and up to three next checks from the evidence ledger only. Every sentence cites ledger rows
+  (E1, E2, ...); a sentence that cites nothing real is dropped. It shows as a Claude draft until an analyst edits it,
+  flags itself when the evidence changes, locks on approval, prints in the Word case file, and is in the run log.
+  Model: `claude-opus-5-5` (override with `LEDGERHAWK_SUMMARY_MODEL`). Without the key the button is replaced by a note.
 - **Tabs:** Money (signals, USAspending awards), People and links (SAM profile, exclusions, linked vendors, graph),
   Outside context, Notes and files, History.
 - **Right rail:** decision, two-person sign-off, tier and routing.

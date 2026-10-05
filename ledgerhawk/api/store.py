@@ -22,6 +22,7 @@ from pathlib import Path
 
 from ..pipeline import awards as awards_mod
 from ..pipeline import context as context_mod
+from ..pipeline import summary as summary_mod
 from ..pipeline.normalize import normalize_name
 from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
@@ -118,6 +119,7 @@ class Store:
         self._cache: dict[str, dict] = {}
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
+        self.summary_client = None  # and a fake Claude
         self._lock = threading.Lock()
         self.db_path = self.root / "state.db"
         with self._db() as db:
@@ -760,7 +762,58 @@ class Store:
                 ref = self.run_ref(rid)
                 carried += [{**n, "run": ref, "carried": is_carried} for n in self._review_at(old)["notes"]]
         aw = d / "awards.json"
-        return {"review": review, "earlier_notes": carried, "awards": json.loads(aw.read_text()) if aw.exists() else None}
+        summary, earlier = self._summary_at(d), None
+        if not summary:
+            for rid, _ in self.lineage(run_id)[1:]:
+                earlier = self._summary_at(self.root / "cases" / rid / d.name)
+                if earlier:
+                    earlier["run"] = self.run_ref(rid)
+                    break
+        return {"review": review, "earlier_notes": carried, "awards": json.loads(aw.read_text()) if aw.exists() else None,
+                "summary": summary, "earlier_summary": earlier}
+
+    @staticmethod
+    def _summary_at(d: Path) -> dict | None:
+        f = d / "summary.json"
+        return json.loads(f.read_text()) if f.exists() else None
+
+    def _summary_unlocked(self, d: Path) -> None:
+        if self._review_at(d)["state"] == "approved":
+            raise ValueError("This case has been approved, so its summary is locked. Reopen it first.")
+
+    def _write_summary(self, d: Path, s: dict) -> dict:
+        with self._lock:
+            d.mkdir(parents=True, exist_ok=True)
+            tmp = d / "summary.tmp"
+            tmp.write_text(json.dumps(s, indent=2))
+            tmp.replace(d / "summary.json")
+        return s
+
+    def draft_case_summary(self, run_id: str, uei: str, analyst: str, v: dict, ledger: dict, disposition: dict | None) -> dict:
+        """Claude drafts the summary from the ledger; it replaces any earlier draft or edit on this run's case."""
+        d = self._case_dir(run_id, uei)
+        self._summary_unlocked(d)
+        out = summary_mod.draft(v, ledger, disposition, client=self.summary_client)
+        s = {**out, "drafted_at": _now(), "requested_by": analyst.strip(), "edited_by": "", "edited_at": "",
+             "cited": {r["id"]: r["text"] for r in ledger["rows"]}}
+        self.audit(analyst, "case_summary_drafted", uei, run_id,
+                   f"Claude drafted a summary ({len(s['sentences'])} sentences, {s['model']})")
+        return self._write_summary(d, s)
+
+    def save_case_summary(self, run_id: str, uei: str, analyst: str, sentences: list[dict], next_steps: list[dict]) -> dict:
+        """The analyst's edit. Keeps each sentence's sources; a sentence emptied out is removed."""
+        d = self._case_dir(run_id, uei)
+        self._summary_unlocked(d)
+        s = self._summary_at(d)
+        if not s:
+            raise ValueError("Draft a summary first.")
+
+        def keep(items):
+            return [{"text": str(i.get("text", "")).strip(), "sources": [str(x) for x in i.get("sources") or []]}
+                    for i in items if str(i.get("text", "")).strip()]
+        s.update(sentences=keep(sentences), next_steps=keep(next_steps), edited_by=analyst.strip(), edited_at=_now())
+        self.audit(analyst, "case_summary_edited", uei, run_id, f"Edited the summary ({len(s['sentences'])} sentences)")
+        return self._write_summary(d, s)
 
     def add_case_note(self, run_id: str, uei: str, *, analyst: str, text: str, source: str = "", lean: str = "",
                       file_name: str | None = None, file_bytes: bytes | None = None) -> dict:
