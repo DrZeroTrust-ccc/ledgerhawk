@@ -376,6 +376,7 @@ export type OutsideContext = {
   manual: { label: string; url: string }[]
   tally: ContextTally
   generic: boolean
+  web_search?: boolean
   ref?: number | null
   person_ref?: number | null
 }

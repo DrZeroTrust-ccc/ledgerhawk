@@ -462,9 +462,69 @@ def ofac(name: str, fetch: Fetch, cache_dir: Path | None = None, person: bool = 
     return out
 
 
+# ---- Brave Search (needs BRAVE_API_KEY) ---------------------------------------------------------------------------
+# A handful of targeted web and news queries per subject, following the OSINT plan: the name with its city, the name
+# with enforcement terms, and each officer with the company. Brave's free plan allows about one query a second, so calls
+# are spaced out across all lookups (BRAVE_QPS raises the rate on a paid plan).
+BRAVE_WEB = "https://api.search.brave.com/res/v1/web/search"
+BRAVE_NEWS = "https://api.search.brave.com/res/v1/news/search"
+ENFORCEMENT_TERMS = "(fraud OR lawsuit OR indicted OR charged OR debarred OR settlement OR \"false claims\")"
+_brave_lock = threading.Lock()
+_brave_last = [0.0]
+
+
+def brave_key() -> str:
+    return os.environ.get("BRAVE_API_KEY", "").strip()
+
+
+def _brave_wait() -> None:
+    gap = 1.0 / max(float(os.environ.get("BRAVE_QPS", "1") or 1), 0.1) + 0.05
+    with _brave_lock:
+        delay = _brave_last[0] + gap - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        _brave_last[0] = time.monotonic()
+
+
+def brave_queries(q: str, c: dict) -> list[str]:
+    """At most four queries: name and place, name and enforcement terms, and up to two officers or related firms."""
+    place = c.get("city") or US_STATES.get(c.get("state", ""), "")
+    out = [f'"{q}" {place}'.strip(), f'"{q}" {ENFORCEMENT_TERMS}']
+    for p in (c.get("related") if c.get("person") else c.get("people")) or []:
+        if len(out) >= 4:
+            break
+        other = query_name(p) if c.get("person") else p
+        out.append(f'"{other}" "{q}"')
+    return out
+
+
+def brave(q: str, c: dict, fetch: Fetch, key: str) -> list[dict]:
+    """Web and news results for the queries, de-duplicated by link. Each item records the query that found it."""
+    headers = {"Accept": "application/json", "X-Subscription-Token": key}
+    seen, out = set(), []
+    for n, query in enumerate(brave_queries(q, c)):
+        for endpoint, label in ((BRAVE_WEB, "Web (Brave)"), (BRAVE_NEWS, "News (Brave)")):
+            if endpoint == BRAVE_NEWS and n > 1:
+                continue  # news only for the two main queries, to save calls
+            _brave_wait()
+            res = json.loads(fetch(endpoint + "?" + urllib.parse.urlencode({"q": query, "count": 10, "country": "us",
+                                                                           "search_lang": "en"}), headers))
+            rows = (res.get("web") or {}).get("results") if endpoint == BRAVE_WEB else res.get("results")
+            for r in rows or []:
+                url = r.get("url", "")
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                host = (r.get("meta_url") or {}).get("hostname") or urllib.parse.urlparse(url).netloc
+                date = _iso(r.get("page_age") or "")
+                out.append(_item(label, re.sub(r"<[^>]+>", "", r.get("title", "")), url, date, where=host,
+                                 snippet=re.sub(r"<[^>]+>", "", r.get("description", ""))) | {"query": query})
+    return out[:3 * PER_SOURCE]
+
+
 SOURCES = {"news": news, "doj": doj, "courts": courts, "sec": sec}
 SOURCE_LABELS = {"news": "News", "doj": "DOJ press releases", "courts": "Federal courts (CourtListener)",
-                 "sec": "SEC filings", "ofac": "OFAC sanctions list"}
+                 "sec": "SEC filings", "ofac": "OFAC sanctions list", "brave": "Web and news (Brave Search)"}
 
 
 def manual_links(name: str, state: str = "", person: bool = False) -> list[dict]:
@@ -496,6 +556,11 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         except (urllib.error.URLError, OSError, ValueError, ET.ParseError, KeyError, TypeError) as exc:
             why = getattr(exc, "code", "") or (str(exc) if key == "news" else "") or type(exc).__name__
             sources[key] = {"items": [], "error": f"{SOURCE_LABELS[key]} did not answer ({why})"}
+    if brave_key():
+        try:
+            sources["brave"] = {"items": brave(q, c, fetch, brave_key()), "error": ""}
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
+            sources["brave"] = {"items": [], "error": f"Brave Search did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"}
     try:
         sources["ofac"] = {"items": ofac(name, fetch, cache_dir, person), "error": ""}
     except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -509,7 +574,7 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         "sources": sources, "labels": SOURCE_LABELS,
         "count": len(items), "adverse": sum(1 for i in items if i["tags"]),
         "errors": sum(1 for s in sources.values() if s["error"]),
-        "manual": manual_links(name, state, person), "clues": c,
+        "manual": manual_links(name, state, person), "clues": c, "web_search": bool(brave_key()),
     }
 
 

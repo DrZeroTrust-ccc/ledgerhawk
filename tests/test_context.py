@@ -280,3 +280,33 @@ def test_fetch_retries_once_on_server_error(monkeypatch):
     with pytest.raises(urllib.error.HTTPError):
         cx._fetch("https://efts.sec.gov/x", {})
     assert calls == [1]  # a refusal is not retried
+
+
+def test_brave_search(tmp_path, monkeypatch):
+    monkeypatch.setenv("BRAVE_API_KEY", "k")
+    monkeypatch.setenv("BRAVE_QPS", "1000")
+    calls = []
+    base = fake_sources()
+
+    def fetch(url, headers):
+        if "search.brave.com" not in url:
+            return base(url, headers)
+        calls.append((url, headers))
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)["q"][0]
+        row = {"title": f"<strong>Ridge Analytics</strong> result for {q[:20]}", "url": f"https://x.example/{len(calls)}",
+               "description": "Ridge Analytics LLC of Reston, Virginia, agreed to settle", "page_age": "2025-09-02T10:00:00",
+               "meta_url": {"hostname": "x.example"}}
+        dup = {"title": "dup", "url": "https://x.example/1", "description": ""}
+        return json.dumps({"web": {"results": [row, dup]}} if "/web/" in url else {"results": [row]}).encode()
+    c = cx.clues_for("RIDGE ANALYTICS LLC", state="VA", city="Reston", people=["Dana Whitfield"])
+    res = cx.lookup("RIDGE ANALYTICS LLC", clues=c, fetch=fetch, cache_dir=tmp_path)
+    items = res["sources"]["brave"]["items"]
+    assert res["web_search"] and len(calls) == 5  # three web queries, news for the first two
+    assert all(h["X-Subscription-Token"] == "k" for _, h in calls)
+    assert len(items) == 5 and items[0]["title"].startswith("Ridge Analytics result")  # tags stripped, duplicate dropped
+    assert items[0]["confidence"] == "strong" and items[0]["date"] == "2025-09-02"  # Reston in the description
+    assert items[0]["query"] == '"Ridge Analytics" Reston'
+    assert any('"Dana Whitfield" "Ridge Analytics"' in urllib.parse.unquote_plus(u) for u, _ in calls)
+    monkeypatch.delenv("BRAVE_API_KEY")
+    off = cx.lookup("RIDGE ANALYTICS LLC", fetch=fetch, cache_dir=tmp_path)
+    assert "brave" not in off["sources"] and off["web_search"] is False

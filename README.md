@@ -89,7 +89,9 @@ result beside the screen, marks awards that started on or after an exclusion of 
 page, the Word report and an Awards sheet (`pipeline/awards.py`).
 
 **Outside context** (vendor page, and every subject and person on a subject screen) searches news (Google News, falling back to Bing News and then GDELT when Google refuses a cloud server),
-DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), SEC
+DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), Brave web
+and news search when `BRAVE_API_KEY` is set (name with city, name with enforcement terms, officers with the company;
+`BRAVE_QPS` sets the rate, default 1 a second), SEC
 EDGAR full text and the OFAC SDN list by name. Results are dated snapshots kept per entity, with enforcement and
 litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS),
 and a section in the Word case file, the subject report and an Outside Context sheet (`pipeline/context.py`).
