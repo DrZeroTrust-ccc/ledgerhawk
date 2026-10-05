@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import random
+import re
 from pathlib import Path
 
 WORDS = ["Apex", "Summit", "Cedar", "Harbor", "Pioneer", "Granite", "Liberty", "Keystone", "Meridian", "Beacon",
@@ -266,6 +267,7 @@ def _write_sam(path: Path, entities) -> None:
             put("addr1", e["addr1"].upper()); put("addr2", e["addr2"].upper()); put("city", e["city"].upper())
             put("state", e["state"]); put("zip", e["zip"]); put("country", "USA"); put("start_date", e["start"])
             put("business_types", e["bt"]); put("sba_types", e["sba"])
+            put("url", "www." + re.sub(r"[^a-z0-9]+", "", e["nm"].lower().replace(" llc", "").replace(" inc", ""))[:30] + ".com")
             for (first, last, st, city), start in zip(e["pocs"], POC_BLOCKS.values()):
                 fields[start + POC_OFFSETS["first"] - 1] = first.upper()
                 fields[start + POC_OFFSETS["last"] - 1] = last.upper()

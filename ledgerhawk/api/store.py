@@ -495,7 +495,7 @@ class Store:
         if not name.strip():
             raise ValueError("A name is needed to search outside sources.")
         c = context_mod.clues_for(name, uei=uei, state=state, person=person, **(clues or {}))
-        res = context_mod.lookup(name, uei=uei, state=state, person=person, clues=c,
+        res = context_mod.lookup(name, uei=uei, state=state, person=person, clues=c, entity=self._sam_card(uei, run_id),
                                  fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
         if res["errors"] == len(res["sources"]):
             raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
@@ -507,6 +507,20 @@ class Store:
                    f"({t['strong']} strong, {t['possible']} possible, {t['weak']} name only), {out['adverse']} with "
                    "enforcement or litigation language")
         return out
+
+    def _sam_card(self, uei: str, run_id: str | None) -> dict | None:
+        """The vendor's SAM card from the run it was looked up from, else from the newest run that has it."""
+        if not uei:
+            return None
+        rids = ([run_id] if run_id else []) + [r["id"] for r in self.list_runs()]
+        for rid in rids:
+            try:
+                v = self.vendors(rid)["by_uei"].get(uei)
+            except (KeyError, FileNotFoundError, ValueError):
+                continue
+            if v and v.get("sam"):
+                return v["sam"]
+        return None
 
     def _context_hits(self, uei: str, name: str, person: bool) -> dict:
         """Every hit in any snapshot for the entity, by id, so a call can be made from an older screen's lookup too."""
@@ -566,7 +580,8 @@ class Store:
                         name, uei=e["uei"], state=card.get("state", ""), city=card.get("city", ""), cage=card.get("cage", ""),
                         other_names=[card.get("dba", ""), e["name"], s.get("input_name", "")],
                         people=[p["name"] for p in card.get("pocs") or []], related=[r["name"] for r in s["related"]])
-                    targets.append({"name": name, "uei": e["uei"], "state": card.get("state", ""), "ref": s["ref"], "clues": clues})
+                    targets.append({"name": name, "uei": e["uei"], "state": card.get("state", ""), "ref": s["ref"], "clues": clues,
+                                    "entity": card or None})
         for x in screen.get("people") or []:
             nm = f"{x['first']} {x['last']}".title()
             clues = context_mod.clues_for(nm, state=x["state"], person=True,

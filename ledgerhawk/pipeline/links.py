@@ -69,6 +69,8 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract, rules: RuleSet, ex: Exclusions
             "start_date": e["start_date"], "certs": list(e["certs"]), "naics": e["naics"],
             "address": ", ".join(x for x in [e["addr1"], e["addr2"], e["city"], f"{e['state']} {e['zip5']}".strip(), e["country"]] if x),
             "city": e["city"], "state": e["state"], "akey": e["akey"], "bkey": e["bkey"],
+            "addr1": e["addr1"], "addr2": e["addr2"], "zip5": e["zip5"], "url": e.get("url", ""),
+            "struct_code": e["struct_code"],
             "suite_count": int(sam.freq_suite.get(e["akey"], 0)) if e["akey"] else 0,
             "bldg_count": int(sam.freq_bldg.get(e["bkey"], 0)) if e["bkey"] else 0,
             "residential": bool(e["residential"]), "virtual": bool(e["virtual"]),

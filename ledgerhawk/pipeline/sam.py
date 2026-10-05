@@ -21,7 +21,7 @@ SAM_LAYOUT = {
     "uei": 1, "cage": 4, "extract_code": 6, "reg_date": 8, "exp_date": 9, "last_update": 10, "activation_date": 11,
     "legal_name": 12, "dba": 13,
     "addr1": 16, "addr2": 17, "city": 18, "state": 19, "zip": 20, "zip4": 21, "country": 22,
-    "start_date": 25, "struct_code": 28, "inc_state": 29, "inc_country": 30,
+    "start_date": 25, "url": 27, "struct_code": 28, "inc_state": 29, "inc_country": 30,
     "business_types": 32, "naics": 33,
     "mail_addr1": 40, "mail_addr2": 41, "mail_city": 42, "mail_zip": 43, "mail_zip4": 44, "mail_country": 45, "mail_state": 46,
     "exclusion_flag": 116, "sba_types": 118, "evs_source": 122,
@@ -134,7 +134,7 @@ def _read_raw(path: Path) -> pd.DataFrame:
 def load_sam(path: str | Path, extract_date: date, cache_dir: str | Path | None = None) -> SamExtract:
     path = Path(path)
     sha = file_sha256(path)
-    cache = Path(cache_dir or path.parent) / f".{path.name}.{sha[:16]}.pkl"
+    cache = Path(cache_dir or path.parent) / f".{path.name}.{sha[:16]}.v2.pkl"  # v2: adds the entity URL
     if cache.exists():
         ent, pocs = pd.read_pickle(cache)
     else:

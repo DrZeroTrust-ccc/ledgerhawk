@@ -92,8 +92,15 @@ page, the Word report and an Awards sheet (`pipeline/awards.py`).
 DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), Brave web
 and news search when `BRAVE_API_KEY` is set (name with city, name with enforcement terms, officers with the company;
 `BRAVE_QPS` sets the rate, default 1 a second), SEC
-EDGAR full text and the OFAC SDN list by name. Results are dated snapshots kept per entity, with enforcement and
-litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS),
+EDGAR full text, the OFAC SDN list and the HHS-OIG LEIE exclusion list by name. With keys it also searches
+OpenSanctions (sanctions, debarment, crime and PEP lists; `OPENSANCTIONS_API_KEY`, commercial use needs their license)
+and state business registries through OpenCorporates (`OPENCORPORATES_API_TOKEN`; dissolved or revoked firms are
+flagged); tax-exempt vendors are also looked up in IRS filings (ProPublica Nonprofit Explorer). For a vendor with a SAM
+record, its own website and address are checked directly, with no name matching: domain registration date (RDAP) and
+Wayback Machine history, and, with `SMARTY_AUTH_ID` and `SMARTY_AUTH_TOKEN`, USPS data on whether the address is a
+mailbox store (CMRA), residential, vacant or undeliverable. Those findings go straight into the evidence ledger
+(`pipeline/osint.py`). Results are dated snapshots kept per entity, with enforcement and
+litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS, GAO bid protests),
 and a section in the Word case file, the subject report and an Outside Context sheet (`pipeline/context.py`).
 To keep same-name strangers out, every hit gets a 0-100 match score (70+ strong, 40-69 possible) from what we know about the subject (UEI, CAGE, city and
 state, officers, related firms, other names): **Strong** needs a corroborating detail, **Possible** is a distinctive

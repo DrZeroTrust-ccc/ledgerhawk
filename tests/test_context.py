@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from ledgerhawk.pipeline import context as cx
+from ledgerhawk.pipeline import osint
 
 RSS = """<?xml version="1.0"?><rss><channel>
 <item><title>Ridge Analytics owner sentenced in kickback scheme - Example Times</title><link>https://news.example/1</link>
@@ -16,6 +17,12 @@ RSS = """<?xml version="1.0"?><rss><channel>
 <item><title>Ridge Analytics opens new office</title><link>https://news.example/2</link>
 <pubDate>Mon, 05 Jan 2026 10:00:00 GMT</pubDate><source url="https://b.example">Biz Journal</source></item>
 </channel></rss>"""
+
+
+LEIE = (
+    "LASTNAME,FIRSTNAME,MIDNAME,BUSNAME,GENERAL,SPECIALTY,UPIN,NPI,DOB,ADDRESS,CITY,STATE,ZIP,EXCLTYPE,EXCLDATE,REINDATE,WAIVERDATE,WVRSTATE\n"
+    ",,,SUNRISE HOME HEALTH LLC,HOME HEALTH AGENCY,,,0,,1 MAIN ST,DAYTON,OH,45402,1128a1,20190312,00000000,00000000,\n"
+)
 
 
 def fake_sources(calls=None, down=()):
@@ -48,6 +55,12 @@ def fake_sources(calls=None, down=()):
             return b'36,"RIDGE ANALYTICS LLC","-0- ","SDGT",-0-\n37,"FOSTERLING, Reese","individual","RUSSIA-EO14024",-0-\n'
         if url == cx.OFAC_ALT_URL:
             return b'36,1,"aka","RIDGE DATA GROUP",-0-\n'
+        if url == osint.LEIE_URL:
+            return LEIE.encode()
+        if "rdap.org" in host:
+            return json.dumps({"events": [{"eventAction": "registration", "eventDate": "2011-04-02T00:00:00Z"}]}).encode()
+        if "web.archive.org" in host:
+            return json.dumps([["timestamp"], ["20110601000000"], ["20250901000000"]]).encode()
         if "bing.com" in host or "gdeltproject" in host:  # backup news feeds: unreachable unless a test provides them
             raise urllib.error.URLError("blocked")
         raise AssertionError(url)
@@ -57,6 +70,7 @@ def fake_sources(calls=None, down=()):
 @pytest.fixture(autouse=True)
 def fresh_ofac():
     cx._ofac_cache.update(at=0.0, rows=None)
+    osint._leie.update(at=0.0, rows=None)
 
 
 def test_lookup_all_sources(tmp_path):
@@ -109,7 +123,7 @@ def test_context_api_and_subject_exports(tmp_path):
     mp, appmod, client = _client(tmp_path)
     try:
         appmod.store.context_fetch = fake_sources(down=tuple(["news.google", "justice.gov", "courtlistener", "efts.sec.gov",
-                                                               "ofac"]))
+                                                               "ofac", "oig.hhs.gov"]))
         assert client.post("/api/context", data={"analyst": "A", "name": "Ridge Analytics LLC"}).status_code == 502
         appmod.store.context_fetch = fake_sources()
         assert client.post("/api/context", data={"analyst": "", "name": "X Y"}).status_code == 400

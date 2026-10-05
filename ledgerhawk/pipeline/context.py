@@ -1,5 +1,6 @@
-"""Outside context for a vendor, subject or person: news, DOJ press releases, federal court records, SEC filings and
-the OFAC sanctions list, plus links to the places an investigator checks by hand.
+"""Outside context for a vendor, subject or person: news, DOJ press releases, federal court records, SEC filings, the
+OFAC and HHS-OIG exclusion lists and, with keys, OpenSanctions and OpenCorporates (see osint.py), plus links to the
+places an investigator checks by hand. A vendor's own SAM website and address are checked directly.
 
 Each lookup is a dated snapshot of what the public sources returned for a name. Every item keeps its link so the
 analyst can read the original. Items whose titles use enforcement or litigation language (indicted, false claims,
@@ -31,6 +32,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable
 
+from . import osint
 from .normalize import normalize_name
 
 USER_AGENT = "LedgerHawk screening (admin@ledgerhawk.tech)"
@@ -561,7 +563,10 @@ def brave(q: str, c: dict, fetch: Fetch, key: str) -> list[dict]:
 
 SOURCES = {"news": news, "doj": doj, "courts": courts, "sec": sec}
 SOURCE_LABELS = {"news": "News", "doj": "DOJ press releases", "courts": "Federal courts (CourtListener)",
-                 "sec": "SEC filings", "ofac": "OFAC sanctions list", "brave": "Web and news (Brave Search)"}
+                 "sec": "SEC filings", "ofac": "OFAC sanctions list", "brave": "Web and news (Brave Search)",
+                 "opensanctions": "Sanctions, debarment and PEP lists (OpenSanctions)",
+                 "opencorporates": "State business registries (OpenCorporates)", "leie": "HHS-OIG exclusions (LEIE)",
+                 "propublica": "IRS nonprofit filings (ProPublica)"}
 
 
 def manual_links(name: str, state: str = "", person: bool = False) -> list[dict]:
@@ -577,19 +582,29 @@ def manual_links(name: str, state: str = "", person: bool = False) -> list[dict]
         links.insert(1, {"label": "OpenCorporates", "url": f"https://opencorporates.com/companies?q={e(q)}"
                          + (f"&jurisdiction_code=us_{state.lower()}" if state else "")})
         links.append({"label": "SAM.gov responsibility records (FAPIIS)", "url": "https://sam.gov/search/?index=ei&q=" + e(q)})
+        links.append({"label": "GAO bid protests", "url": "https://www.gao.gov/search?keyword=" + e(f'"{q}"')})
     return links
 
 
 def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, fetch: Fetch = _fetch,
-           cache_dir: Path | None = None, clues: dict | None = None) -> dict:
+           cache_dir: Path | None = None, clues: dict | None = None, entity: dict | None = None) -> dict:
     """All sources for one name, each item scored against the clues. A failing source records its error and the rest
-    still run."""
+    still run. `entity` is the vendor's SAM card, when there is one: its website and address get checked directly."""
     q = name.strip().title() if person else query_name(name)
     c = clues or clues_for(name, uei=uei, state=state, person=person)
+    keys = osint.keys_status()
+    calls: dict[str, Callable[[], list[dict]]] = {k: (lambda fn=fn: fn(q, fetch)) for k, fn in SOURCES.items()}
+    calls["leie"] = lambda: osint.leie(name, person, fetch, cache_dir)
+    if keys["opensanctions"]:
+        calls["opensanctions"] = lambda: osint.opensanctions(q, person, fetch, osint._key("OPENSANCTIONS_API_KEY"))
+    if keys["opencorporates"]:
+        calls["opencorporates"] = lambda: osint.opencorporates(q, state, person, fetch, osint._key("OPENCORPORATES_API_TOKEN"))
+    if entity and entity.get("struct_code") in osint.TAX_EXEMPT:
+        calls["propublica"] = lambda: osint.propublica(q, state, fetch)
     sources = {}
-    for key, fn in SOURCES.items():
+    for key, call in calls.items():
         try:
-            sources[key] = {"items": fn(q, fetch), "error": ""}
+            sources[key] = {"items": call(), "error": ""}
         except (urllib.error.URLError, OSError, ValueError, ET.ParseError, KeyError, TypeError) as exc:
             why = getattr(exc, "code", "") or (str(exc) if key == "news" else "") or type(exc).__name__
             sources[key] = {"items": [], "error": f"{SOURCE_LABELS[key]} did not answer ({why})"}
@@ -612,6 +627,7 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         "count": len(items), "adverse": sum(1 for i in items if i["tags"]),
         "errors": sum(1 for s in sources.values() if s["error"]),
         "manual": manual_links(name, state, person), "clues": c, "web_search": bool(brave_key()),
+        "keys": keys, "checks": osint.entity_checks(entity, fetch) if not person else {},
     }
 
 
@@ -620,4 +636,4 @@ def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | No
     with ThreadPoolExecutor(max_workers=3) as pool:
         return list(pool.map(lambda t: lookup(t["name"], uei=t.get("uei", ""), state=t.get("state", ""),
                                               person=bool(t.get("person")), fetch=fetch, cache_dir=cache_dir,
-                                              clues=t.get("clues")), targets))
+                                              clues=t.get("clues"), entity=t.get("entity")), targets))

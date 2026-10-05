@@ -11,7 +11,8 @@ from .normalize import money
 
 LEANS = {"strengthens": "Strengthens the lead", "weakens": "Weakens the lead", "context": "Context"}
 # How much each kind of finding counts toward the balance bar.
-WEIGHT = {"exclusion": 3, "award": 3, "outside": 2, "signal": 1, "address": 1, "integrity": 2, "note": 1, "pattern": 2, "name": 0}
+WEIGHT = {"exclusion": 3, "award": 3, "outside": 2, "signal": 1, "address": 1, "integrity": 2, "note": 1, "pattern": 2, "name": 0,
+          "website": 1, "usps": 2}
 
 
 def _row(kind: str, lean: str, text: str, source: str, *, link: str = "", at: str = "", by: str = "") -> dict:
@@ -56,6 +57,10 @@ def build_ledger(v: dict, *, context: dict | None = None, awards: dict | None = 
                                  at=awards.get("fetched_at", "")))
 
     if context:
+        checks = context.get("checks") or {}
+        for key, kind, label in (("address", "usps", "USPS address data (Smarty)"), ("website", "website", "Domain registry and Wayback Machine")):
+            for f in (checks.get(key) or {}).get("findings") or []:
+                rows.append(_row(kind, f["lean"], f["text"], label, at=context.get("fetched_at", "")))
         for src in (context.get("sources") or {}).values():
             for i in src.get("items") or []:
                 verdict = (i.get("verdict") or {}).get("verdict")
