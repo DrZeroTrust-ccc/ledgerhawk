@@ -114,6 +114,38 @@ function BulkAssign({ runId, selected, onDone, dispositions }: { runId: string; 
   )
 }
 
+function timeLeft(secs: number) {
+  if (secs < 45) return 'less than a minute left'
+  const m = Math.round(secs / 60)
+  return m < 60 ? `about ${m} minute${m === 1 ? '' : 's'} left` : `about ${Math.floor(m / 60)} h ${m % 60} min left`
+}
+
+function HawkProgress({ done, total, elapsed }: { done: number; total: number; elapsed: number }) {
+  const pct = total ? Math.min(100, (done / total) * 100) : 0
+  // estimate from the pace so far; the first batches take a few seconds to come back
+  const eta = done > 0 ? timeLeft((elapsed / done) * (total - done)) : 'working out how long this will take'
+  return (
+    <div className="w-full max-w-xl" role="status" aria-live="polite">
+      <div className="flex items-baseline justify-between text-xs text-slate-600">
+        <span className="font-medium text-ink">The Hawk is writing reasons</span>
+        <span className="tabular">
+          {num(done)} of {num(total)} leads · {eta}
+        </span>
+      </div>
+      <div
+        className="mt-1 h-2 overflow-hidden rounded-full bg-slate-200"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-valuenow={done}
+      >
+        <div className={`h-full rounded-full bg-violet-600 transition-all duration-700 ${done === 0 ? 'animate-pulse w-1/12' : ''}`} style={done ? { width: `${Math.max(pct, 2)}%` } : undefined} />
+      </div>
+      <div className="mt-1 text-xs text-slate-500">You can keep working; reasons appear on the rows as each batch finishes.</div>
+    </div>
+  )
+}
+
 function HawkReasons({ runId, onWritten }: { runId: string; onWritten: () => void }) {
   const [analyst] = useAnalystName()
   const [version, setVersion] = useState(0)
@@ -125,9 +157,9 @@ function HawkReasons({ runId, onWritten }: { runId: string; onWritten: () => voi
     const t = setTimeout(() => {
       setVersion((n) => n + 1)
       onWritten()
-    }, 4000)
+    }, 2500)
     return () => clearTimeout(t)
-  }, [running, data?.done])
+  }, [running, data])
   const prev = useRef(data?.state)
   useEffect(() => {
     if (prev.current === 'running' && data && data.state !== 'running') onWritten()
@@ -148,9 +180,7 @@ function HawkReasons({ runId, onWritten }: { runId: string; onWritten: () => voi
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       {running ? (
-        <span className="text-slate-600">
-          The Hawk is writing reasons… {num(data.done ?? 0)} of {num(data.total ?? 0)} leads
-        </span>
+        <HawkProgress done={data.done ?? 0} total={data.total ?? 0} elapsed={data.elapsed_s} />
       ) : (
         <>
           <Button variant="secondary" disabled={!analyst.trim()} onClick={start} title={analyst.trim() ? undefined : 'Enter your name in the header first'}>

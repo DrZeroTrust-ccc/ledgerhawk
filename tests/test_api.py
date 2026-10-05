@@ -512,6 +512,7 @@ def test_hawk_writes_queue_reasons(sam_ctx):
         assert r.status_code == 200, r.text
         st = r.json()
         queued = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()
+        assert st["elapsed_s"] >= 0
         assert st["state"] == "done" and st["written"] == queued["total"] == st["total"] > 0
         assert all(row["hawk"] == f"Reason for {row['uei']}." for row in queued["rows"])
         assert "obligations $" in calls[0]["messages"][0]["content"] and calls[0]["output_config"]["effort"] == "low"

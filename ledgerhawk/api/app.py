@@ -6,7 +6,7 @@ import os
 import secrets
 import tempfile
 import threading
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -718,7 +718,12 @@ HAWK_REASON_CAP = int(os.environ.get("LEDGERHAWK_HAWK_REASON_CAP", "2000"))
 def hawk_reasons_status(run_id: str):
     _get(store.vendors, run_id)
     cur = store.hawk_reasons(run_id)
-    return {**cur["status"], "written": len(cur["reasons"]),
+    st = cur["status"]
+    elapsed = 0.0
+    if st.get("started_at"):
+        end = datetime.fromisoformat(st["finished_at"]) if st.get("finished_at") else datetime.now(timezone.utc)
+        elapsed = max(0.0, (end - datetime.fromisoformat(st["started_at"])).total_seconds())
+    return {**st, "written": len(cur["reasons"]), "elapsed_s": round(elapsed),
             "enabled": summary_mod.enabled() or store.summary_client is not None}
 
 
