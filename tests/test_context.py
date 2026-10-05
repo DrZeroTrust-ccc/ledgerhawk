@@ -48,6 +48,8 @@ def fake_sources(calls=None, down=()):
             return b'36,"RIDGE ANALYTICS LLC","-0- ","SDGT",-0-\n37,"FOSTERLING, Reese","individual","RUSSIA-EO14024",-0-\n'
         if url == cx.OFAC_ALT_URL:
             return b'36,1,"aka","RIDGE DATA GROUP",-0-\n'
+        if "bing.com" in host or "gdeltproject" in host:  # backup news feeds: unreachable unless a test provides them
+            raise urllib.error.URLError("blocked")
         raise AssertionError(url)
     return fetch
 
@@ -218,3 +220,63 @@ def test_verdicts(tmp_path):
         assert len(log) == 2 and any("Different company in Ohio" in a["detail"] for a in log)
     finally:
         mp.undo()
+
+
+BING = b"""<?xml version="1.0"?><rss xmlns:News="https://www.bing.com/news/search?q=x&amp;format=rss"><channel>
+<item><title>Ridge Analytics settles false claims case</title><link>https://bing.example/1</link>
+<description>Ridge Analytics LLC of Reston agreed...</description><pubDate>Tue, 02 Sep 2025 10:00:00 GMT</pubDate>
+<News:Source>Reston Now</News:Source></item></channel></rss>"""
+
+
+def test_news_falls_back_when_google_refuses(tmp_path):
+    base = fake_sources(down=("news.google.com",))
+
+    def fetch(url, headers):
+        if "bing.com" in url:
+            return BING
+        return base(url, headers)
+    items = cx.news("Ridge Analytics", fetch)
+    assert [(i["title"], i["where"], i["date"]) for i in items] == [("Ridge Analytics settles false claims case", "Reston Now", "2025-09-02")]
+    assert "Reston" in items[0]["snippet"]
+
+    def gdelt_only(url, headers):
+        if "gdeltproject" in url:
+            return json.dumps({"articles": [{"title": "Ridge Analytics wins award", "url": "https://g.example/1",
+                                             "seendate": "20260105T101500Z", "domain": "g.example"}]}).encode()
+        raise urllib.error.HTTPError(url, 503, "busy", {}, None)
+    assert [(i["date"], i["where"]) for i in cx.news("Ridge Analytics", gdelt_only)] == [("2026-01-05", "g.example")]
+
+    def none(url, headers):
+        raise urllib.error.HTTPError(url, 503, "busy", {}, None)
+    res = cx.lookup("Ridge Analytics LLC", fetch=lambda u, h: none(u, h) if "efts" in u or "news" in u or "bing" in u or "gdelt" in u
+                    else fake_sources()(u, h), cache_dir=tmp_path)
+    assert res["sources"]["news"]["error"] == "News did not answer (Google News 503; Bing News 503; GDELT 503)"
+
+
+def test_fetch_retries_once_on_server_error(monkeypatch):
+    calls = []
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout):
+        calls.append(req.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 500, "oops", {}, None)
+        return Resp(b"ok")
+    monkeypatch.setattr(cx.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(cx.time, "sleep", lambda s: None)
+    assert cx._fetch("https://efts.sec.gov/x", {}) == b"ok" and len(calls) == 2
+    calls.clear()
+
+    def forbidden(req, timeout):
+        calls.append(1)
+        raise urllib.error.HTTPError(req.full_url, 403, "no", {}, None)
+    monkeypatch.setattr(cx.urllib.request, "urlopen", forbidden)
+    with pytest.raises(urllib.error.HTTPError):
+        cx._fetch("https://efts.sec.gov/x", {})
+    assert calls == [1]  # a refusal is not retried
