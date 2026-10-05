@@ -179,7 +179,7 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
         doc.add_paragraph(" ".join(f"{x['text']} [{', '.join(x['sources'])}]" for x in sm["sentences"]))
         if sm.get("next_steps"):
             _bullets(doc, [f"{x['text']} [{', '.join(x['sources'])}]" for x in sm["next_steps"]], numbered=True)
-        by = f"Drafted by Claude for {sm['requested_by']} on {sm['drafted_at'][:10]}"
+        by = f"Drafted by the Hawk (AI, Claude) for {sm['requested_by']} on {sm['drafted_at'][:10]}"
         by += f"; edited by {sm['edited_by']} on {sm['edited_at'][:10]}." if sm.get("edited_by") else "; not yet edited by an analyst."
         _small(doc, by + " Bracketed ids point to the evidence ledger below. A draft, not a finding.")
     if ledger and ledger["rows"]:

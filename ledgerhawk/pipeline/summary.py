@@ -101,21 +101,21 @@ def draft(v: dict, ledger: dict, disposition: dict | None = None, *, client=None
     except anthropic.AuthenticationError:
         raise RuntimeError("The Anthropic API key on the server was rejected. Check ANTHROPIC_API_KEY in Render.")
     except anthropic.RateLimitError:
-        raise RuntimeError("Claude is busy right now. Try again in a minute.")
+        raise RuntimeError("The Hawk is busy right now. Try again in a minute.")
     except anthropic.APIStatusError as exc:
-        raise RuntimeError(f"Claude could not write the summary ({exc.status_code}). Try again.")
+        raise RuntimeError(f"The Hawk could not write the summary ({exc.status_code}). Try again.")
     except anthropic.APIConnectionError:
-        raise RuntimeError("Could not reach Claude from the server. Try again in a minute.")
+        raise RuntimeError("Could not reach the Hawk from the server. Try again in a minute.")
     if resp.stop_reason == "refusal":
-        raise RuntimeError("Claude declined to summarize this case. Write the summary by hand.")
+        raise RuntimeError("The Hawk declined to summarize this case. Write the summary by hand.")
     text = next((b.text for b in resp.content if b.type == "text"), "")
     try:
         data = json.loads(text)
     except ValueError:
-        raise RuntimeError("Claude's answer was cut off. Try again.")
+        raise RuntimeError("The Hawk's answer was cut off. Try again.")
     ids = {r["id"] for r in ledger["rows"]}
     sentences = _clean(data.get("sentences"), ids)
     if not sentences:
-        raise RuntimeError("Claude's draft had no sentence tied to the evidence. Try again or write it by hand.")
+        raise RuntimeError("The Hawk's draft had no sentence tied to the evidence. Try again or write it by hand.")
     return {"sentences": sentences, "next_steps": _clean(data.get("next_steps"), ids)[:3],
             "model": getattr(resp, "model", MODEL), "ledger_fp": ledger_fingerprint(ledger)}

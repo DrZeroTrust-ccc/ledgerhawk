@@ -516,14 +516,14 @@ export function WrittenSummary({
         {enabled ? (
           <div className="flex flex-wrap items-center gap-3">
             <Button disabled={busy || noName || locked || ledgerIds.length === 0} onClick={draft}>
-              {busy ? 'Claude is writing…' : 'Draft a summary with Claude'}
+              {busy ? 'The Hawk is writing…' : 'Draft a summary with the Hawk'}
             </Button>
             <span className="text-xs text-slate-500">
               {ledgerIds.length === 0 ? 'Needs at least one finding in the ledger.' : 'Written only from the evidence ledger below, every sentence sourced. You edit it before it counts.'}
             </span>
           </div>
         ) : (
-          <p className="text-slate-500">Claude-written summaries are off on this server. An admin turns them on by adding an Anthropic API key in Render.</p>
+          <p className="text-slate-500">Hawk summaries are off on this server. An admin turns them on by adding an Anthropic API key in Render.</p>
         )}
         {noName && enabled && <p className="mt-2 text-xs text-slate-500">Enter your name in the header first.</p>}
         <ErrorNote error={error} />
@@ -535,7 +535,7 @@ export function WrittenSummary({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className={`rounded px-1.5 py-0.5 font-medium ${summary.edited_by ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
-          {summary.edited_by ? `Edited by ${summary.edited_by}` : 'Claude draft, not yet edited'}
+          {summary.edited_by ? `Edited by ${summary.edited_by}` : 'Hawk draft (AI), not yet edited'}
         </span>
         <span className="text-slate-500">
           Drafted for {summary.requested_by} on {summary.drafted_at.slice(0, 10)}
@@ -571,7 +571,7 @@ export function WrittenSummary({
           </Button>
           {enabled && (
             <Button variant="secondary" disabled={busy || noName} onClick={draft}>
-              {busy ? 'Claude is writing…' : summary.stale ? 'Redraft from the new evidence' : 'Redraft'}
+              {busy ? 'The Hawk is writing…' : summary.stale ? 'Redraft from the new evidence' : 'Redraft'}
             </Button>
           )}
         </div>

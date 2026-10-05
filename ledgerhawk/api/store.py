@@ -797,7 +797,7 @@ class Store:
         s = {**out, "drafted_at": _now(), "requested_by": analyst.strip(), "edited_by": "", "edited_at": "",
              "cited": {r["id"]: r["text"] for r in ledger["rows"]}}
         self.audit(analyst, "case_summary_drafted", uei, run_id,
-                   f"Claude drafted a summary ({len(s['sentences'])} sentences, {s['model']})")
+                   f"The Hawk drafted a summary ({len(s['sentences'])} sentences, {s['model']})")
         return self._write_summary(d, s)
 
     def save_case_summary(self, run_id: str, uei: str, analyst: str, sentences: list[dict], next_steps: list[dict]) -> dict:
