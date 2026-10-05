@@ -1,8 +1,9 @@
-import { useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Breadcrumbs, usePlace } from '../nav'
 import { api, LANE_LABEL, money, num, REASON_LABEL, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
+import { KEYS, Progress, TriagePane } from '../Triage'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
@@ -40,9 +41,11 @@ function TierStrip({ runId, active, onPick, version }: { runId: string; active: 
   )
 }
 
-function BulkAssign({ runId, selected, onDone }: { runId: string; selected: string[]; onDone: () => void }) {
+function BulkAssign({ runId, selected, onDone, dispositions }: { runId: string; selected: string[]; onDone: () => void; dispositions: string[] }) {
   const [analyst] = useAnalystName()
   const [who, setWho] = useState('')
+  const [value, setValue] = useState('')
+  const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const go = async (assignee: string) => {
@@ -72,6 +75,38 @@ function BulkAssign({ runId, selected, onDone }: { runId: string; selected: stri
       </Button>
       <Button variant="ghost" disabled={busy || !analyst.trim()} onClick={() => go('')}>
         Unassign
+      </Button>
+      <span className="mx-1 h-5 w-px bg-slate-300" aria-hidden />
+      <select value={value} onChange={(e) => setValue(e.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm">
+        <option value="">Decide all as…</option>
+        {dispositions.map((d) => (
+          <option key={d}>{d}</option>
+        ))}
+      </select>
+      <input
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        placeholder="One note for all (required)"
+        className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm"
+      />
+      <Button
+        disabled={!value || !note.trim() || busy || !analyst.trim()}
+        onClick={async () => {
+          setBusy(true)
+          setError(null)
+          try {
+            await api.bulkDisposition(runId, { ueis: selected, value, note, analyst })
+            setValue('')
+            setNote('')
+            onDone()
+          } catch (e) {
+            setError((e as Error).message)
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        Decide {num(selected.length)}
       </Button>
       {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
       <ErrorNote error={error} />
@@ -120,6 +155,11 @@ export default function QueuePage() {
   const [limit, setLimit] = useState(PAGE)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [version, setVersion] = useState(0)
+  const [focus, setFocus] = useState<string | null>(null)
+  const [pick, setPick] = useState<{ n: number; at: number } | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const nav = useNavigate()
+  const [analystName] = useAnalystName()
   const lane = sp.get('lane') ?? ''
   const queue = sp.get('queue') ?? (lane ? '' : 'any')
   const signal = sp.get('signal') ?? ''
@@ -145,6 +185,44 @@ export default function QueuePage() {
   usePlace(run.data ? `Queue (${run.data.meta.label})` : null)
   const meta = useAsync(() => api.meta(), [])
   const { data, error } = useAsync(() => api.vendors(id, params), [id, JSON.stringify(params), version])
+  const progress = useAsync(() => api.progress(id, analystName), [id, version, analystName])
+  const rows = data?.rows ?? []
+  const at = focus ? rows.findIndex((r) => r.uei === focus) : -1
+  const move = (d: number) => {
+    if (!rows.length) return
+    const i = at < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, at + d))
+    setFocus(rows[i].uei)
+    document.getElementById(`row-${rows[i].uei}`)?.scrollIntoView({ block: 'nearest' })
+  }
+  const latest = useRef({ move, rows, at, focus })
+  latest.current = { move, rows, at, focus }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement
+      if (t.closest('input, textarea, select, [contenteditable]') || e.ctrlKey || e.metaKey || e.altKey) return
+      const { move, focus } = latest.current
+      if (e.key === 'j' || e.key === 'ArrowDown') move(1)
+      else if (e.key === 'k' || e.key === 'ArrowUp') move(-1)
+      else if (e.key === 'x' && focus) toggle(focus)
+      else if (e.key === 'Enter' && focus) nav(`/runs/${id}/vendors/${encodeURIComponent(focus)}`)
+      else if (e.key === 'Escape') setFocus(null)
+      else if (e.key === '/') searchRef.current?.focus()
+      else if (/^[1-9]$/.test(e.key) && focus) setPick({ n: Number(e.key), at: Date.now() })
+      else return
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [id, nav])
+
+  // After a decision, refresh the list and move to the next lead that is still in it.
+  const decided = () => {
+    const next = at >= 0 ? rows[at + 1]?.uei ?? null : null
+    setVersion((v) => v + 1)
+    setFocus(next)
+    if (next) document.getElementById(`row-${next}`)?.scrollIntoView({ block: 'nearest' })
+  }
 
   const set = (k: string, v: string) => {
     const next = new URLSearchParams(sp)
@@ -154,6 +232,7 @@ export default function QueuePage() {
     setSp(next)
     setLimit(PAGE)
     setSelected(new Set())
+    setFocus(null)
   }
   const toggle = (uei: string) =>
     setSelected((s) => {
@@ -184,6 +263,7 @@ export default function QueuePage() {
         )}
       </div>
 
+      {progress.data && <Progress p={progress.data} />}
       <TierStrip runId={id} active={tier} onPick={(t) => set('tier', t)} version={version} />
 
       <div className="flex flex-wrap gap-1 border-b border-slate-200">
@@ -215,9 +295,10 @@ export default function QueuePage() {
 
       <div className="flex flex-wrap items-center gap-3">
         <input
+          ref={searchRef}
           defaultValue={q}
           onKeyDown={(e) => e.key === 'Enter' && set('q', (e.target as HTMLInputElement).value)}
-          placeholder="Search name or UEI, press Enter"
+          placeholder="Search name or UEI ( / ), press Enter"
           className="w-64 rounded-md border border-slate-300 px-2.5 py-1.5 text-sm"
         />
         <select value={tier} onChange={(e) => set('tier', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
@@ -276,6 +357,7 @@ export default function QueuePage() {
       {selected.size > 0 && (
         <BulkAssign
           runId={id}
+          dispositions={meta.data?.dispositions ?? []}
           selected={[...selected]}
           onDone={() => {
             setSelected(new Set())
@@ -292,6 +374,7 @@ export default function QueuePage() {
           <Board runId={id} rows={data.rows} dispositions={meta.data.dispositions} />
         </>
       ) : (
+        <div className={focus ? 'grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]' : ''}>
         <Card>
           <ErrorNote error={error} />
           {!data && !error && <Loading />}
@@ -311,16 +394,25 @@ export default function QueuePage() {
                     </th>
                     <th className="px-3 py-2 font-medium">Vendor</th>
                     <th className="px-3 py-2 font-medium">Queue and tier</th>
-                    <th className="px-3 py-2 font-medium">Signals</th>
-                    <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>
+                    {!focus && <th className="px-3 py-2 font-medium">Signals</th>}
+                    {!focus && <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>}
                     <th className="px-3 py-2 text-right font-medium">Total</th>
-                    <th className="px-3 py-2 font-medium">Owner</th>
+                    {!focus && <th className="px-3 py-2 font-medium">Owner</th>}
                     <th className="px-5 py-2 font-medium">Disposition</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {data.rows.map((r) => (
-                    <tr key={r.uei} className={`align-top hover:bg-slate-50 ${selected.has(r.uei) ? 'bg-navy-50/50' : ''}`}>
+                    <tr
+                      key={r.uei}
+                      id={`row-${r.uei}`}
+                      onClick={(e) => {
+                        if (!(e.target as HTMLElement).closest('a, input, button')) setFocus(r.uei)
+                      }}
+                      className={`cursor-pointer align-top hover:bg-slate-50 ${
+                        focus === r.uei ? 'bg-navy-50 outline outline-2 -outline-offset-2 outline-navy' : selected.has(r.uei) ? 'bg-navy-50/50' : ''
+                      }`}
+                    >
                       <td className="py-2.5 pl-5">
                         <input type="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.uei)} onChange={() => toggle(r.uei)} />
                       </td>
@@ -328,7 +420,8 @@ export default function QueuePage() {
                         <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
                           {r.name}
                         </Link>
-                        <div className="font-mono text-xs text-slate-500">{r.uei}</div>
+                        {r.headline && <div className="mt-0.5 max-w-md text-xs text-ink">{r.headline}</div>}
+                        <div className="font-mono text-xs text-slate-400">{r.uei}</div>
                         {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
                         {r.lane !== 'outlier' && r.reason_code && (
                           <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>
@@ -340,24 +433,30 @@ export default function QueuePage() {
                           <TierChip tier={r.tier} changed={!!r.tier_change} />
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">
-                        <div className="flex max-w-xs flex-wrap gap-1">
-                          {r.signals.map((s, i) => (
-                            <SignalChip key={i} s={s} />
-                          ))}
-                          {r.exclusion_flags.map((f) => (
-                            <FlagChip key={f} flag={f} />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
-                        {money(r.fy24)} → {money(r.fy25)}
-                      </td>
+                      {!focus && (
+                        <td className="px-3 py-2.5">
+                          <div className="flex max-w-xs flex-wrap gap-1">
+                            {r.signals.map((s, i) => (
+                              <SignalChip key={i} s={s} />
+                            ))}
+                            {r.exclusion_flags.map((f) => (
+                              <FlagChip key={f} flag={f} />
+                            ))}
+                          </div>
+                        </td>
+                      )}
+                      {!focus && (
+                        <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
+                          {money(r.fy24)} → {money(r.fy25)}
+                        </td>
+                      )}
                       <td className="tabular px-3 py-2.5 text-right font-medium">{money(r.tot)}</td>
-                      <td className="max-w-[14rem] px-3 py-2.5 text-xs text-slate-600">
-                        {r.owner}
-                        {r.assignee && <div className="mt-0.5 text-slate-500">Assigned to {r.assignee}</div>}
-                      </td>
+                      {!focus && (
+                        <td className="max-w-[14rem] px-3 py-2.5 text-xs text-slate-600">
+                          {r.owner}
+                          {r.assignee && <div className="mt-0.5 text-slate-500">Assigned to {r.assignee}</div>}
+                        </td>
+                      )}
                       <td className="px-5 py-2.5 text-xs">
                         {r.disposition ? (
                           <>
@@ -386,6 +485,28 @@ export default function QueuePage() {
             </div>
           )}
         </Card>
+        {focus && (
+          <TriagePane
+            runId={id}
+            uei={focus}
+            dispositions={meta.data?.dispositions ?? []}
+            pick={pick}
+            onDecided={decided}
+            onClose={() => setFocus(null)}
+            position={at >= 0 ? `Lead ${num(at + 1)} of ${num(data?.total ?? 0)}` : ''}
+          />
+        )}
+        </div>
+      )}
+      {view !== 'board' && (
+        <p className="text-xs text-slate-500">
+          Click a row to triage it here. Keys:{' '}
+          {KEYS.map(([k, what]) => (
+            <span key={k} className="mr-3 whitespace-nowrap">
+              <kbd className="rounded border border-slate-300 bg-white px-1 font-mono">{k}</kbd> {what}
+            </span>
+          ))}
+        </p>
       )}
     </div>
   )

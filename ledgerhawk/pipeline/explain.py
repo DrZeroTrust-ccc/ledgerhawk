@@ -22,6 +22,32 @@ FLAG_TEXT = {
     "R_EXPOC": "lists a contact who also appears on an excluded party's record",
 }
 
+SHORT_FLAG = {
+    "EXCLUDED": "On the SAM exclusions list",
+    "ALIAS_MATCH": "Named as an alias in an exclusion record",
+    "SITE_UEI_QUESTION": "Same name as an excluded vendor under another UEI",
+    "STALE_PENDING": "Exclusion pending for over a year",
+    "NAME_MATCH_SUPPORTED": "Same name as an excluded firm nearby",
+    "R_EXADDR": "Same suite as an excluded party",
+    "R_EXPOC": "Shares a contact with an excluded party",
+}
+
+
+def headline(v: dict) -> str:
+    """One line on why a lead is in the queue, for scanning a list: the strongest facts first, at most three."""
+    parts = [SHORT_FLAG[f] for f in v.get("exclusion_flags") or [] if f in SHORT_FLAG]
+    integ = v.get("integrity") or {}
+    if integ.get("reasons"):
+        parts.append(integ["reasons"][0])
+    parts += [f"{s['label']}: {s['detail']}" for s in v.get("signals") or [] if s["id"] != "S6"]
+    card = v.get("sam") or {}
+    if card.get("virtual"):
+        parts.append("Virtual-office address")
+    elif card.get("residential"):
+        parts.append("Residential or PO box address")
+    out = "; ".join(dict.fromkeys(parts[:3]))
+    return out or v.get("reason") or ""
+
 
 def why_it_flagged(v: dict) -> str:
     name = v["name"]
