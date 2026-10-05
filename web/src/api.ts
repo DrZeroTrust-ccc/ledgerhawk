@@ -536,6 +536,7 @@ export type HawkReasons = {
   done?: number
   total?: number
   written: number
+  elapsed_s: number
   by?: string
   error?: string
   enabled: boolean
