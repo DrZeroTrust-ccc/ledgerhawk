@@ -253,6 +253,9 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
         </div>
       )}
       {errors.length > 0 && <p className="mt-1 text-xs text-amber-700">Not checked: {errors.map(([, s]) => s.error).join('; ')}.</p>}
+      {c.web_search === false && (
+        <p className="mt-1 text-xs text-slate-500">Web search (Brave) is off. An administrator turns it on by setting BRAVE_API_KEY on the server.</p>
+      )}
       <p className="mt-2 text-xs text-slate-500">
         Check by hand:{' '}
         {c.manual.map((m, n) => (
