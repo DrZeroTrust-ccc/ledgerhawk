@@ -149,8 +149,9 @@ export type VendorDetail = VendorRow & {
   why: string
   exclusion: ExclusionHit[]
   history: HistoryItem[]
-  case: { review: ScreenReview; earlier_notes: CaseNote[]; awards: ScreenAwards | null }
+  case: { review: ScreenReview; earlier_notes: CaseNote[]; awards: ScreenAwards | null; summary: CaseSummary | null; earlier_summary: (CaseSummary & { run: RunRef }) | null }
   ledger: Ledger
+  summary_enabled: boolean
   sam: SamCard | null
   links: LinkedVendor[]
 }
@@ -449,8 +450,20 @@ export type ScreenNote = {
 export type ReviewState = 'draft' | 'submitted' | 'returned' | 'approved'
 
 export type CaseNote = ScreenNote & { lean?: string; run?: RunRef }
+export type SummaryLine = { text: string; sources: string[] }
+export type CaseSummary = {
+  sentences: SummaryLine[]
+  next_steps: SummaryLine[]
+  model: string
+  drafted_at: string
+  requested_by: string
+  edited_by: string
+  edited_at: string
+  cited: Record<string, string>
+  stale?: boolean
+}
 
-export type LedgerRow = { kind: string; lean: 'strengthens' | 'weakens' | 'context'; text: string; source: string; link: string; at: string; by: string; weight: number }
+export type LedgerRow = { id: string; kind: string; lean: 'strengthens' | 'weakens' | 'context'; text: string; source: string; link: string; at: string; by: string; weight: number }
 export type Ledger = {
   rows: LedgerRow[]
   balance: { for: number; against: number; lean: 'strengthens' | 'weakens' | 'mixed' | 'none'; counts: Record<'strengthens' | 'weakens' | 'context', number> }
@@ -556,6 +569,10 @@ export const api = {
     req<ScreenReview>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/review`, { method: 'POST', body: form }),
   caseAwards: (id: string, uei: string, form: FormData) =>
     req<ScreenAwards>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/awards`, { method: 'POST', body: form }),
+  draftSummary: (id: string, uei: string, form: FormData) =>
+    req<CaseSummary>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/summary/draft`, { method: 'POST', body: form }),
+  saveSummary: (id: string, uei: string, body: { analyst: string; sentences: SummaryLine[]; next_steps: SummaryLine[] }) =>
+    req<CaseSummary>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/summary`, json(body)),
   bulkDisposition: (id: string, body: { ueis: string[]; value: string; note: string; analyst: string }) =>
     req<{ decided: number }>(`/api/runs/${id}/dispositions`, json(body)),
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),

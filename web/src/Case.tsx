@@ -1,7 +1,7 @@
 // Case tools shared by subject screens and leads in a run: notes and evidence, two-person sign-off, awards and the
 // evidence ledger. Each page supplies a CaseCtx that says where its notes and sign-off are stored.
 import { useState } from 'react'
-import { api, money, type AwardEntity, type CaseNote, type Ledger, type ScreenAwards, type ScreenReview } from './api'
+import { api, money, type AwardEntity, type CaseNote, type CaseSummary, type Ledger, type ScreenAwards, type ScreenReview, type SummaryLine } from './api'
 import { useAnalystName } from './App'
 import { Button, Card, ErrorNote } from './ui'
 
@@ -79,7 +79,8 @@ export function LedgerCard({ ledger, action }: { ledger: Ledger; action?: React.
       {ledger.rows.length === 0 && <p className="text-sm text-slate-500">No findings yet.</p>}
       <ul className="divide-y divide-slate-100 text-sm">
         {ledger.rows.map((r, i) => (
-          <li key={i} className="flex gap-3 py-2">
+          <li key={i} id={`ledger-${r.id}`} className="flex scroll-mt-4 gap-3 py-2 target:bg-amber-50">
+            <span className="w-8 shrink-0 pt-0.5 font-mono text-xs text-slate-400">{r.id}</span>
             <span className="w-24 shrink-0">
               <LeanPill lean={r.lean} />
             </span>
@@ -397,3 +398,185 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
   )
 }
 
+
+function Cites({ ids, cited }: { ids: string[]; cited: Record<string, string> }) {
+  return (
+    <>
+      {ids.map((id) => (
+        <a
+          key={id}
+          href={`#ledger-${id}`}
+          title={cited[id] || 'No longer in the ledger'}
+          className={`ml-1 rounded px-1 align-text-top font-mono text-[11px] ${cited[id] ? 'bg-slate-100 text-navy hover:bg-navy hover:text-white' : 'bg-slate-50 text-slate-400 line-through'}`}
+        >
+          {id}
+        </a>
+      ))}
+    </>
+  )
+}
+
+/** Claude's draft theory of the case: every sentence cites ledger rows; the analyst edits it before it is relied on. */
+export function WrittenSummary({
+  runId,
+  uei,
+  summary,
+  earlier,
+  enabled,
+  locked,
+  ledgerIds,
+  reload,
+}: {
+  runId: string
+  uei: string
+  summary: CaseSummary | null
+  earlier: (CaseSummary & { run: { label?: string; created_at: string } }) | null
+  enabled: boolean
+  locked: boolean
+  ledgerIds: string[]
+  reload: () => void
+}) {
+  const [analyst] = useAnalystName()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [edit, setEdit] = useState<{ sentences: SummaryLine[]; next_steps: SummaryLine[] } | null>(null)
+  const live = new Set(ledgerIds)
+  const cited = summary ? Object.fromEntries(Object.entries(summary.cited).filter(([k]) => live.has(k))) : {}
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true)
+    setError(null)
+    try {
+      await fn()
+      setEdit(null)
+      reload()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const draft = () => {
+    const f = new FormData()
+    f.set('analyst', analyst)
+    return run(() => api.draftSummary(runId, uei, f))
+  }
+  const save = () => edit && run(() => api.saveSummary(runId, uei, { analyst, ...edit }))
+  const noName = !analyst.trim()
+
+  if (edit) {
+    const line = (k: 'sentences' | 'next_steps', i: number, text: string) =>
+      setEdit({ ...edit, [k]: edit[k].map((x, j) => (j === i ? { ...x, text } : x)) })
+    const block = (k: 'sentences' | 'next_steps', label: string) => (
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-slate-600">{label}</div>
+        {edit[k].map((x, i) => (
+          <div key={i} className="flex items-start gap-2">
+            <textarea
+              value={x.text}
+              onChange={(e) => line(k, i, e.target.value)}
+              rows={2}
+              className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              aria-label={`${label} ${i + 1}`}
+            />
+            <span className="shrink-0 pt-1.5">
+              <Cites ids={x.sources} cited={cited} />
+            </span>
+          </div>
+        ))}
+      </div>
+    )
+    return (
+      <div className="space-y-3">
+        {block('sentences', 'Summary')}
+        {edit.next_steps.length > 0 && block('next_steps', 'Next checks')}
+        <p className="text-xs text-slate-500">Clear a box to drop that sentence. Each sentence keeps the evidence it cites.</p>
+        <div className="flex gap-2">
+          <Button disabled={busy || noName} onClick={save}>
+            {busy ? 'Saving…' : 'Save edit'}
+          </Button>
+          <Button variant="secondary" onClick={() => setEdit(null)}>
+            Cancel
+          </Button>
+        </div>
+        <ErrorNote error={error} />
+      </div>
+    )
+  }
+
+  if (!summary) {
+    return (
+      <div className="rounded-md border border-dashed border-slate-300 p-3 text-sm">
+        {earlier && (
+          <div className="mb-3 text-slate-600">
+            <div className="text-xs font-medium text-amber-800">Summary from the {earlier.run.label || earlier.run.created_at.slice(0, 10)} run, for reference</div>
+            <p className="mt-1">{earlier.sentences.map((x) => x.text).join(' ')}</p>
+          </div>
+        )}
+        {enabled ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button disabled={busy || noName || locked || ledgerIds.length === 0} onClick={draft}>
+              {busy ? 'The Hawk is writing…' : 'Draft a summary with the Hawk'}
+            </Button>
+            <span className="text-xs text-slate-500">
+              {ledgerIds.length === 0 ? 'Needs at least one finding in the ledger.' : 'Written only from the evidence ledger below, every sentence sourced. You edit it before it counts.'}
+            </span>
+          </div>
+        ) : (
+          <p className="text-slate-500">Hawk summaries are off on this server. An admin turns them on by adding an Anthropic API key in Render.</p>
+        )}
+        {noName && enabled && <p className="mt-2 text-xs text-slate-500">Enter your name in the header first.</p>}
+        <ErrorNote error={error} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className={`rounded px-1.5 py-0.5 font-medium ${summary.edited_by ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+          {summary.edited_by ? `Edited by ${summary.edited_by}` : 'Hawk draft (AI), not yet edited'}
+        </span>
+        <span className="text-slate-500">
+          Drafted for {summary.requested_by} on {summary.drafted_at.slice(0, 10)}
+          {summary.edited_by && `, edited ${summary.edited_at.slice(0, 10)}`}
+        </span>
+        {summary.stale && <span className="rounded bg-crimson/10 px-1.5 py-0.5 font-medium text-crimson">The evidence has changed since this was written</span>}
+      </div>
+      <p className="text-[15px] leading-relaxed">
+        {summary.sentences.map((x, i) => (
+          <span key={i}>
+            {x.text}
+            <Cites ids={x.sources} cited={cited} />{' '}
+          </span>
+        ))}
+      </p>
+      {summary.next_steps.length > 0 && (
+        <div>
+          <div className="text-xs font-medium text-slate-600">Next checks</div>
+          <ol className="mt-1 list-decimal space-y-1 pl-5 text-sm">
+            {summary.next_steps.map((x, i) => (
+              <li key={i}>
+                {x.text}
+                <Cites ids={x.sources} cited={cited} />
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+      {!locked && (
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" disabled={busy} onClick={() => setEdit({ sentences: summary.sentences, next_steps: summary.next_steps })}>
+            Edit
+          </Button>
+          {enabled && (
+            <Button variant="secondary" disabled={busy || noName} onClick={draft}>
+              {busy ? 'The Hawk is writing…' : summary.stale ? 'Redraft from the new evidence' : 'Redraft'}
+            </Button>
+          )}
+        </div>
+      )}
+      <ErrorNote error={error} />
+    </div>
+  )
+}

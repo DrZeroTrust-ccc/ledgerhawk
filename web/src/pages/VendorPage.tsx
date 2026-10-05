@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Breadcrumbs, queueHref, runLabel, usePlace, useRuns } from '../nav'
 import { ContextPanel } from '../Context'
-import { AwardBlock, LedgerCard, leadCtx, Notes, Review } from '../Case'
+import { AwardBlock, LedgerCard, leadCtx, Notes, Review, WrittenSummary } from '../Case'
 import { useAnalystName } from '../App'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
@@ -569,8 +569,21 @@ export default function VendorPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
           <Card title="Summary">
-            {v.headline && <p className="mb-2 font-medium text-ink">{v.headline}</p>}
-            <p className="text-[15px] leading-relaxed">{v.why}</p>
+            <WrittenSummary
+              runId={id}
+              uei={v.uei}
+              summary={v.case.summary}
+              earlier={v.case.earlier_summary}
+              enabled={v.summary_enabled}
+              locked={v.case.review.state === 'approved'}
+              ledgerIds={v.ledger.rows.map((r) => r.id)}
+              reload={reload}
+            />
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="mb-1 text-xs font-medium text-slate-500">Why the screen flagged it</div>
+              {v.headline && <p className="mb-1 font-medium text-ink">{v.headline}</p>}
+              <p className="text-sm leading-relaxed text-slate-700">{v.why}</p>
+            </div>
           </Card>
 
           <LedgerCard
