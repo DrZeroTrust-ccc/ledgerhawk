@@ -203,7 +203,7 @@ function Item({
   )
 }
 
-export function ContextPanel({ c: initial, title = 'Outside context' }: { c: OutsideContext; title?: string }) {
+export function ContextPanel({ c: initial, title = 'Outside context', runId }: { c: OutsideContext; title?: string; runId?: string }) {
   const [analyst] = useAnalystName()
   const [c, setC] = useState(initial)
   const [showWeak, setShowWeak] = useState(false)
@@ -238,6 +238,7 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
     f.append('note', note)
     f.append('name', c.name)
     f.append('uei', c.uei)
+    if (runId) f.append('run_id', runId)
     if (c.person) f.append('person', 'true')
     try {
       const res = await api.contextVerdict(f)

@@ -21,7 +21,7 @@ from ..pipeline.subjects import STATUSES, next_steps
 from ..pipeline.tiering import TIERS, category
 from .case import POC_ROLE, TIE_LABEL
 from .subjects import award_line, awards_for, context_items, context_line, context_summary, note_byline, notes_for, signoff_lines
-from .voi import FOOTER
+from .voi import FOOTER, carried_note
 
 PRIVILEGED = "Privileged and Confidential. Prepared at the direction of counsel."
 NAVY = RGBColor(0x1F, 0x2A, 0x3A)
@@ -162,7 +162,7 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
         tier_text += f" (set by {c['analyst']} on {c['at'][:10]}: {c['reason']})"
     elif tier:
         tier_text += " (pipeline default)"
-    disp = (f"{disposition['value']}: {disposition['note']} ({disposition['analyst']}, {disposition['at'][:10]})"
+    disp = (f"{disposition['value']}: {disposition['note']} ({disposition['analyst']}, {disposition['at'][:10]}{carried_note(disposition)})"
             if disposition else "Not yet dispositioned")
     _kv(doc, [
         ("Tier", tier_text), ("Category", category(v, tier)), ("Assigned to", wf.get("assignee") or "Unassigned"),
@@ -218,7 +218,7 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
     if history:
         doc.add_heading("Analyst history", level=2)
         _grid(doc, ["When", "Analyst", "Action"],
-              [[h["at"][:16].replace("T", " "), h["analyst"], f"{h['action']}: {h['detail']}"] for h in history])
+              [[h["at"][:16].replace("T", " "), h["analyst"], (f"[Run {h['other_run']['label']}, {h['other_run']['created_at'][:10]}] " if h.get("other_run") else "") + f"{h['action']}: {h['detail']}"] for h in history])
 
     doc.add_heading("Investigator notes", level=2)
     doc.add_paragraph("[Add interviews, registry and court searches, and other work here.]")

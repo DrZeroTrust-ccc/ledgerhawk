@@ -117,6 +117,20 @@ A FastAPI backend (`ledgerhawk/api`) and a React app (`web/`) with four screens:
 
 Every restore, disposition and run goes into the audit log with who and when. Restoring a vendor creates a new run from the same inputs, so earlier runs never change.
 
+### Run record and follow-up runs
+
+Each run is its own record. Dispositions, tiers, owners and assignees belong to the run they were made in, so work on one
+run never changes another. A restore continues the same run's work.
+
+- **Run record** (run bar, "Run record"): what was screened (files, extract dates, SHA-256 hashes, rule set, build), how many
+  leads are decided, carried or open, the runs it follows or is followed by, and the run's log. The log also goes out on the
+  Run Log sheet of the Vendors of Interest workbook.
+- **Follow-up run** ("Start follow-up run", or pick "Follow-up to an earlier run" when uploading a new file): re-screens
+  against the newest SAM and exclusions extracts and lists what changed (new to the queue, changed, off the queue). The
+  earlier run's decisions show as carried, labeled with the run and analyst, and don't count as decided until someone keeps
+  them ("Keep") or decides again.
+- Decisions made before this change move to the run they were made in, once, on startup.
+
 ```bash
 pip install -e '.[dev]'
 (cd web && npm ci && npm run build)

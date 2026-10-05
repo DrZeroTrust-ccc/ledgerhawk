@@ -20,6 +20,7 @@ from reportlab.platypus import KeepTogether, Paragraph, SimpleDocTemplate, Space
 from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.normalize import money
 from ..pipeline.tiering import TIERS, category, next_step
+from .voi import carried_note
 
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 NAVY = colors.HexColor("#1F2A3A")
@@ -114,7 +115,7 @@ def build_case(v: dict, wf: dict, disposition: dict | None, history: list[dict],
         tier_text += f" (set by {c['analyst']} on {c['at'][:10]}: {c['reason']})"
     elif tier:
         tier_text += " (pipeline default)"
-    disp = f"{disposition['value']}: {disposition['note']} ({disposition['analyst']}, {disposition['at'][:10]})" if disposition else "Not yet dispositioned"
+    disp = f"{disposition['value']}: {disposition['note']} ({disposition['analyst']}, {disposition['at'][:10]}{carried_note(disposition)})" if disposition else "Not yet dispositioned"
     story.append(kv([
         ("Tier", tier_text),
         ("Category", category(v, tier)),
@@ -177,7 +178,7 @@ def build_case(v: dict, wf: dict, disposition: dict | None, history: list[dict],
     if history:
         story.append(P("Analyst history", "h2"))
         story.append(grid(["When", "Analyst", "Action"],
-                          [[h["at"][:16].replace("T", " "), h["analyst"], f"{h['action']}: {h['detail']}"] for h in history],
+                          [[h["at"][:16].replace("T", " "), h["analyst"], (f"[Run {h['other_run']['label']}, {h['other_run']['created_at'][:10]}] " if h.get("other_run") else "") + f"{h['action']}: {h['detail']}"] for h in history],
                           [1.3, 1.2, 4.5]))
 
     src = [f"vendor file {man.get('input_file', '')}"]

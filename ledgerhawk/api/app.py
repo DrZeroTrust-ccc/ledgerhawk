@@ -85,6 +85,14 @@ def _get(fn, *a):
         raise HTTPException(404, "Run not found")
 
 
+def _run_or_none(run_id: str) -> str | None:
+    """A run id sent with an entity-level action so it shows in that run's log; ignored if it isn't a run."""
+    try:
+        return run_id if run_id and store.run_dir(run_id) else None
+    except KeyError:
+        return None
+
+
 @app.get("/api/meta")
 def meta():
     rules = RuleSet()
@@ -142,9 +150,12 @@ async def create_run(
     analyst: str = Form(""),
     sam_source: str = Form(""),
     exclusions_source: str = Form(""),
+    follows: str = Form(""),
 ):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the run is attributed.")
+    if follows:
+        _get(store.run_dir, follows)
     with tempfile.TemporaryDirectory() as tmp:
         vp = Path(tmp) / Path(vendors.filename or "vendors.csv").name
         vp.write_bytes(await vendors.read())
@@ -169,7 +180,8 @@ async def create_run(
             except KeyError:
                 raise HTTPException(400, "That SAM source no longer exists.")
         try:
-            run_id = store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst, sam_source=sam_source or None)
+            run_id = store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst, sam_source=sam_source or None,
+                                      follows_id=follows or None)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     return {"id": run_id}
@@ -310,7 +322,7 @@ def get_context(uei: str = "", name: str = "", person: bool = False):
 @app.post("/api/context")
 def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = Form(""), state: str = Form(""),
                    person: bool = Form(False), city: str = Form(""), cage: str = Form(""), other_names: str = Form(""),
-                   people: str = Form(""), related: str = Form("")):
+                   people: str = Form(""), related: str = Form(""), run_id: str = Form("")):
     """Lines in other_names, people and related are details already known about the subject; they tell its hits from
     same-name strangers."""
     if not analyst.strip():
@@ -318,7 +330,8 @@ def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = For
     lines = lambda v: [x for x in v.splitlines() if x.strip()]  # noqa: E731
     clues = {"city": city, "cage": cage, "other_names": lines(other_names), "people": lines(people), "related": lines(related)}
     try:
-        return store.lookup_context(analyst=analyst, name=name, uei=uei, state=state, person=person, clues=clues)
+        return store.lookup_context(analyst=analyst, name=name, uei=uei, state=state, person=person, clues=clues,
+                                    run_id=_run_or_none(run_id))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except ConnectionError as exc:
@@ -342,14 +355,14 @@ def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""
 
 @app.post("/api/context/verdict")
 def context_verdict(analyst: str = Form(""), item: str = Form(""), verdict: str = Form(""), note: str = Form(""),
-                    uei: str = Form(""), name: str = Form(""), person: bool = Form(False)):
+                    uei: str = Form(""), name: str = Form(""), person: bool = Form(False), run_id: str = Form("")):
     """item is one result id, or several separated by commas for a bulk call."""
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the decision is attributed.")
     ids = [x for x in item.split(",") if x.strip()]
     try:
         return store.context_verdict(analyst=analyst, item=ids[0] if len(ids) == 1 else ids, verdict=verdict, note=note,
-                                     uei=uei, name=name, person=person)
+                                     uei=uei, name=name, person=person, run_id=_run_or_none(run_id))
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except KeyError:
@@ -405,6 +418,89 @@ def run_summary(run_id: str):
     return _get(store.summary, run_id)
 
 
+@app.post("/api/runs/{run_id}/follow-up")
+def follow_up_run(run_id: str, analyst: str = Form("")):
+    """Re-screen the same vendor file against the newest SAM and exclusions extracts, linked to this run."""
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the run is attributed.")
+    _get(store.run_dir, run_id)
+    try:
+        return {"id": store.follow_up_run(run_id, analyst)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+def run_record(run_id: str) -> dict:
+    """The run's cover page: what was screened against which data, what was decided and how, what is still open,
+    the runs it continues or is continued by, and its log."""
+    s = store.summary(run_id)
+    m, man = s["meta"], s["manifest"]
+    data = store.vendors(run_id)
+    disp = store.dispositions(run_id)
+    queued = [r for r in data["rows"] if r["queue"]]
+    here = [disp[r["uei"]] for r in queued if r["uei"] in disp and not disp[r["uei"]].get("carried_from")]
+    carried = [disp[r["uei"]] for r in queued if r["uei"] in disp and disp[r["uei"]].get("carried_from")]
+    by_value: dict[str, int] = {}
+    for d in here:
+        by_value[d["value"]] = by_value.get(d["value"], 0) + 1
+    sha = m.get("inputs_sha256") or {}
+    inputs = [{"role": "Vendor file", "file": man.get("input_file"), "sha256": man.get("input_sha256"), "as_of": None}]
+    if man.get("exclusions_file"):
+        inputs.append({"role": "SAM exclusions extract", "file": man["exclusions_file"], "sha256": sha.get("exclusions_file"),
+                       "as_of": man.get("exclusions_extract_date")})
+    if man.get("sam_file"):
+        inputs.append({"role": "SAM entity extract", "file": man["sam_file"], "sha256": man.get("sam_sha256"),
+                       "as_of": man.get("sam_extract_date")})
+    restored_from = [store.run_ref(r) for r in store.own_runs(run_id)[1:]]
+    return {
+        "meta": m, "inputs": inputs, "data_class": m["data_class"],
+        "rule_set": {"version": man.get("rule_set_version"), "fingerprint": man.get("rule_set_fingerprint")},
+        "pipeline_version": man.get("pipeline_version"), "app_version": m.get("app_version") or "",
+        "restored": m.get("restore", []), "restored_from": restored_from,
+        "follows": s["follows"], "followed_by": s["followed_by"], "changes": (s["changes"] or {}).get("counts"),
+        "queue": {"total": len(queued), "dollars": sum(r["tot"] for r in queued), "decided": len(here),
+                  "carried": len(carried), "open": len(queued) - len(here) - len(carried), "by_value": by_value},
+        "log": store.run_log(run_id),
+    }
+
+
+@app.get("/api/runs/{run_id}/record")
+def get_run_record(run_id: str):
+    return _get(run_record, run_id)
+
+
+class ConfirmIn(BaseModel):
+    ueis: list[str]
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/confirm-carried")
+def confirm_carried(run_id: str, body: ConfirmIn):
+    _get(store.run_dir, run_id)
+    try:
+        return {"confirmed": store.confirm_carried(run_id, body.ueis, body.analyst)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/runs/{run_id}/changes")
+def run_changes(run_id: str):
+    s = _get(store.summary, run_id)
+    return {"follows": s["follows"], "changes": s["changes"]}
+
+
+def _history(run_id: str, uei: str) -> list[dict]:
+    """The vendor's analyst history across runs; actions from other runs name the run they were taken in."""
+    own = set(store.own_runs(run_id))
+    refs: dict[str, dict] = {}
+    out = []
+    for h in store.history(uei):
+        if h["run_id"] and h["run_id"] not in own:
+            h["other_run"] = refs.setdefault(h["run_id"], store.run_ref(h["run_id"]))
+        out.append(h)
+    return out
+
+
 def _workflow(v: dict, st: dict) -> dict:
     """Effective tier and owner: an analyst's change wins over the pipeline default."""
     tdef = v["tier_default"] if "tier_default" in v else default_tier(v)
@@ -452,8 +548,8 @@ def list_vendors(
     limit: int = Query(100, le=500),
 ):
     data = _get(store.vendors, run_id)
-    disp = store.dispositions()
-    state = store.analyst_state()
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
     rows = data["rows"]
     if tier or owner or assignee:
         wf = {r["uei"]: _workflow(r, state.get(r["uei"], {})) for r in rows if r["queue"] or r["uei"] in state}
@@ -487,6 +583,8 @@ def list_vendors(
         rows = [r for r in rows if flag in r["exclusion_flags"]]
     if disposition == "none":
         rows = [r for r in rows if r["uei"] not in disp]
+    elif disposition == "carried":
+        rows = [r for r in rows if disp.get(r["uei"], {}).get("carried_from")]
     elif disposition:
         rows = [r for r in rows if disp.get(r["uei"], {}).get("value") == disposition]
     if q:
@@ -527,16 +625,16 @@ def vendor(run_id: str, uei: str):
         raise HTTPException(404, "Vendor not in this run")
     out = dict(v)
     out["why"] = why_it_flagged(v)
-    out["disposition"] = store.dispositions().get(uei)
-    out.update(_workflow(v, store.analyst_state().get(uei, {})))
-    out["history"] = store.history(uei)
+    out["disposition"] = store.dispositions(run_id).get(uei)
+    out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
+    out["history"] = _history(run_id, uei)
     return out
 
 
 def _integrity_items(run_id: str) -> tuple[dict, list[dict]]:
     data = _get(store.vendors, run_id)
-    disp = store.dispositions()
-    state = store.analyst_state()
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
     items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])}
              for r in data["rows"] if r.get("integrity")]
     return integrity_summary(data["rows"]), items
@@ -545,8 +643,8 @@ def _integrity_items(run_id: str) -> tuple[dict, list[dict]]:
 @app.get("/api/runs/{run_id}/integrity")
 def integrity(run_id: str):
     summary, items = _integrity_items(run_id)
-    state = store.analyst_state()
-    disp = store.dispositions()
+    state = store.analyst_state(run_id)
+    disp = store.dispositions(run_id)
     order = {"A": 0, "B": 1, "C": 2, "D": 3, "": 4}
     rows = sorted((_slim(i["v"], disp, state) for i in items), key=lambda r: (order[r["integrity"]["tier"]], -r["tot"]))
     return {**summary, "rows": rows}
@@ -564,11 +662,11 @@ def export_small(run_id: str):
 def export_voi(run_id: str):
     data = _get(store.vendors, run_id)
     summary = store.summary(run_id)
-    disp = store.dispositions()
-    state = store.analyst_state()
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
     items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])}
              for r in data["rows"] if r["queue"] or r["uei"] in state]
-    body = build_voi(items, summary)
+    body = build_voi(items, summary, log=store.run_log(run_id))
     name = f"LedgerHawk Vendors of Interest {run_id}.xlsx"
     return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
@@ -580,8 +678,8 @@ def export_case(run_id: str, uei: str):
     v = data["by_uei"].get(uei)
     if not v:
         raise HTTPException(404, "Vendor not in this run")
-    wf = _workflow(v, store.analyst_state().get(uei, {}))
-    body = build_case(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id))
+    wf = _workflow(v, store.analyst_state(run_id).get(uei, {}))
+    body = build_case(v, wf, store.dispositions(run_id).get(uei), _history(run_id, uei), store.summary(run_id))
     return Response(body, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.pdf"'})
 
@@ -592,8 +690,8 @@ def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool =
     v = data["by_uei"].get(uei)
     if not v:
         raise HTTPException(404, "Vendor not in this run")
-    wf = _workflow(v, store.analyst_state().get(uei, {}))
-    body = build_case_docx(v, wf, store.dispositions().get(uei), store.history(uei), store.summary(run_id),
+    wf = _workflow(v, store.analyst_state(run_id).get(uei, {}))
+    body = build_case_docx(v, wf, store.dispositions(run_id).get(uei), _history(run_id, uei), store.summary(run_id),
                            matter=matter.strip(), privileged=privileged, context=store.context(uei=uei))
     return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.docx"'})
 
@@ -654,8 +752,8 @@ def exclusion_gaps(run_id: str):
 @app.get("/api/runs/{run_id}/tier-rollup")
 def tier_rollup(run_id: str):
     data = _get(store.vendors, run_id)
-    state = store.analyst_state()
-    disp = store.dispositions()
+    state = store.analyst_state(run_id)
+    disp = store.dispositions(run_id)
     out = {k: {"tier": k, "label": label, "meaning": TIER_MEANING[k], "vendors": 0, "dollars": 0.0, "fy25": 0.0} for k, label in TIERS.items()}
     assignees: dict[str, int] = {}
     board: dict[str, int] = {}
@@ -687,7 +785,7 @@ def set_tier(run_id: str, uei: str, body: TierIn):
     v = data["by_uei"].get(uei)
     if not v:
         raise HTTPException(404, "Vendor not in this run")
-    prior = _workflow(v, store.analyst_state().get(uei, {}))["tier"]
+    prior = _workflow(v, store.analyst_state(run_id).get(uei, {}))["tier"]
     try:
         return store.set_tier(uei, body.tier, prior, body.reason, body.analyst, run_id)
     except ValueError as exc:

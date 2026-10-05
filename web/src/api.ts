@@ -1,6 +1,9 @@
 export type Signal = { id: string; label: string; detail: string }
 
-export type Disposition = { value: string; note: string; analyst: string; at: string }
+/** A run that an earlier decision was made in. */
+export type RunRef = { id: string; label: string; created_at: string }
+
+export type Disposition = { value: string; note: string; analyst: string; at: string; run_id?: string; carried_from?: RunRef }
 
 export type VendorRow = {
   uei: string
@@ -41,7 +44,7 @@ export type IntegrityView = {
   rows: VendorRow[]
 }
 
-export type TierChange = { tier: string; prior: string; reason: string; analyst: string; at: string }
+export type TierChange = { tier: string; prior: string; reason: string; analyst: string; at: string; carried_from?: RunRef }
 
 export type TierRollup = {
   tiers: { tier: string; label: string; meaning: string; vendors: number; dollars: number; fy25: number }[]
@@ -136,7 +139,7 @@ export type ExclusionHit = {
   scope: string
 }
 
-export type HistoryItem = { at: string; analyst: string; action: string; uei: string | null; run_id: string | null; detail: string }
+export type HistoryItem = { at: string; analyst: string; action: string; uei: string | null; run_id: string | null; detail: string; other_run?: RunRef }
 
 export type VendorDetail = VendorRow & {
   struct: string
@@ -174,6 +177,8 @@ export type RunMeta = {
   restore: string[]
   sam_source?: string | null
   sam_date?: string | null
+  follows_id?: string | null
+  app_version?: string
   funnel: FunnelStep[]
   queue_counts: QueueCounts
 }
@@ -198,6 +203,34 @@ export type RunSummary = {
   funnel: FunnelStep[]
   queue_counts: QueueCounts
   meta: RunMeta
+  follows: RunRef | null
+  followed_by: RunRef[]
+  changes: RunChanges | null
+}
+
+export type ChangeItem = { uei: string; name: string; tot: number; why?: string; what?: ChangeWhat[] }
+export type ChangeWhat =
+  | { kind: 'flags'; added: string[] }
+  | { kind: 'signals'; added: string[] }
+  | { kind: 'signals_gone'; removed: string[] }
+  | { kind: 'tier'; from: string; to: string }
+  | { kind: 'dollars'; from: number; to: number }
+export type RunChanges = { new: ChangeItem[]; dropped: ChangeItem[]; changed: ChangeItem[]; counts: { new: number; dropped: number; changed: number } }
+
+export type RunRecord = {
+  meta: RunMeta
+  inputs: { role: string; file: string; sha256: string | null; as_of: string | null }[]
+  data_class: string
+  rule_set: { version: string; fingerprint: string }
+  pipeline_version: string
+  app_version: string
+  restored: string[]
+  restored_from: RunRef[]
+  follows: RunRef | null
+  followed_by: RunRef[]
+  changes: RunChanges['counts'] | null
+  queue: { total: number; dollars: number; decided: number; carried: number; open: number; by_value: Record<string, number> }
+  log: HistoryItem[]
 }
 
 export type Meta = {
@@ -494,6 +527,10 @@ export const api = {
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
+  record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
+  followUp: (id: string, form: FormData) => req<{ id: string }>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
+  confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>
+    req<{ confirmed: number }>(`/api/runs/${id}/confirm-carried`, json(body)),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 

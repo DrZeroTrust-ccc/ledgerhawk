@@ -267,3 +267,89 @@ def test_case_docx(sam_ctx):
     assert r.status_code == 200 and r.content[:2] == b"PK"
     assert "wordprocessingml" in r.headers["content-type"]
     assert client.get(f"/api/runs/{run_id}/vendors/NOPE/case.docx").status_code == 404
+
+
+def test_runs_keep_their_own_decisions_and_follow_ups_carry_them_labeled(sam_ctx):
+    client, run_id, p = sam_ctx
+    uei = p["s4"]
+    # the first run's "Review" on this vendor (test_disposition_requires_note) stays in that run
+    assert client.get(f"/api/runs/{run_id}/vendors/{uei}").json()["disposition"] is None
+    r = client.post(f"/api/runs/{run_id}/vendors/{uei}/disposition",
+                    json={"value": "Clear – lawful explanation", "note": "Competed award", "analyst": "Ana"})
+    assert r.status_code == 200
+    client.post(f"/api/runs/{run_id}/assign", json={"ueis": [uei], "assignee": "Ben", "analyst": "Ana"})
+
+    assert client.post(f"/api/runs/{run_id}/follow-up", data={"analyst": ""}).status_code == 400
+    meta = client.get(f"/api/runs/{run_id}").json()["meta"]
+
+    # a follow-up run carries the decision forward, labeled, until it is confirmed here
+    f = client.post(f"/api/runs/{run_id}/follow-up", data={"analyst": "Ana"})
+    assert f.status_code == 200, f.text
+    fid = f.json()["id"]
+    s = client.get(f"/api/runs/{fid}").json()
+    assert s["meta"]["follows_id"] == run_id and s["follows"]["label"] == meta["label"]
+    assert s["changes"]["counts"] == {"new": 0, "dropped": 0, "changed": 0}
+    assert client.get(f"/api/runs/{run_id}").json()["followed_by"][0]["id"] == fid
+    v = client.get(f"/api/runs/{fid}/vendors/{uei}").json()
+    assert v["disposition"]["carried_from"]["id"] == run_id
+    assert v["assignee"] == "Ben"
+    rec = client.get(f"/api/runs/{fid}/record").json()
+    assert rec["queue"]["carried"] == 1 and rec["queue"]["decided"] == 0
+    assert rec["follows"]["id"] == run_id
+    assert [h["action"] for h in rec["log"]] == ["run_created"]
+
+    # deciding in the follow-up doesn't touch the earlier run
+    client.post(f"/api/runs/{fid}/vendors/{uei}/disposition", json={"value": "Review", "note": "New award", "analyst": "Cy"})
+    assert client.get(f"/api/runs/{run_id}/vendors/{uei}").json()["disposition"]["value"] == "Clear – lawful explanation"
+    v = client.get(f"/api/runs/{fid}/vendors/{uei}").json()
+    assert v["disposition"]["value"] == "Review" and "carried_from" not in v["disposition"]
+    earlier = [h for h in v["history"] if h.get("other_run")]
+    assert any(h["other_run"]["id"] == run_id for h in earlier)
+
+    # confirming adopts a carried decision in this run and logs where it came from
+    uei2 = p["priority"]
+    client.post(f"/api/runs/{run_id}/vendors/{uei2}/disposition", json={"value": "Refer", "note": "To OIG", "analyst": "Ana"})
+    r = client.post(f"/api/runs/{fid}/confirm-carried", json={"ueis": [uei2, uei], "analyst": "Cy"})
+    assert r.json() == {"confirmed": 1}
+    d = client.get(f"/api/runs/{fid}/vendors/{uei2}").json()["disposition"]
+    assert d["value"] == "Refer" and "carried_from" not in d and d["analyst"] == "Ana"
+    log = client.get(f"/api/runs/{fid}/record").json()["log"]
+    assert log[0]["action"] == "disposition_confirmed" and "Kept Refer from run" in log[0]["detail"]
+    assert all(h["run_id"] == fid for h in log)
+
+
+def test_follow_up_lists_what_changed():
+    from ledgerhawk.api.store import compare_runs
+    row = lambda u, q, tot, flags=(), sig=(): {"uei": u, "name": u, "queue": q, "tot": tot, "reason": "Under $250K",  # noqa: E731
+                                              "exclusion_flags": list(flags), "signals": [{"id": s} for s in sig]}
+    old = [row("A", "signals", 1e6, sig=["S1"]), row("B", "signals", 2e6), row("C", "", 1e5)]
+    new = [row("A", "exclusion", 3e6, flags=["EXCLUDED"], sig=["S1", "S4"]), row("B", "", 1e5), row("C", "signals", 4e6),
+           row("D", "signals", 5e6)]
+    ch = compare_runs(old, new)
+    assert ch["counts"] == {"new": 2, "dropped": 1, "changed": 1}
+    assert [x["uei"] for x in ch["new"]] == ["D", "C"]
+    assert ch["new"][1]["why"].startswith("Earlier set aside")
+    assert ch["dropped"][0]["why"] == "Now set aside: Under $250K"
+    kinds = {w["kind"] for w in ch["changed"][0]["what"]}
+    assert {"flags", "signals", "dollars"} <= kinds
+
+
+def test_old_decisions_move_to_their_run(tmp_path):
+    import sqlite3
+    from ledgerhawk.api.store import Store
+    db = sqlite3.connect(tmp_path / "state.db")
+    db.executescript("""
+        CREATE TABLE disposition (uei TEXT PRIMARY KEY, value TEXT NOT NULL, note TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL, run_id TEXT);
+        CREATE TABLE routing (uei TEXT PRIMARY KEY, owner TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL);
+        CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, analyst TEXT NOT NULL, action TEXT NOT NULL, uei TEXT, run_id TEXT, detail TEXT);
+        INSERT INTO disposition VALUES ('U1', 'Review', 'n', 'A', '2026-10-01', 'R1');
+        INSERT INTO routing VALUES ('U1', 'GSA OIG', 'A', '2026-10-01');
+        INSERT INTO audit (at, analyst, action, uei, run_id, detail) VALUES ('2026-10-01', 'A', 'routing', 'U1', 'R1', 'x');
+    """)
+    db.commit()
+    db.close()
+    s = Store(tmp_path)
+    with s._db() as db:
+        assert db.execute("SELECT run_id, value FROM run_disposition").fetchall() == [("R1", "Review")]
+        assert db.execute("SELECT run_id, owner FROM run_routing").fetchall() == [("R1", "GSA OIG")]
+    Store(tmp_path)  # runs once

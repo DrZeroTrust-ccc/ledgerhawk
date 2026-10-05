@@ -2,12 +2,16 @@
 
 A run is an immutable directory: its inputs, run.json and vendors.jsonl. Restoring a vendor
 creates a new run from the same inputs with the restore applied, so earlier runs stay
-reproducible. Dispositions and the audit log are keyed by UEI so they carry across runs.
+reproducible. Analyst decisions (disposition, tier, owner, assignee) belong to the run they were
+made in. A restore continues the same run's work; a follow-up run (a later screen of the same
+list) shows the earlier run's decisions as carried forward, labeled with where they came from,
+until an analyst decides again in the new run.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
 import shutil
@@ -24,8 +28,9 @@ from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 from ..pipeline.rules import RuleSet
 from ..pipeline.sam import load_sam
+from ..pipeline.stages import SIGNAL_LABELS
 from ..pipeline.subjects import compare_people, compare_screens, people_screen, subject_screen
-from ..pipeline.tiering import TIERS
+from ..pipeline.tiering import TIERS, default_tier
 
 DISPOSITIONS = [
     "Clear – lawful explanation",
@@ -63,6 +68,46 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+APP_VERSION = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("LEDGERHAWK_VERSION") or "")[:12]
+
+
+def compare_runs(old_rows: list[dict], new_rows: list[dict]) -> dict:
+    """What changed for queued vendors between a run and the run it follows: new to the queue, off the queue, and
+    queued in both with new flags, signals, tier or dollars."""
+    old = {r["uei"]: r for r in old_rows if r.get("uei")}
+    new = {r["uei"]: r for r in new_rows if r.get("uei")}
+    sig = lambda r: {s["id"] for s in r["signals"]}  # noqa: E731
+    base = lambda r: {"uei": r["uei"], "name": r["name"], "tot": r["tot"]}  # noqa: E731
+    added, dropped, changed = [], [], []
+    for u, r in new.items():
+        if not r["queue"]:
+            continue
+        o = old.get(u)
+        if not o or not o["queue"]:
+            added.append(base(r) | {"why": "Not in the earlier file" if not o else
+                                    f"Earlier set aside: {o['reason']}" if o.get("reason") else "Earlier not queued"})
+            continue
+        what = []
+        if fl := sorted(set(r["exclusion_flags"]) - set(o["exclusion_flags"])):
+            what.append({"kind": "flags", "added": fl})
+        if gained := sorted(sig(r) - sig(o)):
+            what.append({"kind": "signals", "added": [SIGNAL_LABELS.get(x, x) for x in gained]})
+        if lost := sorted(sig(o) - sig(r)):
+            what.append({"kind": "signals_gone", "removed": [SIGNAL_LABELS.get(x, x) for x in lost]})
+        if (t0 := default_tier(o)) != (t1 := default_tier(r)):
+            what.append({"kind": "tier", "from": TIERS.get(t0, "no tier"), "to": TIERS.get(t1, "no tier")})
+        if abs(r["tot"] - o["tot"]) >= max(0.1 * abs(o["tot"]), 100_000):
+            what.append({"kind": "dollars", "from": o["tot"], "to": r["tot"]})
+        if what:
+            changed.append(base(r) | {"what": what})
+    for u, o in old.items():
+        if o["queue"] and (u not in new or not new[u]["queue"]):
+            dropped.append(base(o) | {"why": f"Now set aside: {new[u]['reason']}" if u in new else "Not in the new file"})
+    by = lambda xs: sorted(xs, key=lambda x: -x["tot"])  # noqa: E731
+    return {"new": by(added), "dropped": by(dropped), "changed": by(changed),
+            "counts": {"new": len(added), "dropped": len(dropped), "changed": len(changed)}}
+
+
 class Store:
     def __init__(self, root: str | Path):
         self.root = Path(root)
@@ -91,8 +136,28 @@ class Store:
                 CREATE TABLE IF NOT EXISTS audit (
                     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, analyst TEXT NOT NULL,
                     action TEXT NOT NULL, uei TEXT, run_id TEXT, detail TEXT);
+                CREATE TABLE IF NOT EXISTS run_disposition (
+                    run_id TEXT NOT NULL, uei TEXT NOT NULL, value TEXT NOT NULL, note TEXT NOT NULL,
+                    analyst TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (run_id, uei));
+                CREATE TABLE IF NOT EXISTS run_routing (
+                    run_id TEXT NOT NULL, uei TEXT NOT NULL, owner TEXT NOT NULL, analyst TEXT NOT NULL,
+                    at TEXT NOT NULL, PRIMARY KEY (run_id, uei));
+                CREATE TABLE IF NOT EXISTS run_assignment (
+                    run_id TEXT NOT NULL, uei TEXT NOT NULL, assignee TEXT NOT NULL, analyst TEXT NOT NULL,
+                    at TEXT NOT NULL, PRIMARY KEY (run_id, uei));
+                CREATE TABLE IF NOT EXISTS migration (name TEXT PRIMARY KEY, at TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS audit_run ON audit (run_id);
                 """
             )
+            if not db.execute("SELECT 1 FROM migration WHERE name = 'per_run'").fetchone():
+                # Decisions used to be kept per UEI across all runs. Each one moves to the run it was made in.
+                db.execute("INSERT OR IGNORE INTO run_disposition SELECT run_id, uei, value, note, analyst, at "
+                           "FROM disposition WHERE run_id IS NOT NULL")
+                for table, col, action in (("routing", "owner", "routing"), ("assignment", "assignee", "assigned")):
+                    db.execute(f"INSERT OR IGNORE INTO run_{table} SELECT a.run_id, t.uei, t.{col}, t.analyst, t.at "
+                               f"FROM {table} t JOIN audit a ON a.id = (SELECT MAX(id) FROM audit WHERE uei = t.uei "
+                               "AND action = ? AND run_id IS NOT NULL)", (action,))
+                db.execute("INSERT INTO migration VALUES ('per_run', ?)", (_now(),))
 
     def _db(self):
         return sqlite3.connect(self.db_path)
@@ -133,8 +198,11 @@ class Store:
     # ---- runs -------------------------------------------------------------
     def create_run(self, vendor_path: Path, exclusions_path: Path | None, exclusions_date: date | None,
                    *, synthetic: bool, analyst: str, restore: set[str] | None = None,
-                   parent_id: str | None = None, label: str = "", sam_source: str | None = None) -> str:
+                   parent_id: str | None = None, label: str = "", sam_source: str | None = None,
+                   follows_id: str | None = None) -> str:
         sam = self.source(sam_source) if sam_source else None
+        if follows_id:
+            self.run_dir(follows_id)
         h = secrets.token_hex(4)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + h
         d = self.root / "runs" / run_id
@@ -158,10 +226,38 @@ class Store:
             "exclusions_date": exclusions_date.isoformat() if exclusions_date else None,
             "restore": sorted(restore or []),
             "sam_source": sam["id"] if sam else None, "sam_date": sam["as_of"] if sam else None,
+            "follows_id": follows_id, "app_version": APP_VERSION,
+            "inputs_sha256": {"vendor_file": file_sha256(v), "exclusions_file": file_sha256(e) if e else None},
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
-        self.audit(analyst, "run_created", None, run_id, f"{meta['label']} ({meta['data_class']})")
+        if follows_id:
+            old = [json.loads(line) for line in open(self.run_dir(follows_id) / "vendors.jsonl")]
+            new = [json.loads(line) for line in open(d / "vendors.jsonl")]
+            (d / "changes.json").write_text(json.dumps(compare_runs(old, new), indent=2))
+        prev = self.run_ref(follows_id) if follows_id else None
+        what = f"Follow-up to {prev['label']} of {prev['created_at'][:10]}: " if prev else ""
+        self.audit(analyst, "run_created", None, run_id, f"{what}{meta['label']} ({meta['data_class']})")
         return run_id
+
+    def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "") -> str:
+        """A new run of the same list against the newest SAM and exclusions extracts (or a newer vendor file), linked
+        to the run it follows so its changes and carried-forward decisions are clear."""
+        d = self.run_dir(run_id)
+        meta = json.loads((d / "meta.json").read_text())
+        newest = {}
+        for src in self.list_sources():
+            newest.setdefault(src["kind"], src)
+        ex = newest.get("exclusions")
+        if ex:
+            excl, ed = Path(ex["path"]), date.fromisoformat(ex["as_of"])
+        elif meta["exclusions_file"]:
+            excl, ed = d / "inputs" / meta["exclusions_file"], date.fromisoformat(meta["exclusions_date"])
+        else:
+            excl, ed = None, None
+        sam = newest.get("sam")["id"] if newest.get("sam") else meta.get("sam_source")
+        return self.create_run(vendor_path or d / "inputs" / meta["vendor_file"], excl, ed,
+                               synthetic=meta["data_class"] == "synthetic", analyst=analyst, sam_source=sam,
+                               label=label or meta["label"], follows_id=run_id)
 
     def list_runs(self) -> list[dict]:
         out = []
@@ -174,6 +270,39 @@ class Store:
                 out.append(meta)
         return out
 
+    def run_meta(self, run_id: str) -> dict:
+        return json.loads((self.run_dir(run_id) / "meta.json").read_text())
+
+    def lineage(self, run_id: str) -> list[tuple[str, bool]]:
+        """This run and the runs whose decisions it sees, nearest first, with whether each is carried forward. Restores
+        continue the same work (not carried); a followed run's decisions are carried."""
+        out: list[tuple[str, bool]] = []
+        rid, carried = run_id, False
+        while rid and rid not in {r for r, _ in out}:
+            try:
+                meta = self.run_meta(rid)
+            except KeyError:
+                break
+            out.append((rid, carried))
+            if meta.get("parent_id"):
+                rid = meta["parent_id"]
+            elif meta.get("follows_id"):
+                rid, carried = meta["follows_id"], True
+            else:
+                break
+        return out
+
+    def own_runs(self, run_id: str) -> list[str]:
+        """The run and the runs it was restored from: one body of work."""
+        return [r for r, carried in self.lineage(run_id) if not carried]
+
+    def run_ref(self, run_id: str) -> dict:
+        try:
+            m = self.run_meta(run_id)
+        except KeyError:
+            return {"id": run_id, "label": run_id, "created_at": ""}
+        return {"id": run_id, "label": m["label"], "created_at": m["created_at"]}
+
     def run_dir(self, run_id: str) -> Path:
         d = (self.root / "runs" / run_id).resolve()
         if d.parent != (self.root / "runs").resolve() or not (d / "meta.json").exists():
@@ -184,6 +313,10 @@ class Store:
         d = self.run_dir(run_id)
         s = json.loads((d / "run.json").read_text())
         s["meta"] = json.loads((d / "meta.json").read_text())
+        ch = d / "changes.json"
+        s["changes"] = json.loads(ch.read_text()) if ch.exists() else None
+        s["follows"] = self.run_ref(s["meta"]["follows_id"]) if s["meta"].get("follows_id") else None
+        s["followed_by"] = [self.run_ref(r["id"]) for r in self.list_runs() if r.get("follows_id") == run_id]
         return s
 
     def vendors(self, run_id: str) -> dict:
@@ -356,7 +489,7 @@ class Store:
         return self._with_verdicts(json.loads(files[-1].read_text())) if files else None
 
     def lookup_context(self, *, analyst: str, name: str, uei: str = "", state: str = "", person: bool = False,
-                       clues: dict | None = None) -> dict:
+                       clues: dict | None = None, run_id: str | None = None) -> dict:
         if not name.strip():
             raise ValueError("A name is needed to search outside sources.")
         c = context_mod.clues_for(name, uei=uei, state=state, person=person, **(clues or {}))
@@ -368,7 +501,7 @@ class Store:
         self._save_context(res)
         out = self._with_verdicts(res)
         t = out["tally"]
-        self.audit(analyst, "context_lookup", uei or None, None, f"Outside context for {name}: {res['count']} items "
+        self.audit(analyst, "context_lookup", uei or None, run_id, f"Outside context for {name}: {res['count']} items "
                    f"({t['strong']} strong, {t['possible']} possible, {t['weak']} name only), {out['adverse']} with "
                    "enforcement or litigation language")
         return out
@@ -385,7 +518,7 @@ class Store:
         return hits
 
     def context_verdict(self, *, analyst: str, item: str | list[str], verdict: str, note: str = "", uei: str = "",
-                        name: str = "", person: bool = False) -> dict:
+                        name: str = "", person: bool = False, run_id: str | None = None) -> dict:
         """An analyst's call on one hit or several: the same entity, not our subject, or unsure ('' clears it). Kept per
         entity so it holds across refreshes, the vendor page and every screen that includes the entity."""
         if verdict and verdict not in context_mod.VERDICTS:
@@ -413,7 +546,7 @@ class Store:
         tmp.replace(d / "verdicts.json")
         label = context_mod.VERDICTS.get(verdict, "cleared")
         what = (f"{hits[0]['source']} \"{hits[0]['title'][:120]}\"" if len(hits) == 1 else f"{len(hits)} results")
-        self.audit(analyst, "context_verdict", uei or None, None,
+        self.audit(analyst, "context_verdict", uei or None, run_id,
                    f"{label}: {what} for {cur['name']}" + (f" ({note.strip()})" if note.strip() else ""))
         return self.context(uei=uei, name=name, person=person)
 
@@ -583,7 +716,27 @@ class Store:
                    + (f": {comment.strip()}" if comment.strip() else ""))
         return out
 
-    # ---- analyst state ------------------------------------------------------
+    # ---- analyst state, per run ------------------------------------------------
+    def _pick(self, run_id: str, rows) -> dict[str, dict]:
+        """rows: (run_id, uei, record) oldest first. For each UEI keep the nearest run's latest record, labeled when it
+        was carried forward from an earlier run."""
+        lin = self.lineage(run_id)
+        order = {r: i for i, (r, _) in enumerate(lin)}
+        carried = dict(lin)
+        best: dict[str, tuple[int, dict]] = {}
+        for rid, uei, rec in rows:
+            if rid in order and (uei not in best or order[rid] <= best[uei][0]):
+                best[uei] = (order[rid], {**rec, "run_id": rid})
+        out = {}
+        for uei, (_, rec) in best.items():
+            if carried[rec["run_id"]]:
+                rec["carried_from"] = self.run_ref(rec["run_id"])
+            out[uei] = rec
+        return out
+
+    def _in(self, ids: list[str]) -> str:
+        return ",".join("?" * len(ids))
+
     def set_disposition(self, uei: str, value: str, note: str, analyst: str, run_id: str) -> dict:
         if value not in DISPOSITIONS:
             raise ValueError(f"Unknown disposition: {value}")
@@ -593,9 +746,26 @@ class Store:
             raise ValueError("An analyst name is required.")
         at = _now()
         with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO disposition VALUES (?,?,?,?,?,?)", (uei, value, note, analyst, at, run_id))
+            db.execute("INSERT OR REPLACE INTO run_disposition VALUES (?,?,?,?,?,?)", (run_id, uei, value, note, analyst, at))
         self.audit(analyst, "disposition", uei, run_id, f"{value}: {note}")
-        return {"uei": uei, "value": value, "note": note, "analyst": analyst, "at": at}
+        return {"uei": uei, "value": value, "note": note, "analyst": analyst, "at": at, "run_id": run_id}
+
+    def confirm_carried(self, run_id: str, ueis: list[str], analyst: str) -> int:
+        """Adopt earlier runs' dispositions in this run, so they count as decided here. Each keeps its note and who first
+        made it; the log records who confirmed it and from which run."""
+        if not analyst.strip():
+            raise ValueError("An analyst name is required.")
+        disp = self.dispositions(run_id)
+        todo = [disp[u] for u in dict.fromkeys(ueis) if u in disp and disp[u].get("carried_from")]
+        at = _now()
+        with self._db() as db:
+            db.executemany("INSERT OR REPLACE INTO run_disposition VALUES (?,?,?,?,?,?)",
+                           [(run_id, d["uei"], d["value"], d["note"], d["analyst"], at) for d in todo])
+        for d in todo:
+            src = d["carried_from"]
+            self.audit(analyst, "disposition_confirmed", d["uei"], run_id,
+                       f"Kept {d['value']} from run {src['label']} ({src['created_at'][:10]}, {d['analyst']}): {d['note']}")
+        return len(todo)
 
     def set_tier(self, uei: str, tier: str, prior: str, reason: str, analyst: str, run_id: str) -> dict:
         if tier not in TIERS and tier != "":
@@ -617,7 +787,7 @@ class Store:
             raise ValueError("An owner and an analyst name are required.")
         at = _now()
         with self._db() as db:
-            db.execute("INSERT OR REPLACE INTO routing VALUES (?,?,?,?)", (uei, owner.strip(), analyst, at))
+            db.execute("INSERT OR REPLACE INTO run_routing VALUES (?,?,?,?,?)", (run_id, uei, owner.strip(), analyst, at))
         self.audit(analyst, "routing", uei, run_id, f"Routed to {owner.strip()}")
         return {"uei": uei, "owner": owner.strip(), "analyst": analyst, "at": at}
 
@@ -627,32 +797,56 @@ class Store:
         at = _now()
         with self._db() as db:
             if assignee.strip():
-                db.executemany("INSERT OR REPLACE INTO assignment VALUES (?,?,?,?)", [(u, assignee.strip(), analyst, at) for u in ueis])
+                db.executemany("INSERT OR REPLACE INTO run_assignment VALUES (?,?,?,?,?)",
+                               [(run_id, u, assignee.strip(), analyst, at) for u in ueis])
             else:
-                db.executemany("DELETE FROM assignment WHERE uei = ?", [(u,) for u in ueis])
+                # an empty assignee in this run overrides one carried from an earlier run
+                db.executemany("INSERT OR REPLACE INTO run_assignment VALUES (?,?,?,?,?)", [(run_id, u, "", analyst, at) for u in ueis])
         for u in ueis:
             self.audit(analyst, "assigned", u, run_id, f"Assigned to {assignee.strip()}" if assignee.strip() else "Unassigned")
         return len(ueis)
 
-    def analyst_state(self) -> dict[str, dict]:
-        """Per-UEI tier override, routing, assignee and last-touched time (carries across runs)."""
+    def analyst_state(self, run_id: str) -> dict[str, dict]:
+        """Per-UEI tier override, routing, assignee and last-touched time as this run sees them."""
+        ids = [r for r, _ in self.lineage(run_id)]
+        own = self.own_runs(run_id)
         out: dict[str, dict] = {}
         with self._db() as db:
-            for uei, tier, prior, reason, analyst, at in db.execute(
-                    "SELECT uei, tier, prior, reason, analyst, at FROM tier_change ORDER BY id"):
-                out.setdefault(uei, {})["tier"] = {"tier": tier, "prior": prior, "reason": reason, "analyst": analyst, "at": at}
-            for uei, owner, analyst, at in db.execute("SELECT uei, owner, analyst, at FROM routing"):
-                out.setdefault(uei, {})["owner"] = {"owner": owner, "analyst": analyst, "at": at}
-            for uei, assignee, analyst, at in db.execute("SELECT uei, assignee, analyst, at FROM assignment"):
-                out.setdefault(uei, {})["assignee"] = {"assignee": assignee, "analyst": analyst, "at": at}
-            for uei, at in db.execute("SELECT uei, MAX(at) FROM audit WHERE uei IS NOT NULL GROUP BY uei"):
-                out.setdefault(uei, {})["last_touched"] = at
+            tiers = db.execute(f"SELECT run_id, uei, tier, prior, reason, analyst, at FROM tier_change WHERE run_id IN ({self._in(ids)}) "
+                               "ORDER BY id", ids).fetchall()
+            owners = db.execute(f"SELECT run_id, uei, owner, analyst, at FROM run_routing WHERE run_id IN ({self._in(ids)}) ORDER BY at",
+                                ids).fetchall()
+            assigned = db.execute(f"SELECT run_id, uei, assignee, analyst, at FROM run_assignment WHERE run_id IN ({self._in(ids)}) "
+                                  "ORDER BY at", ids).fetchall()
+            touched = db.execute(f"SELECT uei, MAX(at) FROM audit WHERE uei IS NOT NULL AND run_id IN ({self._in(own)}) GROUP BY uei",
+                                 own).fetchall()
+        for uei, rec in self._pick(run_id, ((r[0], r[1], {"tier": r[2], "prior": r[3], "reason": r[4], "analyst": r[5], "at": r[6]})
+                                            for r in tiers)).items():
+            out.setdefault(uei, {})["tier"] = rec
+        for uei, rec in self._pick(run_id, ((r[0], r[1], {"owner": r[2], "analyst": r[3], "at": r[4]}) for r in owners)).items():
+            out.setdefault(uei, {})["owner"] = rec
+        for uei, rec in self._pick(run_id, ((r[0], r[1], {"assignee": r[2], "analyst": r[3], "at": r[4]}) for r in assigned)).items():
+            if rec["assignee"]:
+                out.setdefault(uei, {})["assignee"] = rec
+        for uei, at in touched:
+            out.setdefault(uei, {})["last_touched"] = at
         return out
 
-    def dispositions(self) -> dict[str, dict]:
+    def dispositions(self, run_id: str) -> dict[str, dict]:
+        ids = [r for r, _ in self.lineage(run_id)]
         with self._db() as db:
-            rows = db.execute("SELECT uei, value, note, analyst, at FROM disposition").fetchall()
-        return {r[0]: {"value": r[1], "note": r[2], "analyst": r[3], "at": r[4]} for r in rows}
+            rows = db.execute(f"SELECT run_id, uei, value, note, analyst, at FROM run_disposition WHERE run_id IN ({self._in(ids)}) "
+                              "ORDER BY at", ids).fetchall()
+        return self._pick(run_id, ((r[0], r[1], {"uei": r[1], "value": r[2], "note": r[3], "analyst": r[4], "at": r[5]})
+                                   for r in rows))
+
+    def run_log(self, run_id: str, limit: int = 1000) -> list[dict]:
+        """Everything done in this run (and the runs it was restored from), newest first."""
+        own = self.own_runs(run_id)
+        with self._db() as db:
+            rows = db.execute(f"SELECT at, analyst, action, uei, run_id, detail FROM audit WHERE run_id IN ({self._in(own)}) "
+                              "ORDER BY id DESC LIMIT ?", own + [limit]).fetchall()
+        return [dict(zip(["at", "analyst", "action", "uei", "run_id", "detail"], r)) for r in rows]
 
     def audit(self, analyst: str, action: str, uei: str | None, run_id: str | None, detail: str) -> None:
         with self._db() as db:

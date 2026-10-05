@@ -4,6 +4,7 @@ import { Breadcrumbs, queueHref, usePlace } from '../nav'
 import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
+import { FollowUpButton } from './RunRecordPage'
 
 const STAGE_FILTER: Record<string, string> = { '1a': '1a', '1b': '1b,1c', '1d': '1d' }
 
@@ -154,6 +155,53 @@ function Funnel({ run }: { run: RunSummary }) {
         ))}
       </ol>
     </Card>
+  )
+}
+
+/** Where the run's work stands, and how it relates to the runs before and after it. */
+function RecordStrip({ run }: { run: RunSummary }) {
+  const id = run.meta.id
+  const { data: rec } = useAsync(() => api.record(id), [id])
+  const ch = run.changes?.counts
+  return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm">
+      {rec ? (
+        <span>
+          <span className="font-medium">{num(rec.queue.decided)}</span> decided in this run ·{' '}
+          {rec.queue.carried > 0 && (
+            <>
+              <span className="font-medium">{num(rec.queue.carried)}</span> carried from the earlier run ·{' '}
+            </>
+          )}
+          <span className="font-medium">{num(rec.queue.open)}</span> open · {num(rec.log.length)} actions logged
+        </span>
+      ) : (
+        <span className="text-slate-500">Loading the run record…</span>
+      )}
+      {run.follows && (
+        <span className="text-slate-600">
+          Follows{' '}
+          <Link to={`/runs/${run.follows.id}`} className="text-navy underline">
+            {run.follows.label} ({run.follows.created_at.slice(0, 10)})
+          </Link>
+          {ch && `: ${num(ch.new)} new, ${num(ch.changed)} changed, ${num(ch.dropped)} off the queue`}
+        </span>
+      )}
+      {run.followed_by.length > 0 && (
+        <span className="text-amber-800">
+          A newer run follows this one:{' '}
+          <Link to={`/runs/${run.followed_by[run.followed_by.length - 1].id}`} className="underline">
+            {run.followed_by[run.followed_by.length - 1].created_at.slice(0, 10)}
+          </Link>
+        </span>
+      )}
+      <span className="ml-auto flex flex-wrap items-center gap-3">
+        <Link to={`/runs/${id}/record`} className="font-medium text-navy hover:underline">
+          Run record and log →
+        </Link>
+        <FollowUpButton runId={id} />
+      </span>
+    </div>
   )
 }
 
@@ -415,6 +463,7 @@ export default function RunDashboard() {
           <Button>Open queue ({num(queueTotal(q))})</Button>
         </Link>
       </div>
+      <RecordStrip run={run} />
       <QueueTiles run={run} />
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
