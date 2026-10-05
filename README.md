@@ -140,6 +140,22 @@ run never changes another. A restore continues the same run's work.
 - **Progress** above the queue: open, decided in this run, decided today and by you, carried, and assigned to you.
 - **My cases** (top bar): every lead assigned to you across runs, each shown in the newest run that carries it.
 
+### Case page
+
+Every lead in a run opens into one case page (the old vendor page):
+
+- **Header:** tier, dollars, decision, owner and sign-off at a glance; Word and PDF case files.
+- **Summary and evidence ledger:** the one-line reason and "why it flagged", then every finding marked as strengthening
+  the lead, weakening it, or context, with a balance bar. Exclusion findings, signals, lawful patterns, address type,
+  awards after an exclusion, outside-context hits an analyst confirmed, and analyst notes all feed it.
+- **Tabs:** Money (signals, USAspending awards), People and links (SAM profile, exclusions, linked vendors, graph),
+  Outside context, Notes and files, History.
+- **Right rail:** decision, two-person sign-off, tier and routing.
+
+Notes, evidence files (with SHA-256), award lookups and sign-off now work on run leads as they do on subject screens; both
+use the same case tools (`web/src/Case.tsx`). They're kept per run beside the frozen results. A follow-up run shows the
+earlier run's notes read-only, and sign-off starts again. The Word case file carries the ledger, notes and sign-off.
+
 ```bash
 pip install -e '.[dev]'
 (cd web && npm ci && npm run build)

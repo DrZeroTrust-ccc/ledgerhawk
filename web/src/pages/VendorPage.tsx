@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Breadcrumbs, queueHref, runLabel, usePlace, useRuns } from '../nav'
 import { ContextPanel } from '../Context'
+import { AwardBlock, LedgerCard, leadCtx, Notes, Review } from '../Case'
 import { useAnalystName } from '../App'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
@@ -81,6 +82,13 @@ const HISTORY_LABEL: Record<string, string> = {
   disposition_confirmed: 'Kept earlier decision',
   context_lookup: 'Outside context search',
   context_verdict: 'Outside context call',
+  case_note: 'Note',
+  case_note_removed: 'Note removed',
+  case_awards: 'Award lookup',
+  case_submit: 'Submitted for review',
+  case_approve: 'Approved',
+  case_return: 'Returned',
+  case_reopen: 'Reopened',
 }
 
 const ROLE: Record<string, string> = {
@@ -414,15 +422,92 @@ function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
   )
 }
 
+const TABS = [
+  ['money', 'Money'],
+  ['people', 'People and links'],
+  ['outside', 'Outside context'],
+  ['notes', 'Notes and files'],
+  ['history', 'History'],
+] as const
+type Tab = (typeof TABS)[number][0]
+
+function CaseAwards({ runId, v, reload }: { runId: string; v: VendorDetail; reload: () => void }) {
+  const [analyst] = useAnalystName()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const aw = v.case.awards
+  return (
+    <Card
+      title="Federal awards (USAspending)"
+      action={
+        <Button
+          variant="secondary"
+          disabled={busy || !analyst.trim()}
+          title={analyst.trim() ? 'Contracts and IDVs reported to USAspending.gov for this UEI' : 'Enter your name in the header first'}
+          onClick={async () => {
+            setBusy(true)
+            setError(null)
+            const f = new FormData()
+            f.append('analyst', analyst)
+            try {
+              await api.caseAwards(runId, v.uei, f)
+              reload()
+            } catch (err) {
+              setError((err as Error).message)
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          {busy ? 'Looking up…' : aw ? 'Refresh' : 'Look up awards'}
+        </Button>
+      }
+    >
+      <ErrorNote error={error} />
+      {aw ? (
+        <AwardBlock entities={aw.entities} awards={aw} />
+      ) : (
+        <p className="text-sm text-slate-500">Not looked up yet. Awards that started after an exclusion go straight into the evidence ledger.</p>
+      )}
+    </Card>
+  )
+}
+
+function SignalsCard({ v }: { v: VendorDetail }) {
+  const scored = v.signals.filter((s) => s.id !== 'S6')
+  const context = v.signals.filter((s) => s.id === 'S6')
+  return (
+    <Card title="Screening signals">
+      {scored.length === 0 && context.length === 0 && <p className="text-sm text-slate-500">No screening signals for this vendor.</p>}
+      <ul className="space-y-3">
+        {[...scored, ...context].map((s, i) => (
+          <li key={i} className="text-sm">
+            <div className="font-medium">
+              {s.label}
+              {s.id === 'S5' && <span className="ml-2 text-xs font-normal text-slate-500">second signal only</span>}
+              {s.id === 'R_split' && <span className="ml-2 text-xs font-normal text-slate-500">context; scores only when certified</span>}
+              <span className="ml-2 font-mono text-[11px] font-normal text-slate-400">{s.id}</span>
+            </div>
+            <div className="text-slate-600">{s.detail}</div>
+          </li>
+        ))}
+      </ul>
+      {v.suppression && <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>}
+    </Card>
+  )
+}
+
 export default function VendorPage() {
   const { id = '', uei = '' } = useParams()
   const { data: v, error, reload } = useAsync(() => api.vendor(id, uei), [id, uei])
   const { runs } = useRuns()
-  usePlace(v ? `${v.name} (vendor)` : null)
+  const [tab, setTab] = useState<Tab>('money')
+  usePlace(v ? `${v.name} (case)` : null)
   if (error) return <ErrorNote error={error} />
   if (!v) return <Loading />
-  const scored = v.signals.filter((s) => s.id !== 'S6')
-  const context = v.signals.filter((s) => s.id === 'S6')
+  const ctx = leadCtx(id, v.uei, v.case.review, reload)
+  const status = v.disposition ? (v.disposition.carried_from ? `${v.disposition.value} (carried)` : v.disposition.value) : 'Open'
+  const notes = v.case.review.notes.length + v.case.earlier_notes.length
   return (
     <div className="space-y-6">
       <div>
@@ -434,125 +519,180 @@ export default function VendorPage() {
           {v.exclusion_flags.map((f) => (
             <FlagChip key={f} flag={f} />
           ))}
-          <a
-            href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`}
-            className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-          >
-            Download case file (PDF)
-          </a>
-          <a
-            href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-          >
-            Word (editable)
-          </a>
+          <span className="ml-auto flex flex-wrap gap-2">
+            <a
+              href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+            >
+              Case file (Word)
+            </a>
+            <a
+              href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+            >
+              PDF
+            </a>
+          </span>
         </div>
         <p className="mt-1 font-mono text-sm text-slate-500">
           UEI {v.uei} {v.struct && <span className="font-sans">· {v.struct}</span>} {v.naics && <span className="font-sans">· NAICS {v.naics}</span>}{' '}
           {v.psc && <span className="font-sans">· PSC {v.psc}</span>}
         </p>
+        <dl className="mt-3 grid grid-cols-2 gap-3 rounded-lg border border-slate-200 bg-white p-3 text-sm sm:grid-cols-5">
+          <div>
+            <dt className="text-xs text-slate-500">Dollars under review</dt>
+            <dd className="tabular font-semibold">{money(v.tot)}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">FY24 → FY25</dt>
+            <dd className="tabular">
+              {money(v.fy24)} → {money(v.fy25)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Decision</dt>
+            <dd className={v.disposition?.carried_from ? 'text-amber-800' : ''}>{status}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Owner</dt>
+            <dd className="truncate" title={v.owner}>
+              {v.assignee || v.owner || 'Unassigned'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500">Sign-off</dt>
+            <dd>{v.case.review.state_label}</dd>
+          </div>
+        </dl>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
-          <Card title="Why it flagged">
+          <Card title="Summary">
+            {v.headline && <p className="mb-2 font-medium text-ink">{v.headline}</p>}
             <p className="text-[15px] leading-relaxed">{v.why}</p>
-            <div className="mt-4 grid grid-cols-3 gap-4 border-t border-slate-100 pt-4 text-sm">
-              <div>
-                <div className="text-xs text-slate-500">FY24</div>
-                <div className="tabular font-medium">{money(v.fy24)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-500">FY25</div>
-                <div className="tabular font-medium">{money(v.fy25)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-slate-500">Dollars under review</div>
-                <div className="tabular font-medium">{money(v.tot)}</div>
-              </div>
-            </div>
           </Card>
 
-          <Card title="Screening signals">
-            {scored.length === 0 && context.length === 0 && <p className="text-sm text-slate-500">No screening signals for this vendor.</p>}
-            <ul className="space-y-3">
-              {[...scored, ...context].map((s, i) => (
-                <li key={i} className="flex gap-3">
-                  <span
-                    className={`h-fit whitespace-nowrap rounded px-1.5 py-0.5 font-mono text-xs font-semibold ${s.id === 'S6' || s.id === 'R_split' ? 'bg-slate-100 text-slate-500' : 'bg-navy-50 text-navy'}`}
-                  >
-                    {s.id}
-                  </span>
-                  <div className="text-sm">
-                    <div className="font-medium">
-                      {s.label}
-                      {s.id === 'S5' && <span className="ml-2 text-xs font-normal text-slate-500">second signal only</span>}
-                      {s.id === 'R_split' && <span className="ml-2 text-xs font-normal text-slate-500">context; scores only when certified</span>}
-                    </div>
-                    <div className="text-slate-600">{s.detail}</div>
-                  </div>
-                </li>
+          <LedgerCard
+            ledger={v.ledger}
+            action={
+              <button onClick={() => setTab('notes')} className="text-sm font-medium text-navy hover:underline">
+                Add a finding
+              </button>
+            }
+          />
+
+          <div>
+            <div className="flex flex-wrap gap-1 border-b border-slate-200" role="tablist">
+              {TABS.map(([k, label]) => (
+                <button
+                  key={k}
+                  role="tab"
+                  aria-selected={tab === k}
+                  onClick={() => setTab(k)}
+                  className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${tab === k ? 'border-crimson text-navy' : 'border-transparent text-slate-500 hover:text-navy'}`}
+                >
+                  {label}
+                  {k === 'notes' && notes > 0 && <span className="ml-1 text-xs text-slate-400">{notes}</span>}
+                  {k === 'people' && v.links.length > 0 && <span className="ml-1 text-xs text-slate-400">{v.links.length}</span>}
+                </button>
               ))}
-            </ul>
-            {v.suppression && (
-              <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>
-            )}
-          </Card>
-
-          <Card title="SAM profile">
-            {v.sam ? (
-              <SamProfile c={v.sam} />
-            ) : (
-              <p className="text-sm text-slate-500">
-                No SAM registration in this run's extract. Unmatched vendors usually have lapsed registrations, or the run had no SAM extract.
-              </p>
-            )}
-          </Card>
-
-          {v.links.length > 0 && (
-            <Card title="Linked vendors">
-              <p className="mb-3 text-sm text-slate-600">
-                Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof of common control.
-              </p>
-              <ul className="divide-y divide-slate-100 text-sm">
-                {v.links.map((l) => (
-                  <li key={l.uei} className="py-2">
-                    <Link to={`/runs/${id}/vendors/${encodeURIComponent(l.uei)}`} className="font-medium text-navy hover:underline">
-                      {l.name}
-                    </Link>{' '}
-                    <span className="font-mono text-xs text-slate-500">{l.uei}</span> <span className="tabular text-slate-600">{money(l.tot)}</span>
-                    {l.certified && <span className="ml-2 rounded bg-navy-50 px-1.5 py-0.5 text-xs text-navy">certified</span>}
-                    <div className="text-xs text-slate-500">via {l.via}</div>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-
-          {v.sam && <GraphCard runId={id} uei={v.uei} />}
-
-          <Card title="Exclusions">
-            {v.exclusion.length === 0 ? (
-              <p className="text-sm text-slate-500">
-                No active exclusion record is tied to this vendor by UEI, name or alias{v.sam ? ', or by a shared suite or contact' : ''}.
-                {!v.sam && ' Address and contact ties need the SAM entity extract on this run.'}
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {groupHits(v.exclusion).map((g, i) => (
-                  <ExclusionRecord key={i} h={g.h} ties={g.ties} />
-                ))}
-              </div>
-            )}
-          </Card>
-
-          <OutsideContextCard runId={id} v={v} />
+            </div>
+            <div className="mt-4 space-y-6">
+              {tab === 'money' && (
+                <>
+                  <SignalsCard v={v} />
+                  <CaseAwards runId={id} v={v} reload={reload} />
+                </>
+              )}
+              {tab === 'people' && (
+                <>
+                  <Card title="SAM profile">
+                    {v.sam ? (
+                      <SamProfile c={v.sam} />
+                    ) : (
+                      <p className="text-sm text-slate-500">
+                        No SAM registration in this run's extract. Unmatched vendors usually have lapsed registrations, or the run had no SAM extract.
+                      </p>
+                    )}
+                  </Card>
+                  <Card title="Exclusions">
+                    {v.exclusion.length === 0 ? (
+                      <p className="text-sm text-slate-500">
+                        No active exclusion record is tied to this vendor by UEI, name or alias{v.sam ? ', or by a shared suite or contact' : ''}.
+                        {!v.sam && ' Address and contact ties need the SAM entity extract on this run.'}
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        {groupHits(v.exclusion).map((g, i) => (
+                          <ExclusionRecord key={i} h={g.h} ties={g.ties} />
+                        ))}
+                      </div>
+                    )}
+                  </Card>
+                  {v.links.length > 0 && (
+                    <Card title="Linked vendors">
+                      <p className="mb-3 text-sm text-slate-600">
+                        Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof of
+                        common control.
+                      </p>
+                      <ul className="divide-y divide-slate-100 text-sm">
+                        {v.links.map((l) => (
+                          <li key={l.uei} className="py-2">
+                            <Link to={`/runs/${id}/vendors/${encodeURIComponent(l.uei)}`} className="font-medium text-navy hover:underline">
+                              {l.name}
+                            </Link>{' '}
+                            <span className="font-mono text-xs text-slate-500">{l.uei}</span> <span className="tabular text-slate-600">{money(l.tot)}</span>
+                            {l.certified && <span className="ml-2 rounded bg-navy-50 px-1.5 py-0.5 text-xs text-navy">certified</span>}
+                            <div className="text-xs text-slate-500">via {l.via}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    </Card>
+                  )}
+                  {v.sam && <GraphCard runId={id} uei={v.uei} />}
+                </>
+              )}
+              {tab === 'outside' && <OutsideContextCard runId={id} v={v} />}
+              {tab === 'notes' && (
+                <Card title="Notes and files">
+                  <Notes target="case" ctx={ctx} title="Notes in this run" earlier={v.case.earlier_notes} />
+                </Card>
+              )}
+              {tab === 'history' && (
+                <Card title="History">
+                  {v.history.length === 0 && <p className="text-sm text-slate-500">No analyst actions yet.</p>}
+                  <ol className="space-y-3">
+                    {v.history.map((h, i) => (
+                      <li key={i} className="text-sm">
+                        <div className="text-xs text-slate-500">
+                          {new Date(h.at).toLocaleString()} · {h.analyst}
+                          {h.other_run && (
+                            <>
+                              {' · '}
+                              <Link to={`/runs/${h.other_run.id}/vendors/${v.uei}`} className="rounded bg-slate-100 px-1 text-slate-600 hover:underline">
+                                run {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
+                              </Link>
+                            </>
+                          )}
+                        </div>
+                        <div>
+                          <span className="font-medium">{HISTORY_LABEL[h.action] ?? h.action.replace(/_/g, ' ')}</span>: {h.detail}
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                </Card>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="min-w-0 space-y-6">
-          <Card title="Disposition">
+          <Card title="Decision">
             <DispositionForm runId={id} v={v} onSaved={reload} />
           </Card>
+          <Review ctx={ctx} />
           <Card title="Tier and routing">
             <TierRouting key={`${v.tier}|${v.owner}`} runId={id} v={v} onSaved={reload} />
           </Card>
@@ -566,36 +706,13 @@ export default function VendorPage() {
                 <div>
                   <dt className="text-xs text-slate-500">Cut reason</dt>
                   <dd>
-                    {REASON_LABEL[v.reason_code] ?? v.reason_code} <span className="font-mono text-xs text-slate-400">{v.reason_code}</span>
+                    {REASON_LABEL[v.reason_code] ?? v.reason_code}
                     <div className="text-xs text-slate-600">{v.reason}</div>
                     {v.restored_from && <div className="text-xs text-slate-600">Originally cut as {v.restored_from}</div>}
                   </dd>
                 </div>
               )}
             </dl>
-          </Card>
-          <Card title="History">
-            {v.history.length === 0 && <p className="text-sm text-slate-500">No analyst actions yet.</p>}
-            <ol className="space-y-3">
-              {v.history.map((h, i) => (
-                <li key={i} className="text-sm">
-                  <div className="text-xs text-slate-500">
-                    {new Date(h.at).toLocaleString()} · {h.analyst}
-                    {h.other_run && (
-                      <>
-                        {' · '}
-                        <Link to={`/runs/${h.other_run.id}/vendors/${v.uei}`} className="rounded bg-slate-100 px-1 text-slate-600 hover:underline">
-                          run {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
-                        </Link>
-                      </>
-                    )}
-                  </div>
-                  <div>
-                    <span className="font-medium">{HISTORY_LABEL[h.action] ?? h.action}</span>: {h.detail}
-                  </div>
-                </li>
-              ))}
-            </ol>
           </Card>
         </div>
       </div>

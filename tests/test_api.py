@@ -377,3 +377,50 @@ def test_fast_queue_endpoints(sam_ctx):
     latest = ([r["id"] for r in client.get(f"/api/runs/{run_id}").json()["followed_by"]] or [run_id])[-1]
     assert sorted(m["uei"] for m in mine) == sorted(ueis[:2]) and all(m["run"]["id"] == latest for m in mine)
     assert client.get("/api/my-cases").status_code == 400
+
+
+def test_case_notes_evidence_signoff_awards_and_ledger(sam_ctx):
+    from tests.test_subjects import _fake_usaspending
+    import ledgerhawk.api.app as appmod
+    client, run_id, p = sam_ctx
+    uei = p["excluded_major"]
+    base = f"/api/runs/{run_id}/vendors/{uei}"
+    v = client.get(base).json()
+    assert v["case"]["review"]["state"] == "draft" and v["case"]["awards"] is None
+    assert v["ledger"]["rows"][0]["lean"] == "strengthens" and v["ledger"]["balance"]["lean"] == "strengthens"
+
+    assert client.post(f"{base}/notes", data={"analyst": "Ana", "text": "x", "lean": "maybe"}).status_code == 400
+    r = client.post(f"{base}/notes", data={"analyst": "Ana", "text": "Owner confirmed same person via state registry",
+                                           "lean": "strengthens", "source": "State SOS"},
+                    files={"file": ("sos.pdf", b"%PDF-1.4 test")})
+    assert r.status_code == 200, r.text
+    note = r.json()
+    assert note["file_sha256"] and note["lean"] == "strengthens"
+    client.post(f"{base}/notes", data={"analyst": "Ana", "text": "Contract was competed with 4 offers", "lean": "weakens"})
+    assert client.get(f"{base}/evidence/{note['id']}").content == b"%PDF-1.4 test"
+    led = client.get(base).json()["ledger"]
+    assert any(r["kind"] == "note" and r["lean"] == "weakens" for r in led["rows"])
+
+    appmod.store.awards_post = _fake_usaspending([])
+    try:
+        r = client.post(f"{base}/awards", data={"analyst": "Ana"})
+    finally:
+        appmod.store.awards_post = None
+    assert r.status_code == 200 and r.json()["entities"][0]["count"] == 3
+
+    # two-person sign-off locks the notes
+    assert client.post(f"{base}/review", data={"analyst": "Ana", "action": "submit"}).json()["state"] == "submitted"
+    assert client.post(f"{base}/review", data={"analyst": "Ana", "action": "approve"}).status_code == 400
+    assert client.post(f"{base}/review", data={"analyst": "Ben", "action": "approve"}).json()["state"] == "approved"
+    assert client.post(f"{base}/notes", data={"analyst": "Ana", "text": "late"}).status_code == 400
+    log = client.get(f"/api/runs/{run_id}/record").json()["log"]
+    assert {"case_note", "case_awards", "case_submit", "case_approve"} <= {h["action"] for h in log}
+
+    # a follow-up run shows these notes as earlier notes; its own sign-off starts over
+    fid = client.post(f"/api/runs/{run_id}/follow-up", data={"analyst": "Ana"}).json()["id"]
+    c = client.get(f"/api/runs/{fid}/vendors/{uei}").json()["case"]
+    assert c["review"]["state"] == "draft" and not c["review"]["notes"]
+    assert len(c["earlier_notes"]) == 2 and c["earlier_notes"][0]["run"]["id"] == run_id
+    assert client.get(f"/api/runs/{fid}/vendors/{uei}/evidence/{note['id']}").status_code == 200
+    assert client.get(f"{base}/case.docx").status_code == 200
+    assert client.get(f"/api/runs/{run_id}/vendors/NOPE/notes").status_code in (404, 405)

@@ -611,7 +611,14 @@ class Store:
     # ---- analyst notes, evidence and reviewer sign-off on a subject screen ------------------
     # screen.json is never edited after it is written; notes and sign-off live beside it in review.json.
     def _review(self, sid: str) -> dict:
-        f = self.root / "subjects" / sid / "review.json"
+        return self._review_at(self.root / "subjects" / sid)
+
+    def _write_review(self, sid: str, change) -> dict:
+        return self._write_review_at(self.root / "subjects" / sid, change)
+
+    @staticmethod
+    def _review_at(d: Path) -> dict:
+        f = d / "review.json"
         r = json.loads(f.read_text()) if f.exists() else {}
         r.setdefault("state", "draft")
         r.setdefault("notes", [])
@@ -620,13 +627,16 @@ class Store:
         r["notes"] = [n for n in r["notes"] if not n.get("deleted_at")]
         return r
 
-    def _write_review(self, sid: str, change) -> dict:
-        f = self.root / "subjects" / sid / "review.json"
+    def _write_review_at(self, d: Path, change) -> dict:
+        f = d / "review.json"
         with self._lock:
+            d.mkdir(parents=True, exist_ok=True)
             r = json.loads(f.read_text()) if f.exists() else {"state": "draft", "notes": [], "history": []}
             change(r)
-            f.write_text(json.dumps(r, indent=2))
-        return self._review(sid)
+            tmp = d / "review.tmp"
+            tmp.write_text(json.dumps(r, indent=2))
+            tmp.replace(f)
+        return self._review_at(d)
 
     def _note_target(self, screen: dict, target: str) -> str:
         """Notes attach to the whole screen, a subject ("s:3") or a person ("p:1"). Returns a readable label."""
@@ -643,55 +653,45 @@ class Store:
                     return f"Person {ref}"
         raise ValueError("Pick a subject, a person or the whole screen for this note.")
 
-    def add_screen_note(self, sid: str, *, analyst: str, target: str, text: str, source: str = "",
-                        file_name: str | None = None, file_bytes: bytes | None = None) -> dict:
-        screen = self.subject_screen(sid)
-        label = self._note_target(screen, target)
-        if screen["review"]["state"] == "approved":
-            raise ValueError("This screen has been approved, so its notes are locked. Reopen it to add more.")
+    def _add_note(self, d: Path, review: dict, *, analyst: str, target: str, text: str, source: str, lean: str,
+                  file_name: str | None, file_bytes: bytes | None, what: str) -> dict:
+        if review["state"] == "approved":
+            raise ValueError(f"This {what} has been approved, so its notes are locked. Reopen it to add more.")
         if not text.strip() and not file_bytes:
             raise ValueError("Write a note or attach a file.")
+        if lean and lean not in ("strengthens", "weakens", "context"):
+            raise ValueError("Say whether the note strengthens the lead, weakens it, or is context.")
         note = {"id": secrets.token_hex(4), "target": target, "text": text.strip(), "source": source.strip(),
-                "analyst": analyst.strip(), "at": _now()}
+                "lean": lean or "context", "analyst": analyst.strip(), "at": _now()}
         if file_bytes:
             if len(file_bytes) > EVIDENCE_MAX_BYTES:
                 raise ValueError("Evidence files can be up to 25 MB.")
             safe = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(file_name or "evidence").name).strip("._") or "evidence"
-            d = self.root / "subjects" / sid / "evidence"
-            d.mkdir(exist_ok=True)
-            (d / f"{note['id']}-{safe}").write_bytes(file_bytes)
+            (d / "evidence").mkdir(parents=True, exist_ok=True)
+            (d / "evidence" / f"{note['id']}-{safe}").write_bytes(file_bytes)
             note.update(file=safe, file_bytes=len(file_bytes), file_sha256=hashlib.sha256(file_bytes).hexdigest())
-        self._write_review(sid, lambda r: r["notes"].append(note))
-        self.audit(analyst, "screen_note", None, None, f"Note on {label} of screen {sid}"
-                   + (f" with evidence {note['file']} (SHA-256 {note['file_sha256'][:12]})" if file_bytes else ""))
+        self._write_review_at(d, lambda r: r["notes"].append(note))
         return note
 
-    def delete_screen_note(self, sid: str, nid: str, analyst: str) -> None:
-        review = self.subject_screen(sid)["review"]
+    def _delete_note(self, d: Path, nid: str, analyst: str, what: str) -> None:
+        review = self._review_at(d)
         note = next((n for n in review["notes"] if n["id"] == nid), None)
         if note is None:
             raise KeyError(nid)
         if review["state"] == "approved":
-            raise ValueError("This screen has been approved, so its notes are locked. Reopen it first.")
+            raise ValueError(f"This {what} has been approved, so its notes are locked. Reopen it first.")
         if not _same_person(note["analyst"], analyst):
             raise ValueError(f"Only {note['analyst']} can remove this note.")
 
-        def mark(r):  # kept in review.json for the record, hidden from the screen and its exports
+        def mark(r):  # kept in review.json for the record, hidden from the page and its exports
             for n in r["notes"]:
                 if n["id"] == nid:
                     n.update(deleted_at=_now(), deleted_by=analyst.strip())
-        self._write_review(sid, mark)
-        self.audit(analyst, "screen_note_removed", None, None, f"Removed note {nid} on screen {sid}")
+        self._write_review_at(d, mark)
 
-    def evidence_path(self, sid: str, nid: str) -> tuple[Path, str]:
-        note = next((n for n in self.subject_screen(sid)["review"]["notes"] if n["id"] == nid and n.get("file")), None)
-        if note is None:
-            raise KeyError(nid)
-        return self.root / "subjects" / sid / "evidence" / f"{nid}-{note['file']}", note["file"]
-
-    def review_screen(self, sid: str, *, analyst: str, action: str, comment: str = "") -> dict:
+    def _sign_off(self, d: Path, *, analyst: str, action: str, comment: str, what: str) -> tuple[dict, str]:
         """Two-person sign-off: an analyst submits, someone else approves or returns it; approval locks the notes."""
-        review = self.subject_screen(sid)["review"]
+        review = self._review_at(d)
         state = review["state"]
         submitter = next((h["by"] for h in reversed(review["history"]) if h["action"] == "submit"), "")
         moves = {"submit": ({"draft", "returned"}, "submitted"), "approve": ({"submitted"}, "approved"),
@@ -700,7 +700,7 @@ class Store:
             raise ValueError("Unknown review action.")
         allowed, new = moves[action]
         if state not in allowed:
-            raise ValueError(f"This screen is {REVIEW_STATES[state].lower()}, so it can't be {'re' if action == 'reopen' else ''}"
+            raise ValueError(f"This {what} is {REVIEW_STATES[state].lower()}, so it can't be {'re' if action == 'reopen' else ''}"
                              + {"submit": "submitted", "approve": "approved", "return": "returned", "reopen": "opened"}[action] + ".")
         if action in ("approve", "return") and _same_person(submitter, analyst):
             raise ValueError("A second person must review this. The analyst who submitted it can't approve or return it.")
@@ -711,10 +711,100 @@ class Store:
         def move(r):
             r["state"] = new
             r["history"].append(entry)
-        out = self._write_review(sid, move)
+        return self._write_review_at(d, move), new
+
+    def add_screen_note(self, sid: str, *, analyst: str, target: str, text: str, source: str = "", lean: str = "",
+                        file_name: str | None = None, file_bytes: bytes | None = None) -> dict:
+        screen = self.subject_screen(sid)
+        label = self._note_target(screen, target)
+        note = self._add_note(self.root / "subjects" / sid, screen["review"], analyst=analyst, target=target, text=text,
+                              source=source, lean=lean, file_name=file_name, file_bytes=file_bytes, what="screen")
+        self.audit(analyst, "screen_note", None, None, f"Note on {label} of screen {sid}"
+                   + (f" with evidence {note['file']} (SHA-256 {note['file_sha256'][:12]})" if file_bytes else ""))
+        return note
+
+    def delete_screen_note(self, sid: str, nid: str, analyst: str) -> None:
+        self.subject_screen(sid)
+        self._delete_note(self.root / "subjects" / sid, nid, analyst, "screen")
+        self.audit(analyst, "screen_note_removed", None, None, f"Removed note {nid} on screen {sid}")
+
+    def evidence_path(self, sid: str, nid: str) -> tuple[Path, str]:
+        note = next((n for n in self.subject_screen(sid)["review"]["notes"] if n["id"] == nid and n.get("file")), None)
+        if note is None:
+            raise KeyError(nid)
+        return self.root / "subjects" / sid / "evidence" / f"{nid}-{note['file']}", note["file"]
+
+    def review_screen(self, sid: str, *, analyst: str, action: str, comment: str = "") -> dict:
+        self.subject_screen(sid)
+        out, new = self._sign_off(self.root / "subjects" / sid, analyst=analyst, action=action, comment=comment, what="screen")
         self.audit(analyst, f"screen_{action}", None, None, f"Screen {sid}: {REVIEW_STATES[new]}"
                    + (f": {comment.strip()}" if comment.strip() else ""))
         return out
+
+    # ---- case work on a lead in a run: notes, evidence, awards and sign-off ---------------------------------------
+    # Kept per run and UEI, beside (never inside) the run's frozen results. A follow-up run shows the earlier run's notes
+    # as carried, read-only; sign-off starts again in each run.
+    def _case_dir(self, run_id: str, uei: str) -> Path:
+        self.run_dir(run_id)
+        if uei not in self.vendors(run_id)["by_uei"]:
+            raise KeyError(uei)
+        return self.root / "cases" / run_id / re.sub(r"[^A-Za-z0-9]", "", uei)
+
+    def case(self, run_id: str, uei: str) -> dict:
+        d = self._case_dir(run_id, uei)
+        review = self._review_at(d)
+        carried = []
+        for rid, is_carried in self.lineage(run_id)[1:]:
+            old = self.root / "cases" / rid / d.name
+            if old.exists():
+                ref = self.run_ref(rid)
+                carried += [{**n, "run": ref, "carried": is_carried} for n in self._review_at(old)["notes"]]
+        aw = d / "awards.json"
+        return {"review": review, "earlier_notes": carried, "awards": json.loads(aw.read_text()) if aw.exists() else None}
+
+    def add_case_note(self, run_id: str, uei: str, *, analyst: str, text: str, source: str = "", lean: str = "",
+                      file_name: str | None = None, file_bytes: bytes | None = None) -> dict:
+        d = self._case_dir(run_id, uei)
+        note = self._add_note(d, self._review_at(d), analyst=analyst, target="case", text=text, source=source, lean=lean,
+                              file_name=file_name, file_bytes=file_bytes, what="case")
+        self.audit(analyst, "case_note", uei, run_id, f"Note ({note['lean']})"
+                   + (f" with evidence {note['file']} (SHA-256 {note['file_sha256'][:12]})" if file_bytes else "")
+                   + (f": {note['text'][:200]}" if note["text"] else ""))
+        return note
+
+    def delete_case_note(self, run_id: str, uei: str, nid: str, analyst: str) -> None:
+        self._delete_note(self._case_dir(run_id, uei), nid, analyst, "case")
+        self.audit(analyst, "case_note_removed", uei, run_id, f"Removed note {nid}")
+
+    def case_evidence_path(self, run_id: str, uei: str, nid: str) -> tuple[Path, str]:
+        """Evidence on this run's case or carried from an earlier run's."""
+        for rid in [r for r, _ in self.lineage(run_id)]:
+            d = self.root / "cases" / rid / re.sub(r"[^A-Za-z0-9]", "", uei)
+            note = next((n for n in self._review_at(d)["notes"] if n["id"] == nid and n.get("file")), None)
+            if note:
+                return d / "evidence" / f"{nid}-{note['file']}", note["file"]
+        raise KeyError(nid)
+
+    def review_case(self, run_id: str, uei: str, *, analyst: str, action: str, comment: str = "") -> dict:
+        out, new = self._sign_off(self._case_dir(run_id, uei), analyst=analyst, action=action, comment=comment, what="case")
+        self.audit(analyst, f"case_{action}", uei, run_id, REVIEW_STATES[new] + (f": {comment.strip()}" if comment.strip() else ""))
+        return out
+
+    def fetch_case_awards(self, run_id: str, uei: str, analyst: str) -> dict:
+        d = self._case_dir(run_id, uei)
+        v = self.vendors(run_id)["by_uei"][uei]
+        screen = {"subjects": [{"ref": 1, "entities": [{"uei": uei, "name": v["name"], "sam": v.get("sam"),
+                                                         "exclusion": v.get("exclusion") or []}], "related": []}]}
+        res = awards_mod.screen_awards(screen, post=self.awards_post or awards_mod._post)
+        if res["errors"]:
+            raise ConnectionError("USAspending did not answer. Try again in a few minutes; the last lookup, if any, is kept.")
+        res["fetched_by"] = analyst.strip()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "awards.json").write_text(json.dumps(res, indent=2))
+        e = res["entities"][0] if res["entities"] else {"count": 0, "after_exclusion": 0}
+        self.audit(analyst, "case_awards", uei, run_id, f"USAspending lookup: {e['count']} awards"
+                   + (f", {e['after_exclusion']} started after the exclusion" if e.get("after_exclusion") else ""))
+        return res
 
     # ---- analyst state, per run ------------------------------------------------
     def _pick(self, run_id: str, rows) -> dict[str, dict]:

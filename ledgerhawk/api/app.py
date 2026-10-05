@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
+from ..pipeline.ledger import build_ledger
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
 from ..pipeline.stages import SIGNAL_LABELS
@@ -257,12 +258,12 @@ def subject_screen(sid: str):
 
 @app.post("/api/subject-screens/{sid}/notes")
 async def add_screen_note(sid: str, analyst: str = Form(""), target: str = Form("screen"), text: str = Form(""),
-                          source: str = Form(""), file: UploadFile | None = File(None)):
+                          source: str = Form(""), lean: str = Form(""), file: UploadFile | None = File(None)):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the note is attributed.")
     body = await file.read() if file is not None and file.filename else None
     try:
-        return store.add_screen_note(sid, analyst=analyst, target=target, text=text, source=source,
+        return store.add_screen_note(sid, analyst=analyst, target=target, text=text, source=source, lean=lean,
                                      file_name=file.filename if body else None, file_bytes=body)
     except KeyError:
         raise HTTPException(404, "Subject screen not found")
@@ -625,10 +626,65 @@ def vendor(run_id: str, uei: str):
         raise HTTPException(404, "Vendor not in this run")
     out = dict(v)
     out["why"] = why_it_flagged(v)
+    out["headline"] = headline(v)
     out["disposition"] = store.dispositions(run_id).get(uei)
     out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
     out["history"] = _history(run_id, uei)
+    out["case"] = store.case(run_id, uei)
+    out["ledger"] = _ledger(v, out["case"])
     return out
+
+
+def _ledger(v: dict, case: dict) -> dict:
+    notes = case["review"]["notes"] + [n for n in case["earlier_notes"] if n.get("lean") in ("strengthens", "weakens")]
+    return build_ledger(v, context=store.context(uei=v["uei"]), awards=case["awards"], notes=notes)
+
+
+def _case_call(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except KeyError:
+        raise HTTPException(404, "Vendor or note not found in this run")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except ConnectionError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/notes")
+async def add_case_note(run_id: str, uei: str, analyst: str = Form(""), text: str = Form(""), source: str = Form(""),
+                        lean: str = Form(""), file: UploadFile | None = File(None)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the note is attributed.")
+    body = await file.read() if file is not None and file.filename else None
+    return _case_call(store.add_case_note, run_id, uei, analyst=analyst, text=text, source=source, lean=lean,
+                      file_name=file.filename if body else None, file_bytes=body)
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/notes/{nid}/delete")
+def delete_case_note(run_id: str, uei: str, nid: str, analyst: str = Form("")):
+    _case_call(store.delete_case_note, run_id, uei, nid, analyst)
+    return {"ok": True}
+
+
+@app.get("/api/runs/{run_id}/vendors/{uei}/evidence/{nid}")
+def case_evidence(run_id: str, uei: str, nid: str):
+    path, name = _case_call(store.case_evidence_path, run_id, uei, nid)
+    return FileResponse(path, filename=name)
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/review")
+def review_case(run_id: str, uei: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the sign-off is attributed.")
+    return _case_call(store.review_case, run_id, uei, analyst=analyst, action=action, comment=comment)
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/awards")
+def fetch_case_awards(run_id: str, uei: str, analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the lookup is attributed.")
+    return _case_call(store.fetch_case_awards, run_id, uei, analyst)
 
 
 def _integrity_items(run_id: str) -> tuple[dict, list[dict]]:
@@ -692,7 +748,8 @@ def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool =
         raise HTTPException(404, "Vendor not in this run")
     wf = _workflow(v, store.analyst_state(run_id).get(uei, {}))
     body = build_case_docx(v, wf, store.dispositions(run_id).get(uei), _history(run_id, uei), store.summary(run_id),
-                           matter=matter.strip(), privileged=privileged, context=store.context(uei=uei))
+                           matter=matter.strip(), privileged=privileged, context=store.context(uei=uei), case=(cs := store.case(run_id, uei)),
+                           ledger=_ledger(v, cs))
     return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.docx"'})
 
 
