@@ -406,12 +406,11 @@ export function ContextPanel({ c: initial, title = 'Outside context', runId }: {
         </div>
       )}
       {errors.length > 0 && <p className="mt-1 text-xs text-amber-700">Not checked: {errors.map(([, s]) => s.error).join('; ')}.</p>}
-      {c.keys && !c.person && (!c.keys.opensanctions || !c.keys.opencorporates || !c.keys.smarty) && (
+      {c.keys && !c.person && (!c.keys.opensanctions || !c.keys.smarty) && (
         <p className="mt-1 text-xs text-slate-500">
           Off until an administrator adds a key on the server:{' '}
           {[
             !c.keys.opensanctions && 'OpenSanctions (OPENSANCTIONS_API_KEY)',
-            !c.keys.opencorporates && 'OpenCorporates (OPENCORPORATES_API_TOKEN)',
             !c.keys.smarty && 'USPS address check (SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN)',
           ]
             .filter(Boolean)
