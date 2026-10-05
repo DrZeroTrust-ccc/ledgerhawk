@@ -64,8 +64,8 @@ def parse_subjects(text: str = "", path: str | Path | None = None) -> list[dict]
         else:
             out.append({"uei": "", "name": line, "role": ""})
     if path:
-        raw = read_table(Path(path)).fillna("")
         lookup = {_key(a): k for k, aliases in SUBJECT_ALIASES.items() for a in aliases}
+        raw = read_table(Path(path), set(lookup)).fillna("")
         cols: dict[str, str] = {}
         for c in raw.columns:
             k = lookup.get(_key(c))

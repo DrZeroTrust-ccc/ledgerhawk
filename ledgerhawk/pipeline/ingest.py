@@ -69,15 +69,25 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def read_table(path: Path) -> pd.DataFrame:
-    if path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
-        return pd.read_excel(path, dtype=str)
-    return pd.read_csv(path, dtype=str, keep_default_na=False)
+def read_table(path: Path, known: set[str] | None = None) -> pd.DataFrame:
+    """Read a CSV or Excel sheet. With `known` (normalised column names), a sheet whose header sits below title rows,
+    as in a hand-built workbook, is read from the first of its top 20 rows that names at least two known columns."""
+    excel = path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+    read = (lambda **kw: pd.read_excel(path, dtype=str, **kw)) if excel else \
+        (lambda **kw: pd.read_csv(path, dtype=str, keep_default_na=False, **kw))
+    df = read()
+    if known is None or sum(_key(c) in known for c in df.columns) >= 2:
+        return df
+    top = read(header=None, nrows=20).fillna("")
+    for i, row in top.iterrows():
+        if sum(_key(c) in known for c in row) >= 2:
+            return read(header=i)
+    return df
 
 
 def load_vendor_file(path: str | Path) -> tuple[pd.DataFrame, Validation]:
     path = Path(path)
-    raw = read_table(path)
+    raw = read_table(path, {_key(a) for aliases in COLUMN_ALIASES.values() for a in aliases})
     mapping = map_columns(list(raw.columns))
     df = raw[list(mapping)].rename(columns=mapping)
     missing = [c for c in REQUIRED if c not in df.columns]
