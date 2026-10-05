@@ -207,52 +207,83 @@ def _other_business(text: str, c: dict) -> str:
     return ""
 
 
+# Points toward "this is our subject", from what the item's visible text shows. 70+ is a strong match, 40-69 possible,
+# under 40 likely someone else. Identifiers are close to decisive; a bare name, least of all a person's, is not.
+POINTS = {
+    "exact": 45, "name": 40, "exact_generic": 25, "name_generic": 20, "person_exact": 25, "person_name": 15,
+    "id": 70, "specific": 45, "city": 30, "state": 10, "person_state": 15, "same_name_list": 45,
+    "official": 5, "directory": -15, "other_business_cap": 10,
+}
+STRONG_AT, POSSIBLE_AT = 70, 40
+# Sites whose pages are about the record itself (courts, agencies, filings): small bonus. Business directories and data
+# brokers republish registrations and rarely add anything: small penalty, and the analyst can mute them altogether.
+OFFICIAL_HOSTS = (".gov", ".mil", ".uscourts.gov", "courtlistener.com", "sec.gov", "justice.gov", "law.justia.com")
+DIRECTORY_HOSTS = ("bizapedia.com", "buzzfile.com", "zoominfo.com", "dnb.com", "manta.com", "yellowpages.com",
+                   "opengovus.com", "corporationwiki.com", "bizstanding.com", "chamberofcommerce.com", "dandb.com",
+                   "rocketreach.co", "signalhire.com", "apollo.io", "crunchbase.com", "govcb.com", "usspending.com",
+                   "bisprofiles.com", "companiesus.com", "opencorpdata.com", "b2bhint.com")
+
+
+def host_of(item: dict) -> str:
+    h = urllib.parse.urlparse(item.get("url", "")).netloc.lower()
+    return h[4:] if h.startswith("www.") else h
+
+
+def _host_kind(host: str) -> str:
+    if any(host == d or host.endswith("." + d) for d in DIRECTORY_HOSTS):
+        return "directory"
+    if any(host.endswith(d) if d.startswith(".") else (host == d or host.endswith("." + d)) for d in OFFICIAL_HOSTS):
+        return "official"
+    return ""
+
+
+def band(points: int) -> str:
+    return "strong" if points >= STRONG_AT else "possible" if points >= POSSIBLE_AT else "weak"
+
+
 def score(item: dict, c: dict) -> dict:
-    """Adds confidence ('strong', 'possible', 'weak') and the reasons, from the item's visible text."""
+    """Adds a 0-99 match score, its band ('strong', 'possible', 'weak') and the reasons with their points, from the
+    item's visible text and the site it came from."""
     text = _flat(" ".join([item.get("title", ""), item.get("snippet", ""), item.get("where", "")]))
-    hit = "exact" if item.get("match") == "same name" else _name_hit(text, c)
+    listed = item.get("match") == "same name"
+    hit = "exact" if listed else _name_hit(text, c)
+    parts: list[tuple[str, int]] = []
     other = _other_business(text, c) if hit == "name" else ""
-    if other:
-        return item | {"confidence": "weak", "why": [f"names a different business ({other})"]}
-    why, corr = [], []
-    if hit == "exact":
-        why.append("full name" if c["person"] else "full legal name")
-    elif hit == "name":
-        why.append("name words" if c["person"] else "name without legal suffix")
-    else:
-        why.append("name not shown in the headline or summary")
+    if listed:
+        parts.append(("same name on the list", POINTS["same_name_list"]))
+    elif c["person"]:
+        if hit:
+            parts.append(("full name" if hit == "exact" else "name words", POINTS["person_" + ("exact" if hit == "exact" else "name")]))
+    elif hit:
+        key = hit + ("_generic" if c["generic"] else "")
+        parts.append(("full legal name" if hit == "exact" else "name without legal suffix", POINTS[key]))
+    if not hit:
+        parts.append(("name not shown in the headline or summary", 0))
+    if c["generic"] and not listed:
+        parts.append(("common business name", 0))
     if c["uei"] and _has(text, c["uei"]):
-        corr.append("UEI")
+        parts.append(("mentions UEI", POINTS["id"]))
     if c["cage"] and len(c["cage"]) == 5 and _has(text, c["cage"]):
-        corr.append("CAGE code")
-    for n in c["other_names"]:
-        if hit != "exact" and _has(text, n):
-            corr.append(f"other name {n}")
-    if c["city"] and len(c["city"]) >= 4 and _has(text, c["city"]):
-        corr.append(f"city {c['city']}")
+        parts.append(("mentions CAGE code", POINTS["id"]))
+    specific = [f"other name {n}" for n in c["other_names"] if hit != "exact" and _has(text, n)]
+    specific += [f"officer {p}" for p in c["people"] if _has(text, p)]
+    specific += [f"related firm {r}" for r in c["related"] if _has(text, normalize_name(r))]
+    for x in specific[:2]:
+        parts.append((f"mentions {x}", POINTS["specific"] if hit or listed else POINTS["specific"] // 2))
+    if c["city"] and len(c["city"]) >= 4 and _has(text, c["city"]) and not c["person"]:
+        parts.append((f"mentions city {c['city']}", POINTS["city"] if hit else POINTS["city"] // 3))
     st = c["state"]
     if st in US_STATES and (_has(text, US_STATES[st]) or (st in _STATE_ABBR and _has(text, f"D {_STATE_ABBR[st]}"))):
-        corr.append(f"state {US_STATES[st]}")
-    for p in c["people"]:
-        if _has(text, p):
-            corr.append(f"officer {p}")
-    for r in c["related"]:
-        if _has(text, normalize_name(r)):
-            corr.append(f"related firm {r}")
-    why += [f"mentions {x}" for x in corr]
-    ids = any(x in ("UEI", "CAGE code") for x in corr)
-    specific = any(x.startswith(("officer ", "related firm ", "other name ")) for x in corr)
-    city = any(x.startswith("city ") for x in corr)
-    place = city or any(x.startswith("state ") for x in corr)
-    if ids or (hit and specific) or (hit and city and not c["person"]):
-        conf = "strong"
-    elif (hit and place) or (hit and not c["person"] and not c["generic"]) or item.get("match") == "same name":
-        conf = "possible"  # a same-name sanctions entry is always worth a look
-    else:
-        conf = "weak"
-    if c["generic"] and conf != "strong":
-        why.append("common business name")
-    return item | {"confidence": conf, "why": why}
+        parts.append((f"mentions state {US_STATES[st]}", POINTS["person_state" if c["person"] else "state"] if hit else 0))
+    kind = _host_kind(host_of(item))
+    if kind:
+        parts.append(("official source" if kind == "official" else "business directory or data broker site", POINTS[kind]))
+    points = max(0, min(99, sum(p for _, p in parts)))
+    if other:
+        parts.insert(0, (f"names a different business ({other}), so the score is capped at {POINTS['other_business_cap']}", 0))
+        points = min(points, POINTS["other_business_cap"])
+    why = [f"{label} ({'+' if p > 0 else ''}{p})" if p else label for label, p in parts]
+    return item | {"score": points, "confidence": band(points), "why": why}
 
 
 def item_id(i: dict) -> str:
@@ -263,11 +294,13 @@ def item_id(i: dict) -> str:
 _RANK = {"strong": 0, "possible": 1, "weak": 2}
 
 
-def apply_verdicts(res: dict, verdicts: dict | None) -> dict:
+def apply_verdicts(res: dict, verdicts: dict | None, muted: dict | None = None) -> dict:
     """The lookup with each item's id, score (scored on the fly for snapshots taken before scoring) and analyst verdict,
     plus the counts that matter: confirmed, strong, possible, name-only and dismissed, and enforcement language among the
-    hits that aren't name-only or dismissed."""
+    hits that aren't name-only or dismissed. A hit from a muted site counts as ruled out unless an analyst decided it
+    individually."""
     verdicts = verdicts or {}
+    muted = muted or {}
     c = res.get("clues") or clues_for(res["name"], uei=res.get("uei", ""), person=res.get("person", False))
     out = {k: v for k, v in res.items() if k != "sources"}
     out["sources"] = {}
@@ -276,9 +309,13 @@ def apply_verdicts(res: dict, verdicts: dict | None) -> dict:
     for key, src in res["sources"].items():
         items = []
         for i in src["items"]:
-            i = i if "confidence" in i else score(i, c)
+            i = i if "score" in i else score(i, c)
             i = i | {"id": i.get("id") or item_id(i)}
             v = verdicts.get(i["id"])
+            m = muted.get(host_of(i))
+            if not v and m:
+                v = {"verdict": "not", "note": f"Site {host_of(i)} muted" + (f": {m['note']}" if m.get("note") else ""),
+                     "by": m.get("by", ""), "at": m.get("at", ""), "muted": True}
             i["verdict"] = v if v and v.get("verdict") in VERDICTS else None
             vv = i["verdict"]["verdict"] if i["verdict"] else ""
             if vv == "not":

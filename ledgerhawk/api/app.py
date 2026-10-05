@@ -325,13 +325,31 @@ def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = For
         raise HTTPException(502, str(exc))
 
 
+@app.get("/api/context/muted-sites")
+def muted_sites():
+    return {"sites": store.muted_sites()}
+
+
+@app.post("/api/context/muted-sites")
+def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""), mute: bool = Form(True)):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the change is attributed.")
+    try:
+        return {"sites": store.mute_site(analyst=analyst, host=host, note=note, mute=mute)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @app.post("/api/context/verdict")
 def context_verdict(analyst: str = Form(""), item: str = Form(""), verdict: str = Form(""), note: str = Form(""),
                     uei: str = Form(""), name: str = Form(""), person: bool = Form(False)):
+    """item is one result id, or several separated by commas for a bulk call."""
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the decision is attributed.")
+    ids = [x for x in item.split(",") if x.strip()]
     try:
-        return store.context_verdict(analyst=analyst, item=item, verdict=verdict, note=note, uei=uei, name=name, person=person)
+        return store.context_verdict(analyst=analyst, item=ids[0] if len(ids) == 1 else ids, verdict=verdict, note=note,
+                                     uei=uei, name=name, person=person)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except KeyError:

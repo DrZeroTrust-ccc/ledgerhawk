@@ -132,13 +132,13 @@ def test_context_api_and_subject_exports(tmp_path):
         assert [e.get("ref") for e in ents] == [1, None] and ents[1]["person_ref"] == 1 and ents[1]["person"]
         wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.xlsx").content))
         ws = wb["Outside Context"]
-        assert ws["B6"].value == "Subject 1" and ws["D6"].value  # every row says how it matched
+        assert ws["B6"].value == "Subject 1" and ws["E6"].value and ws["D6"].value is not None  # every row says how it matched
         doc = Document(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.docx").content))
         text = "\n".join(par.text for par in doc.paragraphs)
         # The fake news is about Ridge Analytics, not this subject: a name-only hit stays out of the written report.
         assert text.count("Outside context") == 2 and "kickback scheme" not in text and "name-only (not listed)" in text
         assert "FOSTERLING, Reese" in text  # the same-name sanctions entry is reported, labeled unverified
-        assert "[Possible match, not verified] OFAC SDN list" in text
+        assert "[Possible match 50/100, not verified] OFAC SDN list" in text
         assert any(a["action"] == "context_lookup" for a in client.get("/api/audit").json())
     finally:
         mp.undo()
@@ -163,7 +163,8 @@ def test_match_strength():
     assert conf("Ridge Analytics sued", where="E.D. Va.") == "possible"  # the state alone is a weak tie
     assert conf("Local ridge hiking analytics app launches") == "weak"  # words apart, no corroboration
     other = cx.score({"title": "Smith v. Ridge Analytics Realty LLC", "snippet": "", "where": "", "match": "name"}, c)
-    assert other["confidence"] == "weak" and other["why"] == ["names a different business (Ridge Analytics Realty)"]
+    assert other["confidence"] == "weak" and other["score"] == 10
+    assert other["why"][0] == "names a different business (Ridge Analytics Realty), so the score is capped at 10"
     assert conf("Ridge Analytics Inc. hires CFO") == "possible"  # a legal suffix is not another business
     assert conf("10-K filed by BIGCO HOLDINGS") == "weak"  # name not shown at all
     g = cx.clues_for("GLOBAL SOLUTIONS GROUP LLC")
@@ -196,7 +197,7 @@ def test_verdicts(tmp_path):
         assert got["clues"]["city"] == "Reston" and got["clues"]["people"] == ["Dana Whitfield"]
         items = {i["title"]: i for s in got["sources"].values() for i in s["items"]}
         doj = next(i for t, i in items.items() if t.startswith("Virginia Contractor"))
-        assert doj["confidence"] == "possible" and "mentions state Virginia" in doj["why"]
+        assert doj["confidence"] == "possible" and "mentions state Virginia (+10)" in doj["why"] and doj["score"] == 60
         news = items["Ridge Analytics opens new office"]
         r = client.post("/api/context/verdict", data={"analyst": "B", **q, "item": news["id"], "verdict": "not"})
         assert r.status_code == 400  # ruling a hit out needs a reason
@@ -310,3 +311,41 @@ def test_brave_search(tmp_path, monkeypatch):
     monkeypatch.delenv("BRAVE_API_KEY")
     off = cx.lookup("RIDGE ANALYTICS LLC", fetch=fetch, cache_dir=tmp_path)
     assert "brave" not in off["sources"] and off["web_search"] is False
+
+
+def test_scores_and_junk_controls(tmp_path):
+    c = cx.clues_for("RIDGE ANALYTICS LLC", uei="SYNG6LE0B3VU", state="VA", city="Reston", people=["Dana Whitfield"])
+    def sc(title, url="https://news.example/x", snippet=""):
+        return cx.score({"title": title, "snippet": snippet, "where": "", "url": url, "match": "name"}, c)
+    assert sc("Ridge Analytics opens office")["score"] == 40
+    assert sc("Ridge Analytics opens office", url="https://www.bizapedia.com/va/ridge")["score"] == 25  # directory site
+    assert sc("Ridge Analytics LLC sued in Reston", url="https://www.justice.gov/x")["score"] == 80
+    assert sc("Ridge Analytics CEO Dana Whitfield, Reston", snippet="UEI SYNG6LE0B3VU")["score"] == 99  # capped
+    assert sc("Ridge Analytics opens office")["why"] == ["name without legal suffix (+40)"]
+
+    mp, appmod, client = _client(tmp_path)
+    try:
+        appmod.store.context_fetch = fake_sources()
+        q = {"uei": "SYNG6LE0B3VU", "name": "Ridge Analytics LLC"}
+        got = client.post("/api/context", data={"analyst": "A", **q}).json()
+        news = [i for i in got["sources"]["news"]["items"]]
+        # Bulk rule-out of several hits at once.
+        r = client.post("/api/context/verdict", data={"analyst": "B", **q, "item": ",".join(i["id"] for i in news),
+                                                      "verdict": "not", "note": "Name only, ruled out in bulk"})
+        assert r.status_code == 200, r.text
+        assert r.json()["tally"]["dismissed"] == len(news)
+        # Muting a site rules out its hits everywhere, unless someone decided one individually.
+        assert client.post("/api/context/muted-sites", data={"analyst": "B", "host": "not a host"}).status_code == 400
+        r = client.post("/api/context/muted-sites", data={"analyst": "B", "host": "www.CourtListener.com", "note": "noise"})
+        assert r.json()["sites"]["courtlistener.com"]["by"] == "B"
+        cxt = client.get("/api/context", params={"uei": q["uei"]}).json()["context"]
+        court = cxt["sources"]["courts"]["items"][0]
+        assert court["verdict"]["muted"] and court["verdict"]["note"] == "Site courtlistener.com muted: noise"
+        client.post("/api/context/muted-sites", data={"analyst": "B", "host": "courtlistener.com", "mute": "false"})
+        cxt = client.get("/api/context", params={"uei": q["uei"]}).json()["context"]
+        assert cxt["sources"]["courts"]["items"][0]["verdict"] is None
+        assert client.get("/api/context/muted-sites").json()["sites"] == {}
+        log = [a["action"] for a in client.get("/api/audit").json()]
+        assert log.count("context_mute_site") == 2
+    finally:
+        mp.undo()
