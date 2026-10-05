@@ -1,14 +1,17 @@
-// Outside context (news, DOJ, federal courts, SEC, OFAC) for one vendor, subject or person.
+// Outside context (news, DOJ, federal courts, SEC, sanctions and exclusion lists, registries) for one vendor, subject or person.
 // Each hit says how well it matches what we know about the subject, and an analyst can confirm it or rule it out.
 import { useState } from 'react'
 import { useAnalystName } from './App'
 import { api } from './api'
-import type { ContextItem, ContextTally, OutsideContext } from './api'
+import type { CheckFinding, ContextItem, ContextTally, OutsideContext } from './api'
 
 const TAG_STYLE: Record<string, string> = {
   criminal: 'bg-crimson-50 text-crimson',
   'civil enforcement': 'bg-crimson-50 text-crimson',
   procurement: 'bg-amber-50 text-amber-800',
+  registry: 'bg-amber-50 text-amber-800',
+  pep: 'bg-violet-50 text-violet-800',
+  watchlist: 'bg-amber-50 text-amber-800',
   litigation: 'bg-violet-50 text-violet-800',
   sanctions: 'bg-crimson-50 text-crimson',
 }
@@ -203,6 +206,49 @@ function Item({
   )
 }
 
+const LEAN_STYLE: Record<CheckFinding['lean'], string> = {
+  strengthens: 'text-crimson',
+  weakens: 'text-emerald-700',
+  context: 'text-slate-500',
+}
+
+/** What the vendor's own SAM website and address show, checked directly (no name matching, so nothing to confirm). */
+function EntityChecks({ c }: { c: OutsideContext }) {
+  const w = c.checks?.website
+  const a = c.checks?.address
+  if (!w && !a) return null
+  const rows: [string, CheckFinding[], string[]][] = []
+  if (a) rows.push(['Address (USPS via Smarty)', a.findings, a.errors])
+  if (w) rows.push([w.domain ? `Website ${w.domain}` : 'Website', w.findings, w.errors])
+  return (
+    <div className="mb-2 rounded-md bg-slate-50 p-2 text-xs">
+      <div className="mb-1 font-medium text-slate-600">From the vendor's own SAM registration</div>
+      <ul className="space-y-0.5">
+        {rows.map(([label, findings, errors]) => (
+          <li key={label}>
+            <span className="font-medium">{label}:</span>{' '}
+            {findings.length === 0 && errors.length === 0 && <span className="text-slate-500">nothing unusual</span>}
+            {findings.map((f, n) => (
+              <span key={n} className={LEAN_STYLE[f.lean]}>
+                {n > 0 && '; '}
+                {f.text}
+              </span>
+            ))}
+            {errors.length > 0 && <span className="text-amber-700"> {errors.join('; ')}</span>}
+            {w && label.startsWith('Website') && w.registered && !findings.some((f) => f.text.includes(w.registered)) && (
+              <span className="text-slate-500">
+                {' '}
+                (registered {w.registered}
+                {w.first_capture && `, archived ${w.first_capture} to ${w.last_capture}`})
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export function ContextPanel({ c: initial, title = 'Outside context', runId }: { c: OutsideContext; title?: string; runId?: string }) {
   const [analyst] = useAnalystName()
   const [c, setC] = useState(initial)
@@ -313,6 +359,7 @@ export function ContextPanel({ c: initial, title = 'Outside context', runId }: {
         someone confirms it.
       </p>
       {error && <p className="mt-1 text-xs text-crimson">{error}</p>}
+      <EntityChecks c={c} />
       {main.length > 0 ? (
         <ul className="mt-1 divide-y divide-slate-100">
           {main.map((i) => (
@@ -359,6 +406,19 @@ export function ContextPanel({ c: initial, title = 'Outside context', runId }: {
         </div>
       )}
       {errors.length > 0 && <p className="mt-1 text-xs text-amber-700">Not checked: {errors.map(([, s]) => s.error).join('; ')}.</p>}
+      {c.keys && !c.person && (!c.keys.opensanctions || !c.keys.opencorporates || !c.keys.smarty) && (
+        <p className="mt-1 text-xs text-slate-500">
+          Off until an administrator adds a key on the server:{' '}
+          {[
+            !c.keys.opensanctions && 'OpenSanctions (OPENSANCTIONS_API_KEY)',
+            !c.keys.opencorporates && 'OpenCorporates (OPENCORPORATES_API_TOKEN)',
+            !c.keys.smarty && 'USPS address check (SMARTY_AUTH_ID and SMARTY_AUTH_TOKEN)',
+          ]
+            .filter(Boolean)
+            .join(', ')}
+          .
+        </p>
+      )}
       {c.web_search === false && (
         <p className="mt-1 text-xs text-slate-500">Web search (Brave) is off. An administrator turns it on by setting BRAVE_API_KEY on the server.</p>
       )}

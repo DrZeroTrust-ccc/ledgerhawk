@@ -426,9 +426,24 @@ export type OutsideContext = {
   tally: ContextTally
   generic: boolean
   web_search?: boolean
+  keys?: { opensanctions: boolean; opencorporates: boolean; smarty: boolean }
+  checks?: { website?: WebsiteCheck; address?: AddressCheck }
   ref?: number | null
   person_ref?: number | null
 }
+
+export type CheckFinding = { lean: 'strengthens' | 'weakens' | 'context'; text: string }
+export type WebsiteCheck = {
+  domain: string
+  url: string
+  registered: string
+  first_capture: string
+  last_capture: string
+  captures: number | null
+  errors: string[]
+  findings: CheckFinding[]
+}
+export type AddressCheck = { address: string; rdi: string; cmra: boolean; vacant: boolean; deliverable: boolean | null; errors: string[]; findings: CheckFinding[] }
 
 export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
 
