@@ -244,6 +244,7 @@ export default function QueuePage() {
         <select value={disposition} onChange={(e) => set('disposition', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any disposition</option>
           <option value="none">Not yet dispositioned</option>
+          <option value="carried">Carried from an earlier run</option>
           {meta.data?.dispositions.map((d) => (
             <option key={d} value={d}>
               {d}
@@ -360,8 +361,9 @@ export default function QueuePage() {
                       <td className="px-5 py-2.5 text-xs">
                         {r.disposition ? (
                           <>
-                            <div className="font-medium">{r.disposition.value}</div>
+                            <div className={`font-medium ${r.disposition.carried_from ? 'text-amber-800' : ''}`}>{r.disposition.value}</div>
                             <div className="text-slate-500">
+                              {r.disposition.carried_from ? `Carried from ${r.disposition.carried_from.created_at.slice(0, 10)} run · ` : ''}
                               {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
                             </div>
                           </>

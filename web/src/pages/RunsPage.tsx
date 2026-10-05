@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { lastPlace } from '../nav'
-import { api, money, num, queueTotal, type Source } from '../api'
+import { api, money, num, queueTotal, type RunMeta, type Source } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
 
@@ -105,7 +105,7 @@ function DataSources({ sources, reload }: { sources: Source[] | null; reload: ()
   )
 }
 
-function UploadForm({ sources }: { sources: Source[] }) {
+function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
   const [analyst] = useAnalystName()
   const nav = useNavigate()
   const samSources = sources.filter((s) => s.kind === 'sam')
@@ -116,6 +116,7 @@ function UploadForm({ sources }: { sources: Source[] }) {
   const [exclusions, setExclusions] = useState<File | null>(null)
   const [exDate, setExDate] = useState('')
   const [synthetic, setSynthetic] = useState(false)
+  const [follows, setFollows] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -132,6 +133,7 @@ function UploadForm({ sources }: { sources: Source[] }) {
     f.append('analyst', analyst)
     f.append('sam_source', samSource)
     if (!exclusions) f.append('exclusions_source', exSource)
+    if (follows) f.append('follows', follows)
     try {
       const { id } = await api.createRun(f)
       nav(`/runs/${id}`)
@@ -202,6 +204,18 @@ function UploadForm({ sources }: { sources: Source[] }) {
             />
           </label>
         )}
+        <label className="space-y-1.5">
+          <span className="block text-sm font-medium">Follow-up to an earlier run?</span>
+          <select value={follows} onChange={(e) => setFollows(e.target.value)} className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm">
+            <option value="">No, this is a new list</option>
+            {runs.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.label} · {r.created_at.slice(0, 10)}
+              </option>
+            ))}
+          </select>
+          <span className="block text-xs text-slate-500">A follow-up shows what changed and carries the earlier run's decisions, labeled.</span>
+        </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} />
           This is synthetic or demo data
@@ -246,7 +260,7 @@ export default function RunsPage() {
         </p>
       </div>
       <Card title="Start a new run">
-        <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} />
+        <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} runs={runs ?? []} />
       </Card>
       <DataSources sources={sources.data?.sources ?? null} reload={sources.reload} />
       <Card title="Previous runs">
@@ -277,6 +291,12 @@ export default function RunsPage() {
                         </Link>{' '}
                         <DataClassBadge dataClass={r.data_class} />
                         {r.parent_id && <div className="text-xs text-slate-500">Rerun with {r.restore.length} restored vendor(s)</div>}
+                        {r.follows_id && (
+                          <div className="text-xs text-slate-500">
+                            Follow-up to {runs.find((x) => x.id === r.follows_id)?.label ?? r.follows_id} of{' '}
+                            {runs.find((x) => x.id === r.follows_id)?.created_at.slice(0, 10) ?? 'an earlier run'}
+                          </div>
+                        )}
                       </td>
                       <td className="py-2.5 text-slate-600">
                         {new Date(r.created_at).toLocaleString()} · {r.created_by}

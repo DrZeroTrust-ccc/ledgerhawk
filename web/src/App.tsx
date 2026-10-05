@@ -12,6 +12,7 @@ import ExclusionGapsPage from './pages/ExclusionGapsPage'
 import IntegrityPage from './pages/IntegrityPage'
 import SubjectsPage from './pages/SubjectsPage'
 import SubjectScreenPage from './pages/SubjectScreenPage'
+import RunRecordPage from './pages/RunRecordPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -76,6 +77,7 @@ function RunBar() {
             {runs?.map((r) => (
               <option key={r.id} value={r.id}>
                 {r.label} · {r.created_at.slice(0, 10)}
+                {r.follows_id ? ' · follow-up' : ''}
                 {r.data_class === 'synthetic' ? ' · synthetic' : ''}
               </option>
             ))}
@@ -93,6 +95,9 @@ function RunBar() {
           </NavLink>
           <NavLink to={`/runs/${id}/exclusion-gaps`} className={sub}>
             Exclusion gaps
+          </NavLink>
+          <NavLink to={`/runs/${id}/record`} className={sub}>
+            Run record
           </NavLink>
         </div>
       </div>
@@ -136,6 +141,7 @@ export default function App() {
             <Route path="/runs/:id/vendors/:uei" element={<VendorPage />} />
             <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
             <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
+            <Route path="/runs/:id/record" element={<RunRecordPage />} />
             <Route path="/subjects" element={<SubjectsPage />} />
             <Route path="/subjects/:id" element={<SubjectScreenPage />} />
             <Route path="/audit" element={<AuditPage />} />

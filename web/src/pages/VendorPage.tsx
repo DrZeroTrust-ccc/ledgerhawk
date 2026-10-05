@@ -78,6 +78,9 @@ const HISTORY_LABEL: Record<string, string> = {
   tier: 'Tier',
   routing: 'Routing',
   assigned: 'Assignment',
+  disposition_confirmed: 'Kept earlier decision',
+  context_lookup: 'Outside context search',
+  context_verdict: 'Outside context call',
 }
 
 const ROLE: Record<string, string> = {
@@ -298,12 +301,39 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
       }}
     >
       {v.disposition && (
-        <div className="rounded-md bg-slate-50 p-3 text-sm">
+        <div className={`rounded-md p-3 text-sm ${v.disposition.carried_from ? 'border border-dashed border-amber-300 bg-amber-50/60' : 'bg-slate-50'}`}>
+          {v.disposition.carried_from && (
+            <div className="mb-1 text-xs font-medium text-amber-800">
+              Carried from run {v.disposition.carried_from.label} of {v.disposition.carried_from.created_at.slice(0, 10)}. Not yet decided in this run.
+            </div>
+          )}
           <div className="font-medium">{v.disposition.value}</div>
           <div className="text-slate-600">{v.disposition.note}</div>
           <div className="mt-1 text-xs text-slate-500">
             {v.disposition.analyst} · {new Date(v.disposition.at).toLocaleString()}
           </div>
+          {v.disposition.carried_from && (
+            <Button
+              type="button"
+              variant="secondary"
+              className="mt-2"
+              disabled={busy || !analyst.trim()}
+              onClick={async () => {
+                setBusy(true)
+                setError(null)
+                try {
+                  await api.confirmCarried(runId, { ueis: [v.uei], analyst })
+                  onSaved()
+                } catch (err) {
+                  setError((err as Error).message)
+                } finally {
+                  setBusy(false)
+                }
+              }}
+            >
+              Keep this decision in this run
+            </Button>
+          )}
         </div>
       )}
       <select required value={value} onChange={(e) => setValue(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm">
@@ -331,7 +361,7 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
   )
 }
 
-function OutsideContextCard({ v }: { v: VendorDetail }) {
+function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
   const [analyst] = useAnalystName()
   const got = useAsync(() => api.context({ uei: v.uei }), [v.uei])
   const [busy, setBusy] = useState(false)
@@ -344,6 +374,7 @@ function OutsideContextCard({ v }: { v: VendorDetail }) {
     f.append('analyst', analyst)
     f.append('name', v.sam?.legal_name || v.name)
     f.append('uei', v.uei)
+    f.append('run_id', runId)
     f.append('state', v.sam?.state ?? '')
     // What we already know about the vendor, so its hits can be told from same-name strangers.
     f.append('city', v.sam?.city ?? '')
@@ -370,7 +401,7 @@ function OutsideContextCard({ v }: { v: VendorDetail }) {
     >
       <ErrorNote error={error || got.error} />
       {c ? (
-        <ContextPanel key={c.fetched_at} c={c} title="Results" />
+        <ContextPanel key={c.fetched_at} c={c} title="Results" runId={runId} />
       ) : (
         !busy && (
           <p className="text-sm text-slate-500">
@@ -515,7 +546,7 @@ export default function VendorPage() {
             )}
           </Card>
 
-          <OutsideContextCard v={v} />
+          <OutsideContextCard runId={id} v={v} />
         </div>
 
         <div className="min-w-0 space-y-6">
@@ -550,6 +581,14 @@ export default function VendorPage() {
                 <li key={i} className="text-sm">
                   <div className="text-xs text-slate-500">
                     {new Date(h.at).toLocaleString()} · {h.analyst}
+                    {h.other_run && (
+                      <>
+                        {' · '}
+                        <Link to={`/runs/${h.other_run.id}/vendors/${v.uei}`} className="rounded bg-slate-100 px-1 text-slate-600 hover:underline">
+                          run {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
+                        </Link>
+                      </>
+                    )}
                   </div>
                   <div>
                     <span className="font-medium">{HISTORY_LABEL[h.action] ?? h.action}</span>: {h.detail}

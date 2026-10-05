@@ -43,10 +43,15 @@ def _place(v: dict) -> str:
     return ", ".join(x for x in (card.get("city"), card.get("state")) if x)
 
 
+def carried_note(d: dict) -> str:
+    c = d.get("carried_from")
+    return f"; carried from run {c['label']} of {c['created_at'][:10]}, not yet confirmed in this run" if c else ""
+
+
 def _disposition(d: dict | None) -> str:
     if not d:
         return ""
-    return f"{d['value']}: {d['note']} ({d['analyst']}, {d['at'][:10]})"
+    return f"{d['value']}: {d['note']} ({d['analyst']}, {d['at'][:10]}{carried_note(d)})"
 
 
 def ordered(items: list[dict]) -> list[dict]:
@@ -55,8 +60,9 @@ def ordered(items: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda i: (i["wf"]["tier"], -i["v"]["tot"]))
 
 
-def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = None) -> bytes:
-    """items: [{"v": vendor record, "wf": effective workflow, "disposition": dict | None}] for the run's queued vendors."""
+def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = None, log: list[dict] | None = None) -> bytes:
+    """items: [{"v": vendor record, "wf": effective workflow, "disposition": dict | None}] for the run's queued vendors.
+    log: the run's log (newest first), written to a Run Log sheet so the workbook shows what was done in this run."""
     generated_at = generated_at or datetime.now(timezone.utc)
     meta = summary.get("meta", {})
     man = summary.get("manifest", {})
@@ -109,6 +115,8 @@ def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = 
     ws.auto_filter.ref = f"B5:M{last}"
 
     _read_me(wb.create_sheet("Read Me"), summary, items, rows, last)
+    if log is not None:
+        _run_log(wb.create_sheet("Run Log"), summary, log)
 
     p = wb.properties
     p.creator = p.lastModifiedBy = "LedgerHawk"
@@ -117,6 +125,27 @@ def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _run_log(ws, summary: dict, log: list[dict]) -> None:
+    meta = summary.get("meta", {})
+    ws.column_dimensions["A"].width = 3
+    for col, w in zip("BCDEF", (18, 22, 22, 16, 90)):
+        ws.column_dimensions[col].width = w
+    ws["B2"] = f"Run Log: {meta.get('label', '')} (run {meta.get('id', '')})"
+    ws["B2"].font = Font(bold=True, size=16, color=NAVY)
+    ws["B3"] = "Every analyst action taken in this run, oldest first. Decisions carried from an earlier run are logged there."
+    ws["B3"].font = Font(italic=True, color=MUTED)
+    for c, h in enumerate(["When (UTC)", "Analyst", "Action", "UEI", "Detail"], start=2):
+        cell = ws.cell(5, c, h)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor=NAVY)
+    for r, h in enumerate(reversed(log), start=6):
+        for c, val in enumerate([h["at"][:19].replace("T", " "), h["analyst"], h["action"].replace("_", " "), h.get("uei") or "",
+                                 h["detail"]], start=2):
+            ws.cell(r, c, val).alignment = Alignment(wrap_text=c == 6, vertical="top")
+    ws.freeze_panes = "B6"
+    ws.auto_filter.ref = f"B5:F{5 + max(len(log), 1)}"
 
 
 def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) -> None:
