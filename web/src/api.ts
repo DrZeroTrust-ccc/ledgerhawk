@@ -355,8 +355,10 @@ export type ContextItem = {
   tags: string[]
   id: string
   confidence: 'strong' | 'possible' | 'weak'
+  score: number
   why: string[]
-  verdict: { verdict: 'same' | 'not' | 'unsure'; note: string; by: string; at: string } | null
+  query?: string
+  verdict: { verdict: 'same' | 'not' | 'unsure'; note: string; by: string; at: string; muted?: boolean } | null
 }
 
 export type ContextTally = { confirmed: number; strong: number; possible: number; weak: number; dismissed: number; unsure: number }
@@ -483,6 +485,8 @@ export const api = {
     ),
   lookupContext: (form: FormData) => req<OutsideContext>('/api/context', { method: 'POST', body: form }),
   contextVerdict: (form: FormData) => req<OutsideContext>('/api/context/verdict', { method: 'POST', body: form }),
+  muteSite: (form: FormData) =>
+    req<{ sites: Record<string, { by: string; at: string; note: string }> }>('/api/context/muted-sites', { method: 'POST', body: form }),
   fetchScreenContext: (id: string, form: FormData) =>
     req<ScreenContext>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>

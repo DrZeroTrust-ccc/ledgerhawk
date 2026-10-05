@@ -323,7 +323,32 @@ class Store:
         return json.loads(f.read_text()) if f.exists() else {}
 
     def _with_verdicts(self, res: dict) -> dict:
-        return context_mod.apply_verdicts(res, self._verdicts(res.get("uei", ""), res["name"], res.get("person", False)))
+        return context_mod.apply_verdicts(res, self._verdicts(res.get("uei", ""), res["name"], res.get("person", False)),
+                                          self.muted_sites())
+
+    def muted_sites(self) -> dict:
+        f = self.root / "context" / "muted_sites.json"
+        return json.loads(f.read_text()) if f.exists() else {}
+
+    def mute_site(self, *, analyst: str, host: str, note: str = "", mute: bool = True) -> dict:
+        """Mute a site whose results are junk (a business directory, a data broker): its hits count as ruled out in
+        every lookup, past and future, unless an analyst decides one individually. Unmuting brings them back."""
+        host = host.strip().lower().removeprefix("www.")
+        if not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", host):
+            raise ValueError("Give a site name such as bizapedia.com.")
+        sites = self.muted_sites()
+        if mute:
+            sites[host] = {"by": analyst.strip(), "at": _now(), "note": note.strip()}
+        else:
+            sites.pop(host, None)
+        d = self.root / "context"
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / "muted_sites.tmp"
+        tmp.write_text(json.dumps(sites, indent=2))
+        tmp.replace(d / "muted_sites.json")
+        self.audit(analyst, "context_mute_site", None, None, f"{'Muted' if mute else 'Unmuted'} {host} in outside context"
+                   + (f" ({note.strip()})" if note.strip() else ""))
+        return sites
 
     def context(self, *, uei: str = "", name: str = "", person: bool = False) -> dict | None:
         d = self._context_dir(uei, name, person)
@@ -348,10 +373,21 @@ class Store:
                    "enforcement or litigation language")
         return out
 
-    def context_verdict(self, *, analyst: str, item: str, verdict: str, note: str = "", uei: str = "", name: str = "",
-                        person: bool = False) -> dict:
-        """An analyst's call on one hit: the same entity, not our subject, or unsure ('' clears it). Kept per entity so
-        it holds across refreshes, the vendor page and every screen that includes the entity."""
+    def _context_hits(self, uei: str, name: str, person: bool) -> dict:
+        """Every hit in any snapshot for the entity, by id, so a call can be made from an older screen's lookup too."""
+        d = self._context_dir(uei, name, person)
+        hits = {}
+        for f in sorted(d.glob("*.json")) if d.exists() else []:
+            if f.name == "verdicts.json":
+                continue
+            res = context_mod.apply_verdicts(json.loads(f.read_text()), {})
+            hits.update({i["id"]: i for s in res["sources"].values() for i in s["items"]})
+        return hits
+
+    def context_verdict(self, *, analyst: str, item: str | list[str], verdict: str, note: str = "", uei: str = "",
+                        name: str = "", person: bool = False) -> dict:
+        """An analyst's call on one hit or several: the same entity, not our subject, or unsure ('' clears it). Kept per
+        entity so it holds across refreshes, the vendor page and every screen that includes the entity."""
         if verdict and verdict not in context_mod.VERDICTS:
             raise ValueError("Unknown verdict.")
         if verdict == "not" and not note.strip():
@@ -359,22 +395,26 @@ class Store:
         cur = self.context(uei=uei, name=name, person=person)
         if cur is None:
             raise KeyError(name or uei)
-        hit = next((i for s in cur["sources"].values() for i in s["items"] if i["id"] == item), None)
-        if hit is None:
-            raise KeyError(item)
+        ids = [item] if isinstance(item, str) else list(dict.fromkeys(item))
+        known = self._context_hits(uei, name, person)
+        hits = [known[i] for i in ids if i in known]
+        if not hits:
+            raise KeyError(",".join(ids))
         d = self._context_dir(uei, name, person)
         verdicts = self._verdicts(uei, name, person)
-        if verdict:
-            verdicts[item] = {"verdict": verdict, "note": note.strip(), "by": analyst.strip(), "at": _now(),
-                              "title": hit["title"], "url": hit["url"], "source": hit["source"]}
-        else:
-            verdicts.pop(item, None)
+        for hit in hits:
+            if verdict:
+                verdicts[hit["id"]] = {"verdict": verdict, "note": note.strip(), "by": analyst.strip(), "at": _now(),
+                                       "title": hit["title"], "url": hit["url"], "source": hit["source"]}
+            else:
+                verdicts.pop(hit["id"], None)
         tmp = d / "verdicts.tmp"
         tmp.write_text(json.dumps(verdicts, indent=2))
         tmp.replace(d / "verdicts.json")
         label = context_mod.VERDICTS.get(verdict, "cleared")
+        what = (f"{hits[0]['source']} \"{hits[0]['title'][:120]}\"" if len(hits) == 1 else f"{len(hits)} results")
         self.audit(analyst, "context_verdict", uei or None, None,
-                   f"{label}: {hit['source']} \"{hit['title'][:120]}\" for {cur['name']}" + (f" ({note.strip()})" if note.strip() else ""))
+                   f"{label}: {what} for {cur['name']}" + (f" ({note.strip()})" if note.strip() else ""))
         return self.context(uei=uei, name=name, person=person)
 
     def screen_context(self, sid: str, analyst: str) -> dict:

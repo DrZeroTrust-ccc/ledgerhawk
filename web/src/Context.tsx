@@ -29,15 +29,40 @@ const RANK: Record<string, number> = { strong: 0, possible: 1, weak: 2 }
 
 const verdictOf = (i: ContextItem) => i.verdict?.verdict ?? ''
 
-/** Confirmed first, then strong, possible and name-only; enforcement language first in each, then newest. */
+/** Confirmed first, then by match score; enforcement language first among equal scores, then newest. */
 export function contextItems(c: OutsideContext): ContextItem[] {
   const band = (i: ContextItem) => (verdictOf(i) === 'not' ? 9 : verdictOf(i) === 'same' ? -1 : RANK[i.confidence] ?? 2)
   return Object.values(c.sources)
     .flatMap((s) => s.items)
     .sort(
       (a, b) =>
-        band(a) - band(b) || Number(!a.tags.length) - Number(!b.tags.length) || (b.date || '').localeCompare(a.date || ''),
+        band(a) - band(b) ||
+        (b.score ?? 0) - (a.score ?? 0) ||
+        Number(!a.tags.length) - Number(!b.tags.length) ||
+        (b.date || '').localeCompare(a.date || ''),
     )
+}
+
+const hostOf = (i: ContextItem) => {
+  try {
+    return new URL(i.url).hostname.replace(/^www\./, '')
+  } catch {
+    return ''
+  }
+}
+
+/** The score as a small meter: how much of what we know about the subject this item shows. */
+function Score({ i }: { i: ContextItem }) {
+  const s = i.score ?? 0
+  const color = s >= 70 ? 'bg-emerald-600' : s >= 40 ? 'bg-amber-500' : 'bg-slate-400'
+  return (
+    <span className="inline-flex items-center gap-1" title={`Match score ${s}/100: ${i.why?.join('; ')}`}>
+      <span className="relative inline-block h-1.5 w-10 overflow-hidden rounded bg-slate-200">
+        <span className={`absolute inset-y-0 left-0 ${color}`} style={{ width: `${s}%` }} />
+      </span>
+      <span className="text-[11px] tabular-nums text-slate-600">{s}</span>
+    </span>
+  )
 }
 
 function tally(c: OutsideContext): ContextTally {
@@ -52,7 +77,15 @@ function tally(c: OutsideContext): ContextTally {
   return t
 }
 
-function Item({ i, decide }: { i: ContextItem; decide: (i: ContextItem, verdict: string, note: string) => Promise<void> }) {
+function Item({
+  i,
+  decide,
+  mute,
+}: {
+  i: ContextItem
+  decide: (i: ContextItem, verdict: string, note: string) => Promise<void>
+  mute: (host: string, on: boolean) => Promise<void>
+}) {
   const [analyst] = useAnalystName()
   const [why, setWhy] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -75,8 +108,9 @@ function Item({ i, decide }: { i: ContextItem; decide: (i: ContextItem, verdict:
           className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ${v ? VERDICT[v].style : m.style}`}
           title={i.why?.join('; ')}
         >
-          {v ? VERDICT[v].label : m.label}
+          {v ? (i.verdict?.muted ? 'Site muted' : VERDICT[v].label) : m.label}
         </span>
+        <Score i={i} />
         <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600">{i.source}</span>
         {i.url ? (
           <a href={i.url} target="_blank" rel="noreferrer" className={`text-navy hover:underline ${v === 'not' ? 'line-through' : ''}`}>
@@ -95,10 +129,11 @@ function Item({ i, decide }: { i: ContextItem; decide: (i: ContextItem, verdict:
         {[i.where, i.date].filter(Boolean).join(' · ')}
         {i.why?.length > 0 && <span className="text-slate-400">{i.where || i.date ? ' · ' : ''}Why: {i.why.join('; ')}</span>}
       </div>
+      {i.query && <div className="text-[11px] text-slate-400">Found by searching {i.query}</div>}
       {i.verdict && (
         <div className="text-xs text-slate-600">
-          {VERDICT[v].label} by {i.verdict.by}, {i.verdict.at.slice(0, 10)}
-          {i.verdict.note && <>: “{i.verdict.note}”</>}
+          {i.verdict.muted ? i.verdict.note : VERDICT[v].label} by {i.verdict.by}, {i.verdict.at.slice(0, 10)}
+          {!i.verdict.muted && i.verdict.note && <>: “{i.verdict.note}”</>}
         </div>
       )}
       <div className="mt-1 flex flex-wrap items-center gap-1">
@@ -117,9 +152,26 @@ function Item({ i, decide }: { i: ContextItem; decide: (i: ContextItem, verdict:
             Unsure
           </button>
         )}
-        {v && (
+        {v && !i.verdict?.muted && (
           <button className={btn} disabled={busy || !analyst.trim()} onClick={() => go('')}>
             Clear
+          </button>
+        )}
+        {hostOf(i) && (
+          <button
+            className={btn}
+            disabled={busy || !analyst.trim()}
+            title={i.verdict?.muted ? 'Show results from this site again' : 'Rule out every result from this site, in all lookups'}
+            onClick={async () => {
+              setBusy(true)
+              try {
+                await mute(hostOf(i), !i.verdict?.muted)
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            {i.verdict?.muted ? `Unmute ${hostOf(i)}` : `Mute ${hostOf(i)}`}
           </button>
         )}
         {!analyst.trim() && <span className="text-[11px] text-slate-400">Enter your name in the header to record a decision.</span>}
@@ -166,11 +218,22 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
 
   // Record the call, then take the verdicts back from the server by item id. This panel keeps its own snapshot (a
   // screen's lookup can be older than the entity's latest), so only the verdicts are merged in.
-  const decide = async (i: ContextItem, verdict: string, note: string) => {
+  const merge = (ids: Set<string>, got: Map<string, ContextItem['verdict']>) =>
+    setC((c) => ({
+      ...c,
+      sources: Object.fromEntries(
+        Object.entries(c.sources).map(([k, s]) => [
+          k,
+          { ...s, items: s.items.map((x) => (ids.has(x.id) ? { ...x, verdict: got.get(x.id) ?? null } : x)) },
+        ]),
+      ),
+    }))
+
+  const record = async (ids: string[], verdict: string, note: string) => {
     setError(null)
     const f = new FormData()
     f.append('analyst', analyst)
-    f.append('item', i.id)
+    f.append('item', ids.join(','))
     f.append('verdict', verdict)
     f.append('note', note)
     f.append('name', c.name)
@@ -178,16 +241,48 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
     if (c.person) f.append('person', 'true')
     try {
       const res = await api.contextVerdict(f)
-      const got = new Map(Object.values(res.sources).flatMap((s) => s.items.map((x) => [x.id, x.verdict] as const)))
-      setC({
+      merge(new Set(ids), new Map(Object.values(res.sources).flatMap((s) => s.items.map((x) => [x.id, x.verdict] as const))))
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+  const decide = (i: ContextItem, verdict: string, note: string) => record([i.id], verdict, note)
+
+  // Muting is site-wide: mark this panel's items from the site the way the server will on the next read.
+  const mute = async (host: string, on: boolean) => {
+    setError(null)
+    let note = ''
+    if (on) {
+      const n = window.prompt(`Mute ${host}? Its results will count as ruled out in every lookup until someone unmutes it. Reason (optional):`, 'Directory or junk site')
+      if (n === null) return
+      note = n
+    }
+    const f = new FormData()
+    f.append('analyst', analyst)
+    f.append('host', host)
+    f.append('note', note)
+    f.append('mute', String(on))
+    try {
+      const res = await api.muteSite(f)
+      const m = res.sites[host]
+      setC((c) => ({
         ...c,
         sources: Object.fromEntries(
           Object.entries(c.sources).map(([k, s]) => [
             k,
-            { ...s, items: s.items.map((x) => (x.id === i.id ? { ...x, verdict: got.get(x.id) ?? null } : x)) },
+            {
+              ...s,
+              items: s.items.map((x) => {
+                if (hostOf(x) !== host) return x
+                if (on && !x.verdict)
+                  return { ...x, verdict: { verdict: 'not' as const, note: `Site ${host} muted${m.note ? `: ${m.note}` : ''}`, by: m.by, at: m.at, muted: true } }
+                if (!on && x.verdict?.muted) return { ...x, verdict: null }
+                return x
+              }),
+            },
           ]),
         ),
-      })
+      }))
     } catch (err) {
       setError((err as Error).message)
     }
@@ -211,14 +306,16 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
         {c.generic && <span className="text-amber-700"> This is a common business name, so expect unrelated hits.</span>}
       </p>
       <p className="text-xs text-slate-500">
-        Strong means the item also names something we know about this {c.person ? 'person' : 'company'} (UEI, CAGE, city, an officer or a
-        related firm). Reports list only confirmed, strong and possible items, each labeled unverified until someone confirms it.
+        Each result has a match score from 0 to 100: points for the name, the UEI or CAGE code, the city or state, an officer or related firm,
+        and the kind of site. 70 or more is a strong match, 40 to 69 possible, under 40 probably another {c.person ? 'person' : 'company'}.
+        Hover a score to see how it adds up. Reports list only confirmed, strong and possible results, each labeled unverified until
+        someone confirms it.
       </p>
       {error && <p className="mt-1 text-xs text-crimson">{error}</p>}
       {main.length > 0 ? (
         <ul className="mt-1 divide-y divide-slate-100">
           {main.map((i) => (
-            <Item key={i.id} i={i} decide={decide} />
+            <Item key={i.id} i={i} decide={decide} mute={mute} />
           ))}
         </ul>
       ) : (
@@ -229,10 +326,18 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
           <button className="text-xs text-navy hover:underline" onClick={() => setShowWeak(!showWeak)}>
             {showWeak ? 'Hide' : 'Show'} {weak.length} name-only {weak.length === 1 ? 'hit' : 'hits'} (likely other {c.person ? 'people' : 'companies'})
           </button>
+          <button
+            className="ml-3 text-xs text-navy hover:underline disabled:text-slate-400"
+            disabled={!analyst.trim()}
+            title="Rule out every name-only result in this lookup at once"
+            onClick={() => record(weak.map((i) => i.id), 'not', 'Name-only match, ruled out in bulk')}
+          >
+            Rule out all {weak.length}
+          </button>
           {showWeak && (
             <ul className="divide-y divide-slate-100">
               {weak.map((i) => (
-                <Item key={i.id} i={i} decide={decide} />
+                <Item key={i.id} i={i} decide={decide} mute={mute} />
               ))}
             </ul>
           )}
@@ -246,7 +351,7 @@ export function ContextPanel({ c: initial, title = 'Outside context' }: { c: Out
           {showOut && (
             <ul className="divide-y divide-slate-100">
               {out.map((i) => (
-                <Item key={i.id} i={i} decide={decide} />
+                <Item key={i.id} i={i} decide={decide} mute={mute} />
               ))}
             </ul>
           )}

@@ -103,7 +103,7 @@ def match_label(i: dict) -> str:
         return f"Confirmed by {v['by']}"
     if v.get("verdict") == "unsure":
         return f"Unsure ({v['by']}); not verified"
-    return context_mod.CONFIDENCE[i["confidence"]] + ", not verified"
+    return f"{context_mod.CONFIDENCE[i['confidence']]} {i.get('score', 0)}/100, not verified"
 
 
 def context_summary(cx: dict) -> str:
@@ -302,23 +302,23 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         cx0 = screen["context"]
         _title(ws, "Outside Context", f"News, DOJ press releases, federal court records, SEC filings and the OFAC list, searched by "
                f"name {cx0['fetched_at'][:16].replace('T', ' ')} UTC by {cx0.get('fetched_by', '')}. Match says how far to trust "
-               "each hit: Strong means it also names something we know about the subject (UEI, CAGE, city, an officer or a "
-               "related firm); Name only means nothing but the name matched. Only items an analyst confirmed are verified. "
+               "each hit: Score (0-100) adds up what the item shows (the name, the UEI or CAGE, city or state, an officer or a "
+               "related firm, the kind of site); 70+ is Strong, 40-69 Possible, under 40 Name only. Only items an analyst confirmed are verified. "
                "Hits analysts ruled out are not listed.")
-        _head(ws, 5, ["About", "Searched As", "Match", "Why", "Source", "Title", "Where", "Date", "Flags", "Analyst Note", "Link"],
-              [16, 28, 26, 40, 22, 70, 30, 11, 26, 36, 60])
+        _head(ws, 5, ["About", "Searched As", "Score", "Match", "Why", "Source", "Title", "Where", "Date", "Flags", "Analyst Note",
+                      "Link"], [16, 28, 8, 30, 44, 22, 70, 30, 11, 26, 36, 60])
         body = []
         for cx in cxs:
             about = f"Person {cx['person_ref']}" if cx.get("person_ref") else f"Subject {cx.get('ref', '')}"
             items = context_items(cx)
             if not items:
-                body.append([about, cx["query"], "", "", "", "Nothing found" + (f" ({cx['errors']} sources did not answer)" if cx["errors"] else ""),
+                body.append([about, cx["query"], "", "", "", "", "Nothing found" + (f" ({cx['errors']} sources did not answer)" if cx["errors"] else ""),
                              "", "", "", "", ""])
             for i in items:
-                body.append([about, cx["query"], match_label(i), "; ".join(i.get("why") or []), i["source"], i["title"], i["where"],
+                body.append([about, cx["query"], i.get("score", 0), match_label(i), "; ".join(i.get("why") or []), i["source"], i["title"], i["where"],
                              i["date"], ", ".join(i["tags"]), (i.get("verdict") or {}).get("note", ""), i["url"]])
         last = _rows(ws, 6, body, set(), 30)
-        ws.auto_filter.ref = f"B5:L{last}"
+        ws.auto_filter.ref = f"B5:M{last}"
 
     notes = (screen.get("review") or {}).get("notes") or []
     if notes:
