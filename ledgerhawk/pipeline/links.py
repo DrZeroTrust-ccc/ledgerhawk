@@ -15,7 +15,7 @@ import pandas as pd
 from .exclusions import ExclusionsExtract
 from .normalize import money
 from .rules import RuleSet
-from .sam import SamExtract, person_key, suite_key, building_key
+from .sam import SamExtract, SamSlice, person_key, suite_key, building_key
 from .stages import NONCOMMERCIAL, OUTLIER, SIGNAL_LABELS
 
 SIGNAL_LABELS.update({
@@ -37,9 +37,11 @@ def _stem(nn: str, stop: set[str]) -> str:
     return nn
 
 
-def sam_screen(df: pd.DataFrame, sam: SamExtract, rules: RuleSet, ex: ExclusionsExtract | None = None) -> pd.DataFrame:
+def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex: ExclusionsExtract | None = None) -> pd.DataFrame:
     df = df.copy()
     cap = rules.hub_cap
+    if isinstance(sam, SamExtract):  # read only the vendors' and excluded parties' rows from the extract
+        sam = sam.subset(set(df["uei"]) | (set(ex.records["uei"]) if ex is not None else set()))
     ent = sam.entities.set_index("uei")
     in_sam = df["uei"].isin(ent.index)
     pool = df["lane"] == OUTLIER
@@ -216,7 +218,7 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract, rules: RuleSet, ex: Exclusions
     return df
 
 
-def _exclusion_links(df: pd.DataFrame, sam: SamExtract, ex: ExclusionsExtract, rules: RuleSet) -> pd.DataFrame:
+def _exclusion_links(df: pd.DataFrame, sam: SamSlice, ex: ExclusionsExtract, rules: RuleSet) -> pd.DataFrame:
     """R_exaddr, R_expoc, person/address ties to excluded entities' SAM records, and name-match support."""
     cap = rules.hub_cap
     rec = ex.records.copy()

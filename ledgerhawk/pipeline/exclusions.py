@@ -8,6 +8,7 @@ extract and arrive with Stage 3.
 from __future__ import annotations
 
 import re
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -65,7 +66,8 @@ def load_exclusions(path: str | Path, extract_date: date) -> ExclusionsExtract:
     The extract date (not today's date) is used so reruns are deterministic.
     """
     path = Path(path)
-    raw = pd.read_csv(path, dtype=str, keep_default_na=False, encoding_errors="replace")
+    zipped = zipfile.is_zipfile(path)  # SAM.gov ships the CSV inside a ZIP
+    raw = pd.read_csv(path, dtype=str, keep_default_na=False, encoding_errors="replace", compression="zip" if zipped else None)
     lookup = {_key(a): k for k, al in EXCL_COLUMNS.items() for a in al}
     mapping = {}
     for c in raw.columns:

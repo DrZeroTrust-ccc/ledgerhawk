@@ -82,7 +82,7 @@ def test_sam_cache_and_determinism(run, tmp_path):
     res, _, _, (vendors, excl, sam) = run
     a = load_sam(sam, SAM_DATE)
     b = load_sam(sam, SAM_DATE)  # second load reads the cache
-    assert a.sha256 == b.sha256 and a.records == b.records and a.freq_suite == b.freq_suite
+    assert a.sha256 == b.sha256 and a.records == b.records and a.db == b.db and a.db.exists()
     again = run_pipeline(vendors, excl, EXCL_DATE, sam_file=sam, sam_extract_date=SAM_DATE)
     assert again.queue_counts == res.queue_counts
     assert res.manifest["sam_extract_date"] == "2026-09-06" and res.manifest["sam_sha256"] == a.sha256

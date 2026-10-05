@@ -104,6 +104,10 @@ export type GraphNode = {
 export type GraphEdge = { source: string; target: string; kind: string; label: string }
 export type Graph = { nodes: GraphNode[]; edges: GraphEdge[]; paths_to_excluded: { to: string; agency: string; hops: number | null }[] }
 
+type AutoKind = { checked_at?: string; fetched_at?: string; as_of?: string; error?: string }
+/** Automatic downloads from SAM.gov: on when the server has a SAM_API_KEY. */
+export type AutoSources = { enabled: boolean; running: boolean; sam?: AutoKind; exclusions?: AutoKind }
+
 export type Source = {
   id: string
   kind: 'sam' | 'exclusions'
@@ -556,7 +560,8 @@ export const api = {
   restore: (id: string, uei: string, body: { note: string; analyst: string }) =>
     req<{ id: string }>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/restore`, json(body)),
   audit: () => req<HistoryItem[]>('/api/audit'),
-  sources: () => req<{ sources: Source[] }>('/api/sources'),
+  sources: () => req<{ sources: Source[]; auto?: AutoSources }>('/api/sources'),
+  refreshSources: (form: FormData) => req<AutoSources>('/api/sources/refresh', { method: 'POST', body: form }),
   addSource: (form: FormData) => req<Source>('/api/sources', { method: 'POST', body: form }),
   graph: (id: string, uei: string) => req<Graph>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/graph`),
   gaps: (id: string) => req<GapGroup[]>(`/api/runs/${id}/exclusion-gaps`),

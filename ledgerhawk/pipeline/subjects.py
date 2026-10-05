@@ -124,12 +124,10 @@ def subject_screen(
     rules = rules or RuleSet()
     dollars = dollars or {}
     cap = rules.hub_cap
-    ent = sam.entities.set_index("uei") if sam else None
-
     # 1. Resolve each subject to SAM registrations.
     rows: list[dict] = []   # one per screened entity (subjects first, then related)
     resolved: list[dict] = []
-    by_nn = sam.entities.groupby("nn").groups if sam else {}
+    ent = sam.entities_for(s["uei"] for s in subjects).set_index("uei") if sam else None
     for s in subjects:
         r = {**s, "matches": []}
         if s["uei"]:
@@ -138,7 +136,7 @@ def subject_screen(
             r["matches"] = [s["uei"]]
         else:
             nn = normalize_name(s["name"])
-            hits = [sam.entities.at[i, "uei"] for i in by_nn.get(nn, [])][:MAX_NAME_MATCHES] if sam else []
+            hits = sam.ueis_named(nn, MAX_NAME_MATCHES) if sam else []
             r["matches"] = hits
             if not sam:
                 r["resolution"] = "Name only (no SAM extract)"
@@ -157,6 +155,8 @@ def subject_screen(
                 subject_ueis.setdefault(u, []).append(r["ref"])
         else:
             rows.append({"uei": "", "name": r["name"], "_key": f"ref:{r['ref']}"})
+    if sam:
+        ent = sam.entities_for(subject_ueis).set_index("uei")
     for u in subject_ueis:
         nm = ent.at[u, "legal_name"] if ent is not None and u in ent.index else ""
         given = next((r["name"] for r in resolved if u in r["matches"] and r["name"]), "")
@@ -165,15 +165,17 @@ def subject_screen(
     # 2. One hop out: SAM entities sharing a non-hub contact or suite with a subject.
     related: dict[str, dict] = {}
     if sam:
-        pocs = sam.pocs
         subj_in_sam = [u for u in subject_ueis if u in ent.index]
-        mine = pocs[pocs["uei"].isin(subj_in_sam)]
+        mine = sam.pocs_for(subj_in_sam)
+        freq_person = sam.freq("freq_person", mine["pkey"])
+        freq_suite = sam.freq("freq_suite", ent["akey"])
         people = {}
         for p in mine.itertuples(index=False):
-            if p.pkey and sam.freq_person.get(p.pkey, 0) <= cap:
+            if p.pkey and freq_person.get(p.pkey, 0) <= cap:
                 people.setdefault(p.pkey, set()).add(p.uei)
         if people:
-            shared = pocs[pocs["pkey"].isin(people) & ~pocs["uei"].isin(subject_ueis)]
+            shared = sam.pocs_with_pkeys(people)
+            shared = shared[~shared["uei"].isin(subject_ueis)]
             for p in shared.itertuples(index=False):
                 for su in people[p.pkey]:
                     d = related.setdefault(p.uei, {"via": {}, "of": set()})
@@ -181,10 +183,9 @@ def subject_screen(
                     d["via"][f"person:{p.pkey}"] = f"shared contact {f'{p.first} {p.last}'.strip().title()} ({p.state})"
         for su in subj_in_sam:
             akey = ent.at[su, "akey"]
-            if not akey or sam.freq_suite.get(akey, 0) > cap:
+            if not akey or freq_suite.get(akey, 0) > cap:
                 continue
-            same = sam.entities[(sam.entities["akey"] == akey) & ~sam.entities["uei"].isin(subject_ueis)]
-            for u in same["uei"]:
+            for u in [u for u in sam.ueis_at_suite(akey) if u not in subject_ueis]:
                 d = related.setdefault(u, {"via": {}, "of": set()})
                 d["of"].add(su)
                 addr = ", ".join(x for x in [ent.at[su, "addr1"], ent.at[su, "addr2"], ent.at[su, "city"], ent.at[su, "state"]] if x)
@@ -194,15 +195,15 @@ def subject_screen(
             nn = ent.at[su, "nn"]
             if not nn:
                 continue
-            for i in by_nn.get(nn, [])[:MAX_NAME_MATCHES]:
-                u = sam.entities.at[i, "uei"]
+            for u in sam.ueis_named(nn, MAX_NAME_MATCHES):
                 if u in subject_ueis:
                     continue
                 d = related.setdefault(u, {"via": {}, "of": set()})
                 d["of"].add(su)
                 d["via"]["name"] = "same legal name under another UEI"
+        rel_ent = sam.entities_for(related).set_index("uei")
         for u in related:
-            rows.append({"uei": u, "name": ent.at[u, "legal_name"] if u in ent.index else u, "_key": u})
+            rows.append({"uei": u, "name": rel_ent.at[u, "legal_name"] if u in rel_ent.index else u, "_key": u})
 
     # 3. Screen every row with the same checks as the main pipeline, with the bulk filters skipped.
     df = pd.DataFrame(rows)
@@ -501,13 +502,13 @@ def people_screen(people: list[dict], sam: SamExtract | None, ex: ExclusionsExtr
     rules = rules or RuleSet()
     cap = rules.hub_cap
     out = []
-    ent = sam.entities.set_index("uei") if sam else None
     excluded_ueis = set(ex.records.loc[ex.records["uei"] != "", "uei"]) if ex else set()
     rec = ex.records if ex else None
     for p in people:
         listings = []
         if sam:
-            m = sam.pocs[(sam.pocs["first"].map(_up) == p["first"]) & (sam.pocs["last"].map(_up) == p["last"])]
+            m = sam.pocs_named(p["first"], p["last"])
+            ent = sam.entities_for(m["uei"]).set_index("uei")
             if p["state"]:
                 m = m[m["state"].map(_up) == p["state"]]
             for u, g in m.groupby("uei"):
