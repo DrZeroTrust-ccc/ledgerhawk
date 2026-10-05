@@ -16,6 +16,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import threading
@@ -52,10 +53,28 @@ ADVERSE = {
 Fetch = Callable[[str, dict], bytes]
 
 
+log = logging.getLogger("ledgerhawk.context")
+
+
 def _fetch(url: str, headers: dict) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **headers})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return r.read()
+    """GET with one retry after a pause on a server error, rate limit or dropped connection. Failures are logged with
+    the host and status so a source that stops answering can be diagnosed from the server logs."""
+    host = urllib.parse.urlparse(url).netloc
+    for attempt in (1, 2):
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **headers})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.read()
+        except urllib.error.HTTPError as exc:
+            log.warning("context source %s answered %s (attempt %s)", host, exc.code, attempt)
+            if attempt == 2 or not (exc.code >= 500 or exc.code == 429):
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            log.warning("context source %s unreachable: %s (attempt %s)", host, exc, attempt)
+            if attempt == 2:
+                raise
+        time.sleep(2)
+    raise AssertionError("unreachable")
 
 
 _ADVERSE_RE = {k: re.compile(r"\b(?:" + "|".join(re.escape(w) for w in words) + ")", re.I) for k, words in ADVERSE.items()}
@@ -291,15 +310,52 @@ def ranked(res: dict) -> list[dict]:
 
 
 # ---- sources ---------------------------------------------------------------------------------------------------------
-def news(q: str, fetch: Fetch) -> list[dict]:
-    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode({"q": f'"{q}"', "hl": "en-US", "gl": "US", "ceid": "US:en"})
-    root = ET.fromstring(fetch(url, {}))
+def _rss(raw: bytes) -> list[dict]:
+    root = ET.fromstring(raw)
     out = []
     for it in root.iter("item"):
         src = it.find("source")
+        if src is None:  # Bing puts the outlet in its own namespace
+            src = next((c for c in it if c.tag.endswith("}Source")), None)
         out.append(_item("News", it.findtext("title", ""), it.findtext("link", ""), _iso(it.findtext("pubDate", "")),
-                         where=src.text if src is not None and src.text else ""))
-    return out[:PER_SOURCE]
+                         where=src.text if src is not None and src.text else "",
+                         snippet=re.sub(r"<[^>]+>", " ", it.findtext("description", "") or "")))
+    return out
+
+
+def _google_news(q: str, fetch: Fetch) -> list[dict]:
+    url = "https://news.google.com/rss/search?" + urllib.parse.urlencode({"q": f'"{q}"', "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    return _rss(fetch(url, {}))
+
+
+def _bing_news(q: str, fetch: Fetch) -> list[dict]:
+    url = "https://www.bing.com/news/search?" + urllib.parse.urlencode({"q": f'"{q}"', "format": "rss", "setlang": "en-US"})
+    return _rss(fetch(url, {}))
+
+
+def _gdelt(q: str, fetch: Fetch) -> list[dict]:
+    """GDELT's news index: built for programs, but only covers about the last three months."""
+    url = "https://api.gdeltproject.org/api/v2/doc/doc?" + urllib.parse.urlencode(
+        {"query": f'"{q}" sourcelang:english', "mode": "artlist", "format": "json", "maxrecords": PER_SOURCE, "sort": "datedesc"})
+    raw = fetch(url, {}).strip()
+    res = json.loads(raw) if raw.startswith(b"{") else {}  # GDELT answers plain text for queries it rejects
+    return [_item("News", a.get("title", ""), a.get("url", ""), _iso(a.get("seendate", "")), where=a.get("domain", ""))
+            for a in res.get("articles") or []]
+
+
+NEWS_FEEDS = (("Google News", _google_news), ("Bing News", _bing_news), ("GDELT", _gdelt))
+
+
+def news(q: str, fetch: Fetch) -> list[dict]:
+    """News coverage, from the first feed that answers. Google News often refuses requests from cloud servers, so Bing
+    News and then GDELT stand in for it."""
+    errors = []
+    for label, feed in NEWS_FEEDS:
+        try:
+            return feed(q, fetch)[:PER_SOURCE]
+        except (urllib.error.URLError, OSError, ValueError, ET.ParseError) as exc:
+            errors.append(f"{label} {getattr(exc, 'code', '') or type(exc).__name__}")
+    raise OSError("; ".join(errors))
 
 
 def doj(q: str, fetch: Fetch) -> list[dict]:
@@ -438,7 +494,8 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         try:
             sources[key] = {"items": fn(q, fetch), "error": ""}
         except (urllib.error.URLError, OSError, ValueError, ET.ParseError, KeyError, TypeError) as exc:
-            sources[key] = {"items": [], "error": f"{SOURCE_LABELS[key]} did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"}
+            why = getattr(exc, "code", "") or (str(exc) if key == "news" else "") or type(exc).__name__
+            sources[key] = {"items": [], "error": f"{SOURCE_LABELS[key]} did not answer ({why})"}
     try:
         sources["ofac"] = {"items": ofac(name, fetch, cache_dir, person), "error": ""}
     except (urllib.error.URLError, OSError, ValueError) as exc:

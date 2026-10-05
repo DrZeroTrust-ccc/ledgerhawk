@@ -88,7 +88,7 @@ and IDVs for each subject UEI and each excluded related firm from the public USA
 result beside the screen, marks awards that started on or after an exclusion of the same UEI, and adds them to the
 page, the Word report and an Awards sheet (`pipeline/awards.py`).
 
-**Outside context** (vendor page, and every subject and person on a subject screen) searches news (Google News),
+**Outside context** (vendor page, and every subject and person on a subject screen) searches news (Google News, falling back to Bing News and then GDELT when Google refuses a cloud server),
 DOJ press releases, federal dockets and opinions (CourtListener; set `COURTLISTENER_TOKEN` for higher limits), SEC
 EDGAR full text and the OFAC SDN list by name. Results are dated snapshots kept per entity, with enforcement and
 litigation language tagged and sorted first, links for hand checks (Oversight.gov, OpenCorporates, PACER, FAPIIS),
