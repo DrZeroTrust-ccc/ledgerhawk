@@ -120,7 +120,9 @@ class Store:
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self.summary_client = None  # and a fake Claude
+        self.hawk_inline = False  # tests write queue reasons in the request instead of a background thread
         self._lock = threading.Lock()
+        self._hawk_running: set[str] = set()  # runs the Hawk is writing reasons for in this process
         self.db_path = self.root / "state.db"
         with self._db() as db:
             db.executescript(
@@ -791,6 +793,72 @@ class Store:
     def _summary_at(d: Path) -> dict | None:
         f = d / "summary.json"
         return json.loads(f.read_text()) if f.exists() else None
+
+    # ---- the Hawk's one-line queue reasons, per run --------------------------------------------------------------
+    def hawk_reasons(self, run_id: str) -> dict:
+        f = self.run_dir(run_id) / "hawk_reasons.json"
+        cur = json.loads(f.read_text()) if f.exists() else {"reasons": {}, "status": {"state": "none"}}
+        if cur["status"].get("state") == "running" and run_id not in self._hawk_running:
+            cur["status"].update(state="error", error="The server restarted while the Hawk was writing. Start it again "
+                                 "to finish the rest.")
+        return cur
+
+    def _write_hawk(self, run_id: str, change) -> dict:
+        f = self.run_dir(run_id) / "hawk_reasons.json"
+        with self._lock:
+            cur = json.loads(f.read_text()) if f.exists() else {"reasons": {}, "status": {"state": "none"}}
+            change(cur)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cur))
+            tmp.replace(f)
+        return cur
+
+    def start_hawk_reasons(self, run_id: str, analyst: str, leads: list[tuple[str, str]]) -> dict:
+        """Have the Hawk write a one-line reason for each (uei, facts) lead that lacks one, in batches, in the
+        background. Progress and errors are kept in the run's hawk_reasons.json."""
+        with self._lock:
+            if run_id in self._hawk_running:
+                raise ValueError("The Hawk is already writing reasons for this run.")
+            self._hawk_running.add(run_id)
+        cur = self.hawk_reasons(run_id)
+        todo = [x for x in leads if x[0] not in cur["reasons"]]
+        batches = [todo[i:i + summary_mod.REASON_BATCH] for i in range(0, len(todo), summary_mod.REASON_BATCH)]
+        status = {"state": "running" if todo else "done", "done": 0, "total": len(todo), "by": analyst.strip(),
+                  "started_at": _now(), "finished_at": "" if todo else _now(), "error": "", "model": summary_mod.REASON_MODEL}
+        self._write_hawk(run_id, lambda c: c.update(status=status))
+        self.audit(analyst, "hawk_reasons", None, run_id, f"Asked the Hawk for one-line reasons on {len(todo)} leads")
+
+        def one(batch):
+            got = summary_mod.queue_reasons(batch, client=self.summary_client)
+            at = _now()
+
+            def add(c):
+                c["reasons"].update({u: {"text": t, "at": at} for u, t in got.items()})
+                c["status"]["done"] += len(batch)
+            self._write_hawk(run_id, add)
+
+        def work():
+            err = ""
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                for fut in [pool.submit(one, b) for b in batches]:
+                    try:
+                        fut.result()
+                    except RuntimeError as exc:
+                        err = str(exc)
+                    except Exception as exc:  # keep going; the status shows the last error
+                        err = f"The Hawk hit an unexpected error ({type(exc).__name__})."
+            self._write_hawk(run_id, lambda c: c["status"].update(state="error" if err else "done", error=err,
+                                                                 finished_at=_now()))
+            self._hawk_running.discard(run_id)
+
+        if not todo:
+            self._hawk_running.discard(run_id)
+        elif self.hawk_inline:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+        return self.hawk_reasons(run_id)
 
     def _summary_unlocked(self, d: Path) -> None:
         if self._review_at(d)["state"] == "approved":

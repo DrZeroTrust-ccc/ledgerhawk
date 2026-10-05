@@ -487,3 +487,40 @@ def test_case_summary_drafted_sourced_edited_and_exported(sam_ctx):
         assert client.post(f"{base}/summary/draft", data={"analyst": "Ana"}).status_code == 503
     finally:
         appmod.store.summary_client = None
+
+
+def test_hawk_writes_queue_reasons(sam_ctx):
+    import json
+    from types import SimpleNamespace as NS
+    import ledgerhawk.api.app as appmod
+    client, run_id, p = sam_ctx
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        lines = kw["messages"][0]["content"].splitlines()[1:]
+        ids = [ln.split(" | ")[0] for ln in lines]
+        reasons = [{"id": u, "text": f"Reason for {u}."} for u in ids] + [{"id": "NOT-A-LEAD", "text": "x"}]
+        return NS(stop_reason="end_turn", content=[NS(type="text", text=json.dumps({"reasons": reasons}))])
+
+    appmod.store.summary_client = NS(beta=NS(messages=NS(create=create)))
+    appmod.store.hawk_inline = True
+    try:
+        assert client.get(f"/api/runs/{run_id}/hawk-reasons").json()["state"] == "none"
+        assert client.post(f"/api/runs/{run_id}/hawk-reasons", data={"analyst": ""}).status_code == 400
+        r = client.post(f"/api/runs/{run_id}/hawk-reasons", data={"analyst": "Ana"})
+        assert r.status_code == 200, r.text
+        st = r.json()
+        queued = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()
+        assert st["state"] == "done" and st["written"] == queued["total"] == st["total"] > 0
+        assert all(row["hawk"] == f"Reason for {row['uei']}." for row in queued["rows"])
+        assert "obligations $" in calls[0]["messages"][0]["content"] and calls[0]["output_config"]["effort"] == "low"
+        # leads outside the queue get no reason; a second ask only covers leads still missing one
+        rest = client.get(f"/api/runs/{run_id}/vendors", params={"limit": 500}).json()["rows"]
+        assert all(not row["hawk"] for row in rest if not row["queue"])
+        n = len(calls)
+        assert client.post(f"/api/runs/{run_id}/hawk-reasons", data={"analyst": "Ana"}).json()["total"] == 0
+        assert len(calls) == n
+    finally:
+        appmod.store.summary_client = None
+        appmod.store.hawk_inline = False

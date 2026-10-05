@@ -517,8 +517,9 @@ def _workflow(v: dict, st: dict) -> dict:
     }
 
 
-def _slim(v: dict, disp: dict, state: dict | None = None) -> dict:
+def _slim(v: dict, disp: dict, state: dict | None = None, hawk: dict | None = None) -> dict:
     return {
+        "hawk": ((hawk or {}).get(v["uei"]) or {}).get("text", ""),
         **_workflow(v, (state or {}).get(v["uei"], {})),
         "uei": v["uei"], "name": v["name"], "queue": v["queue"], "bucket": v["bucket"], "lane": v["lane"],
         "reason_code": v["reason_code"], "reason": v["reason"], "cut_stage": v["cut_stage"], "headline": headline(v),
@@ -595,12 +596,13 @@ def list_vendors(
     key = sort.lstrip("-")
     if key in {"tot", "fy24", "fy25", "name"}:
         rows = sorted(rows, key=lambda r: r[key], reverse=sort.startswith("-"))
+    hawk = store.hawk_reasons(run_id)["reasons"]
     total = len(rows)
     dollars = sum(r["tot"] for r in rows)
     return {
         "total": total,
         "dollars": dollars,
-        "rows": [_slim(r, disp, state) for r in rows[offset: offset + limit]],
+        "rows": [_slim(r, disp, state, hawk) for r in rows[offset: offset + limit]],
     }
 
 
@@ -628,6 +630,7 @@ def vendor(run_id: str, uei: str):
     out = dict(v)
     out["why"] = why_it_flagged(v)
     out["headline"] = headline(v)
+    out["hawk"] = (store.hawk_reasons(run_id)["reasons"].get(uei) or {}).get("text", "")
     out["disposition"] = store.dispositions(run_id).get(uei)
     out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
     out["history"] = _history(run_id, uei)
@@ -708,6 +711,34 @@ def draft_case_summary(run_id: str, uei: str, analyst: str = Form("")):
         raise HTTPException(503, str(exc))
 
 
+HAWK_REASON_CAP = int(os.environ.get("LEDGERHAWK_HAWK_REASON_CAP", "2000"))
+
+
+@app.get("/api/runs/{run_id}/hawk-reasons")
+def hawk_reasons_status(run_id: str):
+    _get(store.vendors, run_id)
+    cur = store.hawk_reasons(run_id)
+    return {**cur["status"], "written": len(cur["reasons"]),
+            "enabled": summary_mod.enabled() or store.summary_client is not None}
+
+
+@app.post("/api/runs/{run_id}/hawk-reasons")
+def start_hawk_reasons(run_id: str, analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the request is attributed.")
+    if not (summary_mod.enabled() or store.summary_client is not None):
+        raise HTTPException(503, "The Hawk is off: ANTHROPIC_API_KEY is not set on the server.")
+    data = _get(store.vendors, run_id)
+    leads = sorted((r for r in data["rows"] if r["queue"]), key=lambda r: -r["tot"])[:HAWK_REASON_CAP]
+    facts = [(r["uei"], summary_mod.reason_facts(r, why_it_flagged(r), QUEUE_LABELS.get(r["queue"], r["queue"])))
+             for r in leads]
+    try:
+        store.start_hawk_reasons(run_id, analyst, facts)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc))
+    return hawk_reasons_status(run_id)
+
+
 class SummaryLine(BaseModel):
     text: str
     sources: list[str] = []
@@ -742,7 +773,8 @@ def integrity(run_id: str):
     state = store.analyst_state(run_id)
     disp = store.dispositions(run_id)
     order = {"A": 0, "B": 1, "C": 2, "D": 3, "": 4}
-    rows = sorted((_slim(i["v"], disp, state) for i in items), key=lambda r: (order[r["integrity"]["tier"]], -r["tot"]))
+    hawk = store.hawk_reasons(run_id)["reasons"]
+    rows = sorted((_slim(i["v"], disp, state, hawk) for i in items), key=lambda r: (order[r["integrity"]["tier"]], -r["tot"]))
     return {**summary, "rows": rows}
 
 

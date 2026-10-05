@@ -160,6 +160,11 @@ Every lead in a run opens into one case page (the old vendor page):
   (E1, E2, ...); a sentence that cites nothing real is dropped. It shows as a Hawk draft (AI) until an analyst edits it,
   flags itself when the evidence changes, locks on approval, prints in the Word case file, and is in the run log.
   Model: `claude-opus-5-5` (override with `LEDGERHAWK_SUMMARY_MODEL`). Without the key the button is replaced by a note.
+- **Queue reasons:** on the Queue page, "Have the Hawk write a reason for each lead" has Claude write one plain sentence per
+  queued lead (largest dollars first, up to `LEDGERHAWK_HAWK_REASON_CAP`, default 2000) from the screening facts only.
+  It runs in the background in batches of 25 at low effort, shows progress, and only fills leads still missing a reason
+  when asked again. Rows show the reason with a "Hawk (AI)" tag; the rule-based headline stays as the fallback and the
+  hover text. Model: `LEDGERHAWK_HAWK_MODEL`, default the summary model.
 - **Tabs:** Money (signals, USAspending awards), People and links (SAM profile, exclusions, linked vendors, graph),
   Outside context, Notes and files, History.
 - **Right rail:** decision, two-person sign-off, tier and routing.

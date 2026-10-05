@@ -14,6 +14,8 @@ export type VendorRow = {
   reason_code: string
   reason: string
   headline?: string
+  /** One-line reason written by the Hawk (AI), when someone asked for it on this run. */
+  hawk?: string
   cut_stage: string
   restored_from: string
   suppression: string
@@ -529,6 +531,16 @@ const json = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 })
 
+export type HawkReasons = {
+  state: 'none' | 'running' | 'done' | 'error'
+  done?: number
+  total?: number
+  written: number
+  by?: string
+  error?: string
+  enabled: boolean
+}
+
 export const api = {
   meta: () => req<Meta>('/api/meta'),
   runs: () => req<RunMeta[]>('/api/runs'),
@@ -584,6 +596,8 @@ export const api = {
     req<ScreenReview>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/review`, { method: 'POST', body: form }),
   caseAwards: (id: string, uei: string, form: FormData) =>
     req<ScreenAwards>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/awards`, { method: 'POST', body: form }),
+  hawkReasons: (id: string) => req<HawkReasons>(`/api/runs/${id}/hawk-reasons`),
+  startHawkReasons: (id: string, form: FormData) => req<HawkReasons>(`/api/runs/${id}/hawk-reasons`, { method: 'POST', body: form }),
   draftSummary: (id: string, uei: string, form: FormData) =>
     req<CaseSummary>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/summary/draft`, { method: 'POST', body: form }),
   saveSummary: (id: string, uei: string, body: { analyst: string; sentences: SummaryLine[]; next_steps: SummaryLine[] }) =>

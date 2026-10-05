@@ -119,3 +119,73 @@ def draft(v: dict, ledger: dict, disposition: dict | None = None, *, client=None
         raise RuntimeError("The Hawk's draft had no sentence tied to the evidence. Try again or write it by hand.")
     return {"sentences": sentences, "next_steps": _clean(data.get("next_steps"), ids)[:3],
             "model": getattr(resp, "model", MODEL), "ledger_fp": ledger_fingerprint(ledger)}
+
+
+# ---- one-line queue reasons ----------------------------------------------------------------------------------------
+REASON_MODEL = os.environ.get("LEDGERHAWK_HAWK_MODEL", MODEL)
+REASON_BATCH = 25
+REASON_SYSTEM = """You write the one-line reason shown beside each lead in a fraud, waste and abuse triage queue of US \
+federal contractors. An investigator scans hundreds of these to decide what to open first.
+
+For each lead, write one plain sentence of at most 18 words saying what stands out and why it matters, using only the \
+facts given for that lead. Lead with the most serious fact; include a dollar figure when it matters. These are \
+screening signals, not findings: never say fraud, illegal or guilty, and never guess at intent. No codes, no jargon, \
+no leading "This vendor". Return one entry per lead, using the lead's id exactly as given."""
+
+REASON_SCHEMA = {
+    "type": "object",
+    "properties": {"reasons": {"type": "array", "items": {
+        "type": "object", "properties": {"id": {"type": "string"}, "text": {"type": "string"}},
+        "required": ["id", "text"], "additionalProperties": False}}},
+    "required": ["reasons"],
+    "additionalProperties": False,
+}
+
+
+def reason_facts(v: dict, why: str, queue_label: str) -> str:
+    return (f"{v['uei']} | {v['name']} | {queue_label} | obligations {money(v.get('tot') or 0)} "
+            f"(FY24 {money(v.get('fy24') or 0)}, FY25 {money(v.get('fy25') or 0)}) | {why}")
+
+
+def queue_reasons(batch: list[tuple[str, str]], *, client=None) -> dict[str, str]:
+    """batch: [(uei, facts line)]. Returns {uei: reason}. Raises RuntimeError when Claude can't be reached or declines."""
+    if client is None:
+        if not enabled():
+            raise RuntimeError("The Hawk is off: ANTHROPIC_API_KEY is not set on the server.")
+        import anthropic
+        client = anthropic.Anthropic()
+    import anthropic
+
+    try:
+        resp = client.beta.messages.create(
+            model=REASON_MODEL,
+            max_tokens=4000,
+            system=REASON_SYSTEM,
+            messages=[{"role": "user", "content": "Leads (id | name | queue | money | screening facts):\n"
+                       + "\n".join(line for _, line in batch)}],
+            output_config={"effort": "low", "format": {"type": "json_schema", "schema": REASON_SCHEMA}},
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+        )
+    except anthropic.AuthenticationError:
+        raise RuntimeError("The Anthropic API key on the server was rejected. Check ANTHROPIC_API_KEY in Render.")
+    except anthropic.RateLimitError:
+        raise RuntimeError("The Hawk is busy right now. Try again in a minute.")
+    except anthropic.APIStatusError as exc:
+        raise RuntimeError(f"The Hawk could not write the reasons ({exc.status_code}).")
+    except anthropic.APIConnectionError:
+        raise RuntimeError("Could not reach the Hawk from the server.")
+    if resp.stop_reason == "refusal":
+        raise RuntimeError("The Hawk declined this batch.")
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    try:
+        rows = json.loads(text).get("reasons") or []
+    except ValueError:
+        raise RuntimeError("The Hawk's answer was cut off.")
+    ids = {u for u, _ in batch}
+    out = {}
+    for r in rows:
+        t = " ".join(str(r.get("text", "")).split())
+        if r.get("id") in ids and t:
+            out[r["id"]] = t if len(t) <= 160 else t[:157].rstrip() + "..."
+    return out

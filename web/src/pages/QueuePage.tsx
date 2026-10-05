@@ -4,7 +4,7 @@ import { Breadcrumbs, usePlace } from '../nav'
 import { api, LANE_LABEL, money, num, REASON_LABEL, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
 import { KEYS, Progress, TriagePane } from '../Triage'
-import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
+import { Button, Card, DataClassBadge, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
@@ -109,6 +109,57 @@ function BulkAssign({ runId, selected, onDone, dispositions }: { runId: string; 
         Decide {num(selected.length)}
       </Button>
       {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
+function HawkReasons({ runId, onWritten }: { runId: string; onWritten: () => void }) {
+  const [analyst] = useAnalystName()
+  const [version, setVersion] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const { data } = useAsync(() => api.hawkReasons(runId), [runId, version])
+  const running = data?.state === 'running'
+  useEffect(() => {
+    if (!running) return
+    const t = setTimeout(() => {
+      setVersion((n) => n + 1)
+      onWritten()
+    }, 4000)
+    return () => clearTimeout(t)
+  }, [running, data?.done])
+  const prev = useRef(data?.state)
+  useEffect(() => {
+    if (prev.current === 'running' && data && data.state !== 'running') onWritten()
+    prev.current = data?.state
+  }, [data?.state])
+  if (!data || !data.enabled) return null
+  const start = async () => {
+    setError(null)
+    const f = new FormData()
+    f.set('analyst', analyst)
+    try {
+      await api.startHawkReasons(runId, f)
+      setVersion((n) => n + 1)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      {running ? (
+        <span className="text-slate-600">
+          The Hawk is writing reasons… {num(data.done ?? 0)} of {num(data.total ?? 0)} leads
+        </span>
+      ) : (
+        <>
+          <Button variant="secondary" disabled={!analyst.trim()} onClick={start} title={analyst.trim() ? undefined : 'Enter your name in the header first'}>
+            {data.written ? 'Have the Hawk fill in missing reasons' : 'Have the Hawk write a reason for each lead'}
+          </Button>
+          {data.written > 0 && <span className="text-xs text-slate-500">{num(data.written)} reasons written by the Hawk (AI). Check them against the case before relying on them.</span>}
+        </>
+      )}
+      {data.state === 'error' && data.error && <span className="text-xs text-crimson">{data.error}</span>}
       <ErrorNote error={error} />
     </div>
   )
@@ -264,6 +315,7 @@ export default function QueuePage() {
       </div>
 
       {progress.data && <Progress p={progress.data} />}
+      <HawkReasons runId={id} onWritten={() => setVersion((n) => n + 1)} />
       <TierStrip runId={id} active={tier} onPick={(t) => set('tier', t)} version={version} />
 
       <div className="flex flex-wrap gap-1 border-b border-slate-200">
@@ -420,7 +472,7 @@ export default function QueuePage() {
                         <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
                           {r.name}
                         </Link>
-                        {r.headline && <div className="mt-0.5 max-w-md text-xs text-ink">{r.headline}</div>}
+                        <LeadLine hawk={r.hawk} headline={r.headline} className="mt-0.5 max-w-md text-xs text-ink" />
                         <div className="font-mono text-xs text-slate-400">{r.uei}</div>
                         {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
                         {r.lane !== 'outlier' && r.reason_code && (

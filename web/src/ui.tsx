@@ -180,3 +180,15 @@ export function useAnalyst(): [string, (v: string) => void] {
   }
   return [name, set]
 }
+
+/** The lead's one-line reason: the Hawk's (AI) when written, otherwise the rule-based headline. */
+export function LeadLine({ hawk, headline, className = '' }: { hawk?: string; headline?: string; className?: string }) {
+  if (hawk)
+    return (
+      <div className={className} title={headline ? `Rule summary: ${headline}` : undefined}>
+        <span className="mr-1 rounded bg-violet-100 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-violet-800">Hawk (AI)</span>
+        {hawk}
+      </div>
+    )
+  return headline ? <div className={className}>{headline}</div> : null
+}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, money, num, type QueueProgress } from './api'
 import { useAnalystName } from './App'
-import { Button, ErrorNote, FlagChip, Loading, SignalChip, TierChip, useAsync } from './ui'
+import { Button, ErrorNote, FlagChip, LeadLine, Loading, SignalChip, TierChip, useAsync } from './ui'
 
 export function TriagePane({
   runId,
@@ -104,7 +104,7 @@ export function TriagePane({
               </span>
             </div>
           </div>
-          {v.headline && <p className="font-medium text-ink">{v.headline}</p>}
+          <LeadLine hawk={v.hawk} headline={v.headline} className="font-medium text-ink" />
           <p className="text-slate-700">{v.why}</p>
           {(v.signals.length > 0 || v.exclusion_flags.length > 0) && (
             <div className="flex flex-wrap gap-1">
