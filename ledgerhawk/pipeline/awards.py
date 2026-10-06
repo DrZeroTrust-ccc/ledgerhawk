@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from typing import Callable
 
+from .normalize import normalize_name
+
 API = "https://api.usaspending.gov/api/v2/search/spending_by_award/"
 AWARD_PAGE = "https://www.usaspending.gov/award/"
 GROUPS = {
@@ -112,12 +114,14 @@ TX_LIMIT = 100
 ACTION_KINDS = {
     "A": "work", "B": "work", "D": "work", "L": "work", "H": "work",
     "C": "funding", "G": "option",
-    "E": "wind_down", "F": "wind_down", "K": "wind_down", "N": "wind_down", "X": "wind_down",
+    "E": "cancel", "F": "cancel", "N": "cancel", "X": "cancel",  # terminations and legal contract cancellation
+    "K": "wind_down",
 }
-ACTION_TEXT = [("option", "option"), ("terminat", "wind_down"), ("close", "wind_down"), ("cancel", "wind_down"),
+ACTION_TEXT = [("option", "option"), ("terminat", "cancel"), ("cancel", "cancel"), ("close", "wind_down"),
                ("funding", "funding"), ("supplemental", "work"), ("additional work", "work"), ("change order", "work")]
 KIND_LABELS = {"new": "new award or order", "option": "option exercised", "work": "work added or changed",
-               "funding": "funding added", "admin": "other modification", "wind_down": "termination or closeout"}
+               "funding": "funding added", "admin": "other modification", "cancel": "cancelled or terminated",
+               "wind_down": "closeout"}
 FLAGGED_KINDS = {"new", "option", "work", "funding"}
 
 
@@ -130,8 +134,10 @@ def _action_kind(mod: str, action_type: str, amount: float, award_id: str) -> st
     if not kind:
         low = code.lower()
         kind = next((k for word, k in ACTION_TEXT if word in low), None)
-    if not kind and mod.startswith("PO") and _schedule(award_id):
-        kind = "option"  # GSA numbers option exercises PO0001, PO0002...; the contract file confirms it
+    if not kind and not code and mod.startswith("PO") and _schedule(award_id):
+        # GSA numbers government-initiated mods PO0001, PO0002... Without an FPDS reason code the likeliest one is an
+        # option; when FPDS gives a code (often N, cancellation) that code wins. The contract file confirms either way.
+        kind = "option"
     kind = kind or "admin"
     if kind == "funding" and amount <= 0:
         kind = "admin"  # money taken off is a deobligation, not new funding
@@ -185,22 +191,36 @@ def actions_after(uei: str, since: str, post: Post = _post, today: date | None =
 
 
 def actions_summary(actions: list[dict], since: str) -> str:
-    """One line an investigator can read: what happened after the exclusion, by kind, with the GSA Schedule ones named."""
+    """One line an investigator can read: what happened after the exclusion, by kind, with the GSA Schedule ones named.
+    A Schedule cancelled after the exclusion is said too, with how long it took, even when nothing was added."""
     flagged = [a for a in actions if a["flagged"]]
-    if not flagged:
-        return ""
-    by_kind: dict[str, int] = {}
-    for a in flagged:
-        by_kind[a["label"]] = by_kind.get(a["label"], 0) + 1
-    parts = ", ".join(f"{k}: {n}" for k, n in by_kind.items())
-    money_after = sum(a["amount"] for a in flagged if a["amount"] > 0)
-    line = f"{len(flagged)} action{'' if len(flagged) == 1 else 's'} after the exclusion of {since} ({parts}; ${money_after:,.0f} obligated)"
-    sched = [a for a in flagged if a["schedule"]]
-    if sched:
-        last = sched[-1]
-        line += (f". GSA Schedule {last['award_id']} was modified after the exclusion"
-                 f" ({last['mod'] or 'mod'}, {last['date']})")
-    return line
+    parts_out = []
+    if flagged:
+        by_kind: dict[str, int] = {}
+        for a in flagged:
+            by_kind[a["label"]] = by_kind.get(a["label"], 0) + 1
+        parts = ", ".join(f"{k}: {n}" for k, n in by_kind.items())
+        money_after = sum(a["amount"] for a in flagged if a["amount"] > 0)
+        line = f"{len(flagged)} action{'' if len(flagged) == 1 else 's'} after the exclusion of {since} ({parts}; ${money_after:,.0f} obligated)"
+        sched = [a for a in flagged if a["schedule"]]
+        if sched:
+            last = sched[-1]
+            line += (f". GSA Schedule {last['award_id']} was modified after the exclusion"
+                     f" ({last['mod'] or 'mod'}, {last['date']})")
+        parts_out.append(line)
+    ended: dict[str, dict] = {}
+    for a in actions:
+        if a["kind"] == "cancel" and a["schedule"] and a["award_id"] not in ended:
+            ended[a["award_id"]] = a
+    for a in ended.values():
+        try:
+            days = (date.fromisoformat(a["date"]) - date.fromisoformat(since)).days
+        except ValueError:
+            days = None
+        parts_out.append(f"GSA Schedule {a['award_id']} was cancelled or terminated {a['mod'] or ''} on {a['date']}".replace("  ", " ")
+                         + (f", {days} days after the exclusion" if days is not None else "")
+                         + f" (FPDS action type {a['action_type'] or '?'})")
+    return ". ".join(parts_out)
 
 
 HISTORY_API = "https://api.usaspending.gov/api/v2/search/spending_over_time/"
@@ -247,14 +267,16 @@ def _m(x: float) -> str:
 def growth_note(by_fy: dict[int, float], today: date) -> str:
     """When the latest year's obligations dwarf anything the firm did before: the "outran its track record" signal."""
     cur = fiscal_year(today)
-    recent = [(y, by_fy.get(y, 0.0)) for y in (cur - 2, cur - 1, cur) if by_fy.get(y, 0.0) >= GROWTH_MIN]
+    window = (cur - 2, cur - 1, cur)
+    recent = [(y, by_fy.get(y, 0.0)) for y in window if by_fy.get(y, 0.0) >= GROWTH_MIN]
     if not recent:
         return ""
     year, peak = max(recent, key=lambda t: t[1])
-    prior = {y: a for y, a in by_fy.items() if y < year and a > 0}
+    # The track record is what came before the recent window, so a second big year isn't measured against the first.
+    prior = {y: a for y, a in by_fy.items() if y < window[0] and a > 0}
     if not prior:
         first = min((y for y, a in by_fy.items() if a > 0), default=year)
-        return f"No federal contract dollars before FY{first % 100:02d}; {_m(peak)} in FY{year % 100:02d}" if first == year else ""
+        return f"No federal contract dollars before FY{first % 100:02d}; {_m(peak)} in FY{year % 100:02d}"
     py, best = max(prior.items(), key=lambda t: t[1])
     if peak < GROWTH_RATIO * best:
         return ""
@@ -266,20 +288,22 @@ def growth_note(by_fy: dict[int, float], today: date) -> str:
 def shift_note(rows: list[dict], today: date) -> str:
     """Several UEIs of one company: does money leave one registration as another one starts getting it?"""
     cur = fiscal_year(today)
-    a_y, b_y = cur - 2, cur - 1
     have = [r for r in rows if r.get("by_fy")]
     if len(have) < 2:
         return ""
-    falling = [r for r in have if r["by_fy"].get(a_y, 0) >= GROWTH_MIN and r["by_fy"].get(b_y, 0) <= 0.6 * r["by_fy"].get(a_y, 0)]
-    rising = [r for r in have if r["by_fy"].get(a_y, 0) <= 0.1 * max(r["by_fy"].get(b_y, 0), 1) and r["by_fy"].get(b_y, 0) >= GROWTH_MIN]
-    if not falling or not rising:
-        return ""
-    f, g = max(falling, key=lambda r: r["by_fy"][a_y]), max(rising, key=lambda r: r["by_fy"][b_y])
-    if f["uei"] == g["uei"]:
-        return ""
-    return (f"Money moved between registrations: as {f['uei']} fell from {_m(f['by_fy'][a_y])} in FY{a_y % 100:02d} to "
-            f"{_m(f['by_fy'].get(b_y, 0))} in FY{b_y % 100:02d}, {g['uei']} went from {_m(g['by_fy'].get(a_y, 0))} to "
-            f"{_m(g['by_fy'][b_y])}")
+    # The last closed year can still be filling in early in a new fiscal year, so check the pair before it too.
+    for a_y, b_y in ((cur - 2, cur - 1), (cur - 3, cur - 2)):
+        falling = [r for r in have if r["by_fy"].get(a_y, 0) >= GROWTH_MIN and r["by_fy"].get(b_y, 0) <= 0.6 * r["by_fy"].get(a_y, 0)]
+        rising = [r for r in have if r["by_fy"].get(a_y, 0) <= 0.1 * max(r["by_fy"].get(b_y, 0), 1) and r["by_fy"].get(b_y, 0) >= GROWTH_MIN]
+        if not falling or not rising:
+            continue
+        f, g = max(falling, key=lambda r: r["by_fy"][a_y]), max(rising, key=lambda r: r["by_fy"][b_y])
+        if f["uei"] == g["uei"]:
+            continue
+        return (f"Money moved between registrations: as {f['uei']} fell from {_m(f['by_fy'][a_y])} in FY{a_y % 100:02d} to "
+                f"{_m(f['by_fy'].get(b_y, 0))} in FY{b_y % 100:02d}, {g['uei']} went from {_m(g['by_fy'].get(a_y, 0))} to "
+                f"{_m(g['by_fy'][b_y])}")
+    return ""
 
 
 MISMATCH_MIN = 1_000_000  # file dollars worth questioning
@@ -374,11 +398,15 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             "first": min((a["start"] for a in res["awards"] if a["start"]), default=""),
             "last": max((a["start"] for a in res["awards"] if a["start"]), default=""),
         })
-    # One company, several UEIs: per subject, compare its own registrations with its same-name siblings.
+    # One company, several UEIs: per subject, compare its own registrations with its same-name siblings, including
+    # siblings that are subjects in their own right (a list often names each registration separately).
     shifts = {}
+    nn = {e["uei"]: normalize_name(e["name"]) for e in entities}
     for s in screen["subjects"]:
+        mine = {nn.get(e["uei"]) for e in s["entities"] if e["uei"]} - {"", None}
         rows = [{"uei": e["uei"], "by_fy": {int(y): a for y, a in e["by_fy"].items()}}
-                for e in entities if s["ref"] in e["refs"] and e["role"] in ("subject", "related, same name")]
+                for e in entities if e["role"] in ("subject", "related, same name")
+                and (s["ref"] in e["refs"] or nn[e["uei"]] in mine)]
         note = shift_note(rows, today)
         if note:
             shifts[str(s["ref"])] = note

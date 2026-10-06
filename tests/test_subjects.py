@@ -215,6 +215,16 @@ def test_recheck_api(syn, tmp_path):
         doc = Document(io.BytesIO(client.get(f"/api/subject-screens/{got['meta']['id']}/subject-screen.docx").content))
         assert any(par.text == "What changed since the last check" for par in doc.paragraphs)
         assert client.get("/api/subject-screens").json()[0]["change_counts"]["changed"] == 2
+
+        # FY dollar columns on an uploaded list survive a re-check, so the data checks still have the file's figures
+        lst = tmp_path / "voi.csv"
+        lst.write_text(f"UEI,Name,FY24 Obligated ($),FY25 Obligated ($)\n{p['succ_old']},Old Co,\"$6,450,000\",0\n")
+        with open(lst, "rb") as f:
+            sid = client.post("/api/subject-screens", files={"subjects_file": ("voi.csv", f)},
+                              data={"analyst": "T", "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]}).json()["id"]
+        again = client.post(f"/api/subject-screens/{sid}/recheck", data={"analyst": "T"}).json()["id"]
+        ent = client.get(f"/api/subject-screens/{again}").json()["subjects"][0]["entities"][0]
+        assert ent["fy24"] == 6450000.0 and ent["dollars_from"] == "list"
     finally:
         mp.undo()
 
@@ -379,8 +389,11 @@ def _fake_usaspending(calls):
                                 {"time_period": {"fiscal_year": 2025}, "aggregated_amount": 2.5e6, "Contract_Obligations": 2.5e6,
                                  "Idv_Obligations": None}]}
         if url.endswith("/spending_by_transaction/"):
-            if "IDV_A" in body["filters"]["award_type_codes"]:  # a GSA Schedule option exercise (PO mod)
-                rows = [{"Award ID": "47QTCA24D003M", "Mod": "PO0010", "Action Date": "2026-06-12", "Action Type": "M",
+            if "IDV_A" in body["filters"]["award_type_codes"]:
+                # FPDS codes this PO mod N (legal contract cancellation); a PO mod with no code reads as an option
+                rows = [{"Award ID": "47QTCA24D003M", "Mod": "PO0010", "Action Date": "2026-06-12", "Action Type": "N",
+                         "Transaction Amount": 0, "Recipient UEI": uei, "Awarding Agency": "General Services Administration"},
+                        {"Award ID": "47QTCA24D003M", "Mod": "PO0011", "Action Date": "2026-07-01", "Action Type": None,
                          "Transaction Amount": 0, "Recipient UEI": uei, "Awarding Agency": "General Services Administration"}]
             else:
                 rows = [{"Award ID": "47QTCA25F0001", "Mod": "0", "Action Date": "2025-07-01", "Action Type": None,
@@ -433,12 +446,16 @@ def test_awards_lookup(syn):
     assert affiliate["after_exclusion"] == 0 and not affiliate["excluded_since"]
     assert not affiliate["actions"]  # no exclusion, no transaction lookup
 
-    # every action after the exclusion, by kind: a new order and a GSA Schedule option (PO mod) are flagged
-    kinds = [(a["award_id"], a["kind"], a["flagged"]) for a in major["actions"]]
-    assert kinds == [("47QTCA25F0001", "new", True), ("47QTCA22F0002", "admin", False),
-                     ("47QTCA22F0002", "wind_down", False), ("47QTCA24D003M", "option", True)]
+    # every action after the exclusion, by kind: a new order and an uncoded GSA Schedule PO mod are flagged; the FPDS
+    # code wins over the PO numbering, so PO0010 (coded N) is a cancellation, said with how long it took
+    kinds = [(a["award_id"], a["mod"], a["kind"], a["flagged"]) for a in major["actions"]]
+    assert kinds == [("47QTCA25F0001", "0", "new", True), ("47QTCA22F0002", "P00004", "admin", False),
+                     ("47QTCA22F0002", "P00005", "wind_down", False), ("47QTCA24D003M", "PO0010", "cancel", False),
+                     ("47QTCA24D003M", "PO0011", "option", True)]
     assert major["actions_flagged"] == 2 and major["schedule_actions"] == 2 and major["actions_dollars"] == 250000.5
-    assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0010, 2026-06-12)" in major["actions_summary"]
+    assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0011, 2026-07-01)" in major["actions_summary"]
+    assert ("GSA Schedule 47QTCA24D003M was cancelled or terminated PO0010 on 2026-06-12, 468 days after the exclusion "
+            "(FPDS action type N)") in major["actions_summary"]
     assert major["by_fy"] == {"2023": 100000.0, "2025": 2500000.0} and major["lifetime"] == 2600000.0
     assert major["growth"].startswith("FY25 obligations of $2.5M are 25x its best earlier year (FY23, $100,000")
 
@@ -451,10 +468,19 @@ def test_growth_and_money_shift_notes():
     assert growth_note({2020: 300000, 2026: 1.2e6}, today) == ""  # 4x is ordinary growth
     assert "8x its best earlier year" in growth_note({2019: 150000, 2020: 200000, 2026: 1.6e6}, today)
     assert growth_note({2026: 3e6}, today) == "No federal contract dollars before FY26; $3.0M in FY26"
+    # a second big year is measured against the record before the run-up, not against the first big year (ELB)
+    assert growth_note({2022: 47000, 2025: 28.5e6, 2026: 32.1e6}, today).startswith(
+        "FY26 obligations of $32.1M are 683x its best earlier year (FY22, $47,000")
+    assert growth_note({2025: 2e6, 2026: 2.5e6}, today) == "No federal contract dollars before FY25; $2.5M in FY26"
     shift = shift_note([{"uei": "OLDUEI", "by_fy": {2024: 1e6, 2025: 5e6, 2026: 400000}},
                         {"uei": "NEWUEI", "by_fy": {2026: 4.2e6}}], today)
     assert shift.startswith("Money moved between registrations: as OLDUEI fell from $5.0M in FY25 to $400,000 in FY26, NEWUEI went")
     assert shift_note([{"uei": "A", "by_fy": {2025: 5e6, 2026: 5e6}}, {"uei": "B", "by_fy": {2026: 4e6}}], today) == ""  # A did not fall
+    # early in FY27 the FY24 -> FY25 move still counts (K2: Manassas fell as Wrightstown rose from nothing)
+    k2 = shift_note([{"uei": "KCYXLTWPA849", "by_fy": {2023: 17.2e6, 2024: 15.0e6, 2025: 5.47e6, 2026: 3.06e6}},
+                     {"uei": "LLMJLD2G7RD5", "by_fy": {2023: 3.27e6, 2025: 27.4e6, 2026: 3.31e6}}], today)
+    assert k2 == ("Money moved between registrations: as KCYXLTWPA849 fell from $15.0M in FY24 to $5.5M in FY25, "
+                  "LLMJLD2G7RD5 went from $0 to $27.4M")
 
 
 def test_awards_api_and_exports(syn, tmp_path):
@@ -490,10 +516,11 @@ def test_awards_api_and_exports(syn, tmp_path):
         doc = Document(io.BytesIO(client.get(f"{base}/subject-screen.docx").content))
         text = "\n".join(par.text for par in doc.paragraphs)
         assert "Federal awards (USAspending)" in text and "started on or after the exclusion of 2025-03-01" in text
-        assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0010, 2026-06-12)" in text
+        assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0011, 2026-07-01)" in text
         ws = wb["After Exclusion"]
         rows = [[c.value for c in r] for r in ws.iter_rows(min_row=6, min_col=2, max_col=12)]
-        assert ["47QTCA24D003M", "PO0010", "option exercised", "Yes", "Yes"] == rows[-1][5:10]
+        assert ["47QTCA24D003M", "PO0010", "cancelled or terminated", None, "Yes"] == rows[-2][5:10]
+        assert ["47QTCA24D003M", "PO0011", "option exercised", "Yes", "Yes"] == rows[-1][5:10]
         assert any(t.cell(0, 0).text == "Date" for t in doc.tables)  # the after-exclusion table in the report
         assert "25x its best earlier year" in text
         ws = wb["By Fiscal Year"]
