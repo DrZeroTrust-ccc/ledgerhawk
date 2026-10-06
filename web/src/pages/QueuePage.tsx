@@ -278,6 +278,7 @@ export default function QueuePage() {
   const [analystName] = useAnalystName()
   const lane = sp.get('lane') ?? ''
   const queue = sp.get('queue') ?? (lane ? '' : 'any')
+  const tierView = queue === '' && !lane && !!sp.get('tier')
   const signal = sp.get('signal') ?? ''
   const disposition = sp.get('disposition') ?? ''
   const tier = sp.get('tier') ?? ''
@@ -346,7 +347,27 @@ export default function QueuePage() {
     const next = new URLSearchParams(sp)
     if (v) next.set(k, v)
     else next.delete(k)
-    if (k === 'queue') next.delete('lane')
+    if (k === 'queue') {
+      next.delete('lane')
+      if (tierView) next.delete('tier')
+    }
+    if (k === 'tier' && !v && tierView) next.delete('queue') // clearing the tier closes the tier view
+    setSp(next)
+    setLimit(PAGE)
+    setSelected(new Set())
+    setFocus(null)
+  }
+  // A tier tile shows exactly the vendors it counts: every vendor at that tier, in or out of a queue tab.
+  const openTier = (t: string) => {
+    const next = new URLSearchParams(sp)
+    next.delete('lane')
+    if (t) {
+      next.set('tier', t)
+      next.set('queue', '')
+    } else {
+      next.delete('tier')
+      next.delete('queue')
+    }
     setSp(next)
     setLimit(PAGE)
     setSelected(new Set())
@@ -400,7 +421,7 @@ export default function QueuePage() {
 
       {progress.data && <Progress p={progress.data} />}
       <HawkReasons runId={id} onWritten={() => setVersion((n) => n + 1)} />
-      <TierStrip runId={id} active={tier} onPick={(t) => set('tier', t)} version={version} />
+      <TierStrip runId={id} active={tier} onPick={openTier} version={version} />
 
       <div className="flex flex-wrap gap-1 border-b border-slate-200">
         {TABS.map(([k, label]) => (
@@ -416,6 +437,14 @@ export default function QueuePage() {
           </button>
         ))}
         {lane && <span className="-mb-px border-b-2 border-crimson px-3 py-2 text-sm font-medium text-navy">{LANE_LABEL[lane] ?? lane}</span>}
+        {tierView && (
+          <span className="-mb-px border-b-2 border-crimson px-3 py-2 text-sm font-medium text-navy">
+            {TIER_SHORT[tier] ?? `Tier ${tier}`}
+            <button onClick={() => openTier('')} className="ml-2 text-xs font-normal text-slate-500 hover:text-navy" title="Back to all in queue">
+              Close
+            </button>
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-1 pb-1">
           {(['list', 'board'] as const).map((v) => (
             <button
