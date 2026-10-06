@@ -341,7 +341,8 @@ export function Review({ ctx, notesTarget }: { ctx: CaseCtx; notesTarget?: strin
 }
 
 function AfterExclusion({ e }: { e: AwardEntity }) {
-  const flagged = (e.actions ?? []).filter((a) => a.flagged)
+  // Red flags, plus any GSA Schedule cancellation after the exclusion (how long it stayed open is the question).
+  const flagged = (e.actions ?? []).filter((a) => a.flagged || (a.schedule && a.kind === 'cancel'))
   if (e.actions_error) return <div className="mt-1 text-xs text-crimson">{e.actions_error}</div>
   if (!flagged.length) return null
   return (

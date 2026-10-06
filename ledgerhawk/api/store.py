@@ -490,7 +490,8 @@ class Store:
             "id": sid, "created_at": _now(), "created_by": analyst, "matter": matter.strip(), "client": client.strip(),
             "privileged": privileged, "data_class": "synthetic" if synthetic else "production",
             "sam_source": sam_source, "exclusions_source": exclusions_source, "dollars_run": dollars_run,
-            "input": [{k: s[k] for k in ("ref", "uei", "name", "role")} for s in subjects],
+            # FY dollar columns the list carried travel with it, so a re-check can still run the data checks.
+            "input": [{k: s[k] for k in ("ref", "uei", "name", "role", "fy24", "fy25") if k in s} for s in subjects],
             "input_people": people or [],
             "parent_id": parent_id,
         }

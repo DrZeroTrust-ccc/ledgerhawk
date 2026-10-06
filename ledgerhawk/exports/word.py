@@ -341,7 +341,8 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             if top:
                 _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],
                       [[a["award_id"], a["agency"], a["start"], f"${a['amount']:,.0f}", "Yes" if a["after_exclusion"] else ""] for a in top])
-            after = [a | {"uei": e["uei"]} for e in found for a in e.get("actions", []) if a["flagged"]]
+            after = [a | {"uei": e["uei"]} for e in found for a in e.get("actions", [])
+                     if a["flagged"] or (a["schedule"] and a["kind"] == "cancel")]
             if after:
                 doc.add_heading("Actions after the exclusion", level=3)
                 _grid(doc, ["Date", "Award ID", "Mod", "What happened", "Amount", "GSA Schedule"],
