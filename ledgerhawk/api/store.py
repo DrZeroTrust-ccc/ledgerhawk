@@ -304,10 +304,14 @@ class Store:
         if exclusions_path:
             e = d / "inputs" / exclusions_path.name
             shutil.copyfile(exclusions_path, e)
-        res = run_pipeline(v, e, exclusions_date, restore=restore,
-                           sam_file=sam["path"] if sam else None,
-                           sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
-                           sam_cache_dir=Path(sam["path"]).parent if sam else None)
+        try:
+            res = run_pipeline(v, e, exclusions_date, restore=restore,
+                               sam_file=sam["path"] if sam else None,
+                               sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
+                               sam_cache_dir=Path(sam["path"]).parent if sam else None)
+        except Exception:
+            shutil.rmtree(d, ignore_errors=True)  # no half-made run left behind
+            raise
         res.manifest["data_class"] = "synthetic" if synthetic else "production"
         res.write(d)
         meta = {

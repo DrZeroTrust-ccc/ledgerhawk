@@ -89,6 +89,11 @@ def run_pipeline(
 ) -> RunResult:
     rules = rules or RuleSet()
     df, validation = load_vendor_file(vendor_file)
+    if "uei" in validation.missing_columns or {"fy24", "fy25"} <= set(validation.missing_columns):
+        found = ", ".join(validation.column_mapping) or "none"
+        raise ValueError("This file has no UEI column or no FY24/FY25 dollar columns, so a run would screen every "
+                         f"vendor as $0 (columns recognised: {found}). To check a list of names or leads, use "
+                         "Subject screens instead.")
 
     ex: ExclusionsExtract | None = None
     if exclusions_file:
