@@ -62,3 +62,12 @@ def test_refresh_fetches_newest_once_and_reports_errors(tmp_path):
         st.refresh_sam_gov("k", today=date(2026, 10, day), download=fake)
     kinds = [m["kind"] for m in st.list_sources()]
     assert kinds.count("exclusions") == Store.AUTO_KEEP["exclusions"]
+
+
+def test_restart_clears_partial_downloads(tmp_path):
+    Store(tmp_path)
+    part = tmp_path / "tmpab12cd" / "SAM_PUBLIC_MONTHLY_V2_20261004.zip.part"
+    part.parent.mkdir()
+    part.write_bytes(b"x" * 10)
+    Store(tmp_path)
+    assert not part.parent.exists() and (tmp_path / "runs").exists()

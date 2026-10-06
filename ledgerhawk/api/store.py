@@ -119,6 +119,8 @@ class Store:
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
         (self.root / "subjects").mkdir(parents=True, exist_ok=True)
         (self.root / "context").mkdir(parents=True, exist_ok=True)
+        for d in self.root.glob("tmp*"):  # a SAM.gov download cut off by a restart; it is fetched again
+            shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
