@@ -142,3 +142,10 @@ def test_pilot_funnel():
     assert res.queue_counts["strong"] == 228
     assert res.queue_counts["integrity_lane"] == 70_348
     assert res.queue_counts["closeouts"] == 1_603
+
+
+def test_fiscal_year_dollar_columns_named_loosely():
+    from ledgerhawk.pipeline.ingest import map_columns
+    m = map_columns(["Vendor UEI", "Vendor Name", "FY24 Obligated ($)", "Fiscal Year 2025 Net Obligations", "FY24 Notes"])
+    assert m == {"Vendor UEI": "uei", "Vendor Name": "name", "FY24 Obligated ($)": "fy24",
+                 "Fiscal Year 2025 Net Obligations": "fy25"}

@@ -38,6 +38,15 @@ def test_upload_requires_analyst(ctx):
     assert r.status_code == 400
 
 
+def test_names_only_list_is_refused_not_screened_as_zero(ctx):
+    client, *_ = ctx
+    before = len(client.get("/api/runs").json())
+    r = client.post("/api/runs", files={"vendors": ("leads.csv", b"Vendor UEI,Vendor Name,Why\nABC123DEF456,ACME LLC,tip\n")},
+                    data={"analyst": "Test Analyst"})
+    assert r.status_code == 400 and "Subject screens" in r.json()["detail"]
+    assert len(client.get("/api/runs").json()) == before
+
+
 def test_queue_and_vendor(ctx):
     client, run_id, p = ctx
     q = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any"}).json()

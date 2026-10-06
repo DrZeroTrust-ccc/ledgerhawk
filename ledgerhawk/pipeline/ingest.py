@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -36,10 +37,19 @@ def map_columns(columns: list[str]) -> dict[str, str]:
     lookup = {_key(a): internal for internal, aliases in COLUMN_ALIASES.items() for a in aliases}
     mapping: dict[str, str] = {}
     for col in columns:
-        internal = lookup.get(_key(col))
+        internal = lookup.get(_key(col)) or _fiscal_year(col)
         if internal and internal not in mapping.values():
             mapping[col] = internal
     return mapping
+
+
+def _fiscal_year(col: str) -> str | None:
+    """Dollar columns named in other ways, such as "FY24 Obligated ($)" or "Fiscal Year 2025 Net Obligations"."""
+    k = _key(col)
+    m = re.match(r"(?:fy|fiscal year) ?(?:20)?(24|25)\b(.*)", k)
+    if m and re.search(r"oblig|dollar|amount|spend|award|\busd\b", m[2]):
+        return "fy" + m[1]
+    return None
 
 
 @dataclass
