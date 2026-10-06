@@ -140,7 +140,12 @@ def _sam_gov_loop() -> None:
         try:
             last = max((v.get("checked_at", "") for v in store.auto_status().values() if isinstance(v, dict)), default="")
             if not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() > 12 * 3600:
-                store.refresh_sam_gov(samgov.api_key())
+                print("SAM.gov: checking for newer extracts", flush=True)
+                st = store.refresh_sam_gov(samgov.api_key())
+                for kind in ("exclusions", "sam"):
+                    k = st.get(kind) or {}
+                    print(f"SAM.gov {kind}: as of {k.get('as_of') or 'none'}"
+                          + (f"; error: {k['error']}" if k.get("error") else ""), flush=True)
         except Exception as exc:  # never let the loop die; the status file shows SAM.gov errors
             print(f"SAM.gov refresh failed: {type(exc).__name__}: {exc}", flush=True)
         time.sleep(3600)
