@@ -116,6 +116,7 @@ export type Source = {
   file: string
   sha256: string
   bytes: number
+  entities?: number
   uploaded_by: string
   uploaded_at: string
   age_days: number

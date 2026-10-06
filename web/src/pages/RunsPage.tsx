@@ -137,12 +137,15 @@ function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto
                   <td className="py-2">
                     {s.as_of}{' '}
                     <span className={`ml-1 rounded px-1.5 py-0.5 text-xs ${s.stale ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
-                      {s.age_days} days old
+                      {s.age_days} {s.age_days === 1 ? 'day' : 'days'} old
                       {s.stale ? `, stale after ${s.stale_after_days}` : ''}
                     </span>
                   </td>
                   <td className="py-2 text-slate-600">
                     {s.file} · {sizeLabel(s.bytes)}
+                    {s.kind === 'sam' && s.entities !== undefined && (
+                      <span className={s.entities ? '' : 'text-crimson'}> · {s.entities ? `${s.entities.toLocaleString()} entities` : 'no entities could be read'}</span>
+                    )}
                   </td>
                   <td className="py-2 text-slate-600">{s.uploaded_by}</td>
                 </tr>
