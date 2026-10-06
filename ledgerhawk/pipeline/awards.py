@@ -282,6 +282,37 @@ def shift_note(rows: list[dict], today: date) -> str:
             f"{_m(g['by_fy'][b_y])}")
 
 
+MISMATCH_MIN = 1_000_000  # file dollars worth questioning
+MISMATCH_RATIO = 3
+ODD_AMOUNT = 5_000_000   # a short award this large is more often a data-entry error than a real price
+ODD_DAYS = 45
+
+
+def file_mismatch(file: dict[int, float], by_fy: dict[int, float]) -> list[str]:
+    """The list or run says a vendor got far more in a fiscal year than USAspending reports: a record to fix before review."""
+    out = []
+    for y, f in sorted(file.items()):
+        u = by_fy.get(y, 0.0)
+        if f >= MISMATCH_MIN and f >= MISMATCH_RATIO * max(u, 0.0):
+            out.append(f"Data check: the GSA file shows {_m(f)} for FY{y % 100:02d}; USAspending shows {_m(u)}. "
+                       "Confirm the record before it counts toward totals")
+    return out
+
+
+def odd_awards(awards: list[dict]) -> list[str]:
+    """An award of several million dollars that runs only a few weeks: often local currency or a typo, not the price."""
+    out = []
+    for a in awards:
+        try:
+            days = (date.fromisoformat(a["end"][:10]) - date.fromisoformat(a["start"][:10])).days
+        except (TypeError, ValueError, KeyError):
+            continue
+        if a.get("amount", 0) >= ODD_AMOUNT and 0 <= days <= ODD_DAYS:
+            out.append(f"Data check: {a['award_id']} is {_m(a['amount'])} for {days + 1} days of work "
+                       f"({a['start'][:10]} to {a['end'][:10]}). The amount may be in local currency or mis-keyed")
+    return out[:3]
+
+
 def _excluded_since(entity: dict) -> str:
     """Earliest active date of an exclusion recorded against this entity's own UEI (not facility-only)."""
     dates = [_iso(h.get("active_date")) for h in entity.get("exclusion", [])
@@ -298,7 +329,9 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
         for e in s["entities"]:
             if e["uei"]:
                 targets.setdefault(e["uei"], {"name": (e.get("sam") or {}).get("legal_name") or e["name"], "refs": set(),
-                                              "role": "subject", "excluded_since": _excluded_since(e)})["refs"].add(s["ref"])
+                                              "role": "subject", "excluded_since": _excluded_since(e),
+                                              "file": {2024: e.get("fy24") or 0.0, 2025: e.get("fy25") or 0.0}
+                                              if e.get("in_dollars_run") else {}})["refs"].add(s["ref"])
     for s in screen["subjects"]:
         for r in s["related"]:
             if r["excluded"] and r["uei"] not in targets:
@@ -329,6 +362,7 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
         entities.append({
             "by_fy": by_fy, "history_error": h["error"], "lifetime": round(sum(h["by_fy"].values()), 2),
             "growth": growth_note(h["by_fy"], today),
+            "anomalies": ([] if h["error"] else file_mismatch(t.get("file") or {}, h["by_fy"])) + odd_awards(res["awards"]),
             "actions": act["actions"], "actions_truncated": act["truncated"], "actions_error": act["error"],
             "actions_flagged": len(flagged), "actions_dollars": round(sum(a["amount"] for a in flagged if a["amount"] > 0), 2),
             "schedule_actions": sum(1 for a in flagged if a["schedule"]),

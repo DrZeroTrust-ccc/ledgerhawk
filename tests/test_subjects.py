@@ -512,3 +512,18 @@ def test_subject_file_with_title_rows_above_the_header(tmp_path):
     pd.DataFrame(rows).to_excel(p, header=False, index=False)
     got = parse_subjects(path=p)
     assert [(s["uei"], s["name"]) for s in got] == [("HFGCD12199B8", "ELB SERVICES LLC"), ("", "K2 CONTRACTING GROUP LLC")]
+
+
+def test_subject_list_dollars_and_data_checks(tmp_path):
+    from ledgerhawk.pipeline.awards import file_mismatch, odd_awards
+    p = tmp_path / "voi.csv"
+    p.write_text('UEI,Name,FY24 Obligated ($),FY25 Obligated ($)\nHFGCD12199B8,MUCOMMUNE LLC,"$6,450,000",(1200)\n')
+    got = parse_subjects(path=p)
+    assert got[0]["fy24"] == 6450000.0 and got[0]["fy25"] == -1200.0  # the list's own dollar columns are kept
+    assert file_mismatch({2024: 6.45e6, 2025: 0}, {2024: 306000}) == [
+        "Data check: the GSA file shows $6.5M for FY24; USAspending shows $306,000. Confirm the record before it counts toward totals"]
+    assert file_mismatch({2024: 1.2e6}, {2024: 900000}) == []  # close enough
+    odd = odd_awards([{"award_id": "19AQMM24P0001", "amount": 7.79e6, "start": "2024-03-01", "end": "2024-03-31"},
+                      {"award_id": "LONG", "amount": 9e6, "start": "2024-01-01", "end": "2025-01-01"}])
+    assert odd == ["Data check: 19AQMM24P0001 is $7.8M for 31 days of work (2024-03-01 to 2024-03-31). "
+                   "The amount may be in local currency or mis-keyed"]

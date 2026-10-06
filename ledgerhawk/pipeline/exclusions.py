@@ -122,6 +122,12 @@ SCOPE_LABELS = {
 }
 
 
+JV_PARTNER_MIN_LEN = 5  # "SHORE", "CLEMONS"
+JV_GENERIC = {"JV", "J V", "JOINT", "VENTURE", "JOINT VENTURE", "GROUP", "SERVICES", "SOLUTIONS", "TECHNOLOGIES", "SYSTEMS",
+              "CONSTRUCTION", "CONSULTING", "ENTERPRISES", "INTERNATIONAL", "AMERICA", "AMERICAN", "FEDERAL", "GLOBAL",
+              "NATIONAL", "UNITED", "GENERAL", "ASSOCIATES", "PARTNERS", "MANAGEMENT", "SUPPORT", "ENGINEERING"}
+
+
 def exclusion_pass(df: pd.DataFrame, ex: ExclusionsExtract, rules: RuleSet) -> pd.DataFrame:
     """Add `exclusion` (list of dicts) and `exclusion_flags` to every vendor row."""
     df = df.copy()
@@ -164,6 +170,22 @@ def exclusion_pass(df: pd.DataFrame, ex: ExclusionsExtract, rules: RuleSet) -> p
                 continue
             hits[i].append({"kind": "alias", **rec_view(r)})
 
+    # 6. A joint venture whose name carries an excluded firm's name: the excluded partner may still get work through it.
+    jv = df["nn"].str.contains(r"\b(?:JV|J V|JOINT VENTURE)\b", regex=True, na=False)
+    if jv.any():
+        by_nn = {nn: g for nn, g in rec[rec["classification"].str.lower().isin(["firm", "special entity designation", ""])
+                                        & (rec["nn"].str.len() >= JV_PARTNER_MIN_LEN)].groupby("nn")}
+        for i in df.index[jv]:
+            toks = df.at[i, "nn"].split()
+            grams = {" ".join(toks[a:b]) for a in range(len(toks)) for b in range(a + 1, min(len(toks), a + 4) + 1)}
+            for gram in grams - JV_GENERIC:
+                if gram == df.at[i, "nn"] or gram not in by_nn:
+                    continue
+                for _, r in by_nn[gram].iterrows():
+                    if r["uei"] and r["uei"] == df.at[i, "uei"]:
+                        continue
+                    hits[i].append({"kind": "jv_partner", **rec_view(r)})
+
     df["exclusion"] = [hits[i] for i in df.index]
     stale_cutoff = ex.extract_date.toordinal() - rules.stale_pending_days
 
@@ -180,6 +202,8 @@ def exclusion_pass(df: pd.DataFrame, ex: ExclusionsExtract, rules: RuleSet) -> p
                 f.add("NAME_MATCH_CANDIDATE")
             if h["kind"] == "alias":
                 f.add("ALIAS_MATCH")
+            if h["kind"] == "jv_partner":
+                f.add("JV_PARTNER_EXCLUDED")
         return sorted(f)
 
     df["exclusion_flags"] = df["exclusion"].map(flags)

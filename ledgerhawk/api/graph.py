@@ -78,6 +78,8 @@ def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]]) -
             edge(xid, pid or center, "has_poc", h.get("evidence", ""))
         elif h["kind"] == "alias":
             edge(center, xid, "alias_of", "named as an alias in the exclusion comments")
+        elif h["kind"] == "jv_partner":
+            edge(center, xid, "jv_partner_of", "joint venture carrying the excluded party's name")
         elif h["kind"] == "name_match":
             edge(center, xid, "same_name_as", f"name match ({h.get('support', 'unsupported')})")
 

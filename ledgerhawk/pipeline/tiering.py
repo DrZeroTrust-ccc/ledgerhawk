@@ -42,7 +42,7 @@ OWNERS = [
     "OIG (referral after analyst review)",
 ]
 
-TIE_FLAGS = {"ALIAS_MATCH", "R_EXADDR", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
+TIE_FLAGS = {"ALIAS_MATCH", "JV_PARTNER_EXCLUDED", "R_EXADDR", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
 
 
 def default_tier(v: dict) -> str:
@@ -79,7 +79,7 @@ def suggest_owner(v: dict) -> str:
     return ""
 
 
-EXCLUSION_TIES = {"ALIAS_MATCH", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
+EXCLUSION_TIES = {"ALIAS_MATCH", "JV_PARTNER_EXCLUDED", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
 
 
 def category(v: dict, tier: str = "") -> str:

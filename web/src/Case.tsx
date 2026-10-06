@@ -408,6 +408,11 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
               {e.name} <span className="font-mono text-xs font-normal text-slate-500">{e.uei}</span>
               {e.role !== 'subject' && <span className="ml-1 text-xs font-normal text-slate-500">({e.role})</span>}
             </div>
+            {(e.anomalies ?? []).map((a) => (
+              <div key={a} className="text-xs font-medium text-amber-700">
+                {a}
+              </div>
+            ))}
             {e.error ? (
               <div className="text-xs text-crimson">{e.error}</div>
             ) : e.count === 0 ? (

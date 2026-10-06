@@ -73,7 +73,8 @@ def award_line(e: dict) -> str:
     if e["error"]:
         return f"{e['name']} [{e['uei']}]: {e['error']}."
     if not e["count"]:
-        return f"{e['name']} [{e['uei']}] ({e['role']}): no contracts or IDVs on USAspending."
+        return " ".join([f"{e['name']} [{e['uei']}] ({e['role']}): no contracts or IDVs on USAspending."]
+                        + [a + "." for a in e.get("anomalies") or []])
     line = (f"{e['name']} [{e['uei']}] ({e['role']}): {e['count']} contracts and IDVs, ${e['total']:,.0f} obligated, "
             f"{e['first'][:4]}-{e['last'][:4]}, {len(e['agencies'])} awarding agenc{'y' if len(e['agencies']) == 1 else 'ies'}"
             + (" (largest 100 per type shown)" if e["truncated"] else ""))
@@ -83,6 +84,8 @@ def award_line(e: dict) -> str:
         line += f". {e['actions_summary']}"
     if e.get("growth"):
         line += f". {e['growth']}"
+    for a in e.get("anomalies") or []:
+        line += f". {a}"
     return line + "."
 
 
@@ -316,23 +319,25 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
             last = _rows(ws, 6, body, {12}, 30)
             ws.auto_filter.ref = f"B5:O{last}"
 
-        hist = [e for e in aw["entities"] if e.get("by_fy")]
+        hist = [e for e in aw["entities"] if e.get("by_fy") or e.get("anomalies")]
         if hist:
-            years = sorted({int(y) for e in hist for y in e["by_fy"]})[-8:]
+            years = sorted({int(y) for e in hist for y in e.get("by_fy") or {}})[-8:]
             shifts = aw.get("shifts") or {}
             ws = wb.create_sheet("By Fiscal Year")
             _title(ws, "Obligations by Fiscal Year", "Contract and IDV obligations per UEI and fiscal year from USAspending. "
                    "Growth flags a recent year of $1M or more that is at least 5x the firm's best earlier year, or a first "
                    "year with no history. Shift flags money leaving one registration of a company as another one (same "
-                   "legal name, different UEI) starts receiving it.")
+                   "legal name, different UEI) starts receiving it. Data Check flags a file amount far above what "
+                   "USAspending reports, or a multi-million award that runs only a few weeks.")
             _head(ws, 5, ["Subject #", "UEI", "Entity", "Role"] + [f"FY{y % 100:02d} ($)" for y in years]
-                  + ["Lifetime ($)", "Growth", "Shift"], [10, 15, 30, 16] + [14] * len(years) + [15, 60, 60])
+                  + ["Lifetime ($)", "Growth", "Shift", "Data Check"], [10, 15, 30, 16] + [14] * len(years) + [15, 60, 60, 60])
             body = [[", ".join(str(r) for r in e["refs"]), e["uei"], e["name"], e["role"]]
-                    + [e["by_fy"].get(str(y)) for y in years] + [e["lifetime"], e["growth"],
-                    " ".join(shifts.get(str(r), "") for r in e["refs"]).strip()] for e in hist]
+                    + [(e.get("by_fy") or {}).get(str(y)) for y in years] + [e.get("lifetime"), e.get("growth", ""),
+                    " ".join(shifts.get(str(r), "") for r in e["refs"]).strip(), ". ".join(e.get("anomalies") or [])]
+                    for e in hist]
             money = set(range(6, 7 + len(years)))
             last = _rows(ws, 6, body, money, 30)
-            ws.auto_filter.ref = f"B5:{get_column_letter(len(years) + 8)}{last}"
+            ws.auto_filter.ref = f"B5:{get_column_letter(len(years) + 9)}{last}"
 
     cxs = (screen.get("context") or {}).get("entities") or []
     if cxs:

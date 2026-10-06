@@ -31,7 +31,7 @@ POC_ROLE = {"gov_business": "government business POC", "alt_gov_business": "alte
             "alt_past_performance": "alternate past performance POC", "electronic_business": "electronic business POC",
             "alt_electronic_business": "alternate electronic business POC"}
 TIE_LABEL = {"direct": "This UEI", "alias": "Alias in record", "address": "Shared suite", "person": "Shared contact",
-             "name_match": "Same name"}
+             "name_match": "Same name", "jv_partner": "JV partner name"}
 _FONT_DIRS = [Path("/usr/share/fonts/truetype/dejavu"), Path("/usr/share/fonts/dejavu"), Path("/Library/Fonts")]
 
 

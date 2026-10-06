@@ -39,7 +39,7 @@ INTEGRITY_MEANING = {
 }
 FY_START = {"fy24": date(2023, 10, 1), "fy25": date(2024, 10, 1)}
 FY_LABEL = {"fy24": "FY24 (Oct 2023 to Sep 2024)", "fy25": "FY25 (Oct 2024 to Sep 2025)"}
-TIE_FLAGS = {"ALIAS_MATCH", "SITE_UEI_QUESTION", "NAME_MATCH_SUPPORTED", "R_EXPOC"}
+TIE_FLAGS = {"ALIAS_MATCH", "JV_PARTNER_EXCLUDED", "SITE_UEI_QUESTION", "NAME_MATCH_SUPPORTED", "R_EXPOC"}
 
 
 def _nn_of(name: str) -> str:
@@ -94,7 +94,7 @@ def integrity_screen(df: pd.DataFrame) -> pd.Series:
                 reasons.append("Exclusion proceedings have been pending for over a year")
 
         if not tier and not excluded:
-            tie = [h for h in hits if h["kind"] in ("alias", "person") or (h["kind"] == "name_match" and h.get("support", "unsupported") != "unsupported")]
+            tie = [h for h in hits if h["kind"] in ("alias", "person", "jv_partner") or (h["kind"] == "name_match" and h.get("support", "unsupported") != "unsupported")]
             addr = [h for h in hits if h["kind"] == "address"]
             second_uei = [h for h in addr if _nn_of(h.get("name", "")) == r.nn and r.nn]
             if flags & TIE_FLAGS or second_uei:
@@ -105,7 +105,7 @@ def integrity_screen(df: pd.DataFrame) -> pd.Series:
                     reasons.append(f"A second UEI under the excluded party's name at its suite ({second_uei[0]['name']}, {agency})")
                 for h in tie:
                     kind = {"alias": "Named as an alias or affiliate in", "person": "Shares a contact with",
-                            "name_match": "Same name, supported by location, as"}[h["kind"]]
+                            "jv_partner": "A joint venture carrying the name of the party in", "name_match": "Same name, supported by location, as"}[h["kind"]]
                     reasons.append(f"{kind} the exclusion record of {h.get('name') or h.get('uei')} ({h.get('agency', '')})")
                 if "SITE_UEI_QUESTION" in flags:
                     reasons.append("Same legal name as an excluded vendor under a different UEI (exclusion-coverage question)")

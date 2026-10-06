@@ -162,7 +162,9 @@ function Subject({ s, withDollars, ctx, awards, context }: { s: SubjectResult; w
                 )}
                 {withDollars && (
                   <div className="tabular mt-1 text-xs text-slate-600">
-                    {e.in_dollars_run ? `FY24 ${money(e.fy24)} · FY25 ${money(e.fy25)}` : 'Not in the selected run'}
+                    {e.in_dollars_run
+                      ? `${e.dollars_from === 'list' ? 'From the list: ' : ''}FY24 ${money(e.fy24)} · FY25 ${money(e.fy25)}`
+                      : 'Not in the selected run'}
                   </div>
                 )}
               </section>
@@ -425,7 +427,7 @@ export default function SubjectScreenPage() {
         </div>
       </Card>
       {shown.map((s) => (
-        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run} ctx={ctx} awards={data.awards} context={data.context} />
+        <Subject key={s.ref} s={s} withDollars={!!data.meta.dollars_run || s.entities.some((e) => e.dollars_from === 'list')} ctx={ctx} awards={data.awards} context={data.context} />
       ))}
       {(data.people?.length ?? 0) > 0 && (
         <>
