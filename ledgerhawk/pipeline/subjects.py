@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from .exclusions import ExclusionsExtract, exclusion_pass
-from .ingest import derive, read_table
+from .ingest import _fiscal_year, derive, read_table
 from .links import sam_screen
 from .normalize import normalize_name
 from .rules import RuleSet
@@ -44,7 +44,7 @@ STATUSES = {
     "clear": "No hits in these sources",
 }
 STATUS_ORDER = list(STATUSES)
-TIES = {"ALIAS_MATCH", "R_EXADDR", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
+TIES = {"ALIAS_MATCH", "JV_PARTNER_EXCLUDED", "R_EXADDR", "R_EXPOC", "NAME_MATCH_SUPPORTED", "SITE_UEI_QUESTION"}
 
 
 def _key(s: str) -> str:
@@ -68,7 +68,7 @@ def parse_subjects(text: str = "", path: str | Path | None = None) -> list[dict]
         raw = read_table(Path(path), set(lookup)).fillna("")
         cols: dict[str, str] = {}
         for c in raw.columns:
-            k = lookup.get(_key(c))
+            k = lookup.get(_key(c)) or _fiscal_year(str(c))
             if k and k not in cols:
                 cols[k] = c
         if "uei" not in cols and "name" not in cols:
@@ -78,7 +78,8 @@ def parse_subjects(text: str = "", path: str | Path | None = None) -> list[dict]
             name = str(r.get(cols.get("name", ""), "")).strip()
             if uei or name:
                 out.append({"uei": uei if UEI_RE.match(uei) else "", "name": name or (uei if not UEI_RE.match(uei) else ""),
-                            "role": str(r.get(cols.get("role", ""), "")).strip()})
+                            "role": str(r.get(cols.get("role", ""), "")).strip()}
+                           | {fy: _money(r.get(cols[fy])) for fy in ("fy24", "fy25") if fy in cols})
     seen = set()
     uniq = []
     for s in out:
@@ -93,6 +94,17 @@ def parse_subjects(text: str = "", path: str | Path | None = None) -> list[dict]
     for n, s in enumerate(uniq, start=1):
         s["ref"] = n
     return uniq
+
+
+def _money(v) -> float:
+    """A dollar cell from a hand-built list: "$1,234.50", "(1,200)" or blank."""
+    t = re.sub(r"[$,\s]", "", str(v or ""))
+    neg = t.startswith("(") and t.endswith(")")
+    try:
+        x = float(t.strip("()") or 0)
+    except ValueError:
+        return 0.0
+    return -x if neg else x
 
 
 def _split(line: str) -> tuple[str, str]:
@@ -122,7 +134,10 @@ def subject_screen(
     if sam is None and ex is None:
         raise ValueError("Pick a SAM entity extract, an exclusions extract, or both.")
     rules = rules or RuleSet()
-    dollars = dollars or {}
+    run_dollars = dollars or {}
+    # Dollars the subject list itself carries (e.g. FY24/FY25 columns in a lead list) fill in where no run was picked.
+    dollars = {s["uei"]: {k: s.get(k, 0.0) for k in ("fy24", "fy25")} for s in subjects
+               if s.get("uei") and ("fy24" in s or "fy25" in s)} | run_dollars
     cap = rules.hub_cap
     # 1. Resolve each subject to SAM registrations.
     rows: list[dict] = []   # one per screened entity (subjects first, then related)
@@ -233,6 +248,7 @@ def subject_screen(
         return {
             "uei": r["uei"], "name": r["name"], "fy24": r["fy24"], "fy25": r["fy25"], "tot": r["tot"],
             "in_dollars_run": r["uei"] in dollars,
+            "dollars_from": "run" if r["uei"] in run_dollars else "list" if r["uei"] in dollars else "",
             "sam": r.get("sam"), "exclusion": r["exclusion"], "exclusion_flags": flags,
             "signals": [s for s in r["signals"] if s["id"] != "S6"], "suppression": r.get("suppression", ""),
             "links": r.get("links") or [],
@@ -290,6 +306,9 @@ def _findings(entities: list[dict], related: list[dict], have_sam: bool, cap: in
                 lines.append(f"{who} is on the SAM exclusions list: {_ex_line(h)}.")
             elif h["kind"] == "alias":
                 lines.append(f"{who} is named as an alias or affiliate in the exclusion record of {_ex_line(h)}.")
+            elif h["kind"] == "jv_partner":
+                lines.append(f"{who} is a joint venture carrying the name of excluded {_ex_line(h)}, in {h['city'] or '?'}, "
+                             f"{h['state'] or '?'}. The JV itself is not excluded; the exclusion may not reach it.")
             elif h["kind"] == "name_match":
                 sup = h.get("support", "unsupported")
                 if sup == "unsupported":
@@ -370,6 +389,10 @@ def next_steps(entities: list[dict], related: list[dict], have_sam: bool) -> lis
         steps.append("Establish whether the subject and the excluded party share owners, officers or control: corporate registry "
                      "filings, beneficial ownership, officer and director searches, and the shared contact's employment history. "
                      "Raise affiliation risk with counsel before relying on the subject.")
+    if "JV_PARTNER_EXCLUDED" in flags:
+        steps.append("Confirm the JV's members from its formation documents and SAM registration. If the excluded firm is a "
+                     "member, ask the excluding agency's suspension and debarment official whether the exclusion reaches the "
+                     "JV, and list the JV's open contracts and orders.")
     if "SITE_UEI_QUESTION" in flags:
         steps.append("Determine whether the excluded UEI is the same corporate entity (another site or a prior registration) and "
                      "whether the exclusion reaches the subject's UEI.")
@@ -401,7 +424,7 @@ def next_steps(entities: list[dict], related: list[dict], have_sam: bool) -> lis
     return steps
 
 
-KIND_TEXT = {"alias": "Named as an alias in the exclusion record of",
+KIND_TEXT = {"alias": "Named as an alias in the exclusion record of", "jv_partner": "Joint venture carrying the name of excluded",
              "address": "Same suite as excluded", "person": "Shares a contact with excluded", "name_match": "Same name as excluded"}
 
 

@@ -14,6 +14,7 @@ QUEUE_LABELS = {
 FLAG_TEXT = {
     "EXCLUDED": "is on the active SAM exclusions list under this UEI",
     "ALIAS_MATCH": "matches a name that an exclusion record lists as an alias or affiliate",
+    "JV_PARTNER_EXCLUDED": "is a joint venture whose name carries the name of an excluded firm",
     "SITE_UEI_QUESTION": "shares its legal name with an excluded vendor under a different UEI (exclusion-coverage question)",
     "STALE_PENDING": "has had an exclusion in \"Proceedings Pending\" for over a year",
     "NAME_MATCH_CANDIDATE": "has the same name as an excluded firm, not yet supported by an address or contact link",
@@ -25,6 +26,7 @@ FLAG_TEXT = {
 SHORT_FLAG = {
     "EXCLUDED": "On the SAM exclusions list",
     "ALIAS_MATCH": "Named as an alias in an exclusion record",
+    "JV_PARTNER_EXCLUDED": "Joint venture with an excluded partner's name",
     "SITE_UEI_QUESTION": "Same name as an excluded vendor under another UEI",
     "STALE_PENDING": "Exclusion pending for over a year",
     "NAME_MATCH_SUPPORTED": "Same name as an excluded firm nearby",

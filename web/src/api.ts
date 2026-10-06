@@ -130,7 +130,7 @@ export type GapGroup = {
 }
 
 export type ExclusionHit = {
-  kind: 'direct' | 'name_match' | 'alias' | 'address' | 'person'
+  kind: 'direct' | 'name_match' | 'alias' | 'address' | 'person' | 'jv_partner'
   support?: string
   evidence?: string
   name: string
@@ -272,6 +272,7 @@ export type SubjectEntity = {
   fy25: number
   tot: number
   in_dollars_run: boolean
+  dollars_from?: 'run' | 'list' | ''
   sam: SamCard | null
   exclusion: ExclusionHit[]
   exclusion_flags: string[]
@@ -381,7 +382,30 @@ export type Award = {
   after_exclusion: boolean
 }
 
+export type AwardAction = {
+  award_id: string
+  mod: string
+  date: string
+  kind: string
+  label: string
+  amount: number
+  agency: string
+  schedule: boolean
+  flagged: boolean
+  url: string
+}
+
 export type AwardEntity = {
+  by_fy?: Record<string, number>
+  lifetime?: number
+  growth?: string
+  anomalies?: string[]
+  history_error?: string
+  actions?: AwardAction[]
+  actions_flagged?: number
+  actions_summary?: string
+  actions_error?: string
+  schedule_actions?: number
   uei: string
   name: string
   refs: number[]
@@ -454,7 +478,14 @@ export type AddressCheck = { address: string; rdi: string; cmra: boolean; vacant
 
 export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
 
-export type ScreenAwards = { fetched_at: string; fetched_by: string; entities: AwardEntity[]; skipped: number; errors: number }
+export type ScreenAwards = {
+  fetched_at: string
+  fetched_by: string
+  entities: AwardEntity[]
+  skipped: number
+  errors: number
+  shifts?: Record<string, string>
+}
 
 export type ScreenNote = {
   id: string
@@ -646,6 +677,7 @@ export const QUEUE_LABEL: Record<string, string> = {
 export const FLAG_LABEL: Record<string, string> = {
   EXCLUDED: 'Excluded',
   ALIAS_MATCH: 'Alias of excluded party',
+  JV_PARTNER_EXCLUDED: 'JV with excluded partner name',
   SITE_UEI_QUESTION: 'Same name as excluded UEI',
   STALE_PENDING: 'Pending over 12 months',
   NAME_MATCH_CANDIDATE: 'Name-only candidate',

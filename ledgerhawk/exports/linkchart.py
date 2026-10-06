@@ -25,6 +25,7 @@ LINK_WIDTHS = [34, 14, 36, 32, 34, 14, 36, 60]
 EXCL_LINK = {
     "direct": "Excluded under this UEI",
     "alias": "Named as an alias in exclusion record",
+    "jv_partner": "Joint venture carrying the excluded party's name",
     "name_match": "Same name as excluded party (unconfirmed)",
 }
 

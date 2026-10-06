@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from ..pipeline import context as context_mod
 from ..pipeline.subjects import STATUSES
@@ -72,12 +73,19 @@ def award_line(e: dict) -> str:
     if e["error"]:
         return f"{e['name']} [{e['uei']}]: {e['error']}."
     if not e["count"]:
-        return f"{e['name']} [{e['uei']}] ({e['role']}): no contracts or IDVs on USAspending."
+        return " ".join([f"{e['name']} [{e['uei']}] ({e['role']}): no contracts or IDVs on USAspending."]
+                        + [a + "." for a in e.get("anomalies") or []])
     line = (f"{e['name']} [{e['uei']}] ({e['role']}): {e['count']} contracts and IDVs, ${e['total']:,.0f} obligated, "
             f"{e['first'][:4]}-{e['last'][:4]}, {len(e['agencies'])} awarding agenc{'y' if len(e['agencies']) == 1 else 'ies'}"
             + (" (largest 100 per type shown)" if e["truncated"] else ""))
     if e["after_exclusion"]:
         line += f". {e['after_exclusion']} started on or after the exclusion of {e['excluded_since']}"
+    if e.get("actions_summary"):
+        line += f". {e['actions_summary']}"
+    if e.get("growth"):
+        line += f". {e['growth']}"
+    for a in e.get("anomalies") or []:
+        line += f". {a}"
     return line + "."
 
 
@@ -294,6 +302,42 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
                              a["description"], a["url"]])
         last = _rows(ws, 6, body, {12}, 30)
         ws.auto_filter.ref = f"B5:Q{last}"
+
+        acted = [e for e in aw["entities"] if e.get("actions")]
+        if acted:
+            ws = wb.create_sheet("After Exclusion")
+            _title(ws, "Actions After Exclusion", "Every contract and IDV transaction on or after the exclusion date: new "
+                   "orders, option exercises, funding and other modifications. Flagged ones add work, money, time or an "
+                   "option, which FAR 9.405-1 says needs a written compelling-reason determination. Terminations, "
+                   "closeouts and deobligations are listed but not flagged. The contract file confirms each one.")
+            _head(ws, 5, ["Subject #", "UEI", "Entity", "Excluded Since", "Action Date", "Award ID", "Mod", "What Happened",
+                          "Flagged", "GSA Schedule", "Amount ($)", "Awarding Agency", "Description", "USAspending Link"],
+                  [10, 15, 30, 12, 12, 22, 10, 26, 8, 10, 14, 30, 60, 50])
+            body = [[", ".join(str(r) for r in e["refs"]), e["uei"], e["name"], e["excluded_since"], a["date"], a["award_id"],
+                     a["mod"], a["label"], "Yes" if a["flagged"] else "", "Yes" if a["schedule"] else "", a["amount"],
+                     a["agency"], a["description"], a["url"]] for e in acted for a in e["actions"]]
+            last = _rows(ws, 6, body, {12}, 30)
+            ws.auto_filter.ref = f"B5:O{last}"
+
+        hist = [e for e in aw["entities"] if e.get("by_fy") or e.get("anomalies")]
+        if hist:
+            years = sorted({int(y) for e in hist for y in e.get("by_fy") or {}})[-8:]
+            shifts = aw.get("shifts") or {}
+            ws = wb.create_sheet("By Fiscal Year")
+            _title(ws, "Obligations by Fiscal Year", "Contract and IDV obligations per UEI and fiscal year from USAspending. "
+                   "Growth flags a recent year of $1M or more that is at least 5x the firm's best earlier year, or a first "
+                   "year with no history. Shift flags money leaving one registration of a company as another one (same "
+                   "legal name, different UEI) starts receiving it. Data Check flags a file amount far above what "
+                   "USAspending reports, or a multi-million award that runs only a few weeks.")
+            _head(ws, 5, ["Subject #", "UEI", "Entity", "Role"] + [f"FY{y % 100:02d} ($)" for y in years]
+                  + ["Lifetime ($)", "Growth", "Shift", "Data Check"], [10, 15, 30, 16] + [14] * len(years) + [15, 60, 60, 60])
+            body = [[", ".join(str(r) for r in e["refs"]), e["uei"], e["name"], e["role"]]
+                    + [(e.get("by_fy") or {}).get(str(y)) for y in years] + [e.get("lifetime"), e.get("growth", ""),
+                    " ".join(shifts.get(str(r), "") for r in e["refs"]).strip(), ". ".join(e.get("anomalies") or [])]
+                    for e in hist]
+            money = set(range(6, 7 + len(years)))
+            last = _rows(ws, 6, body, money, 30)
+            ws.auto_filter.ref = f"B5:{get_column_letter(len(years) + 9)}{last}"
 
     cxs = (screen.get("context") or {}).get("entities") or []
     if cxs:

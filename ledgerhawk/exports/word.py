@@ -329,10 +329,26 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             aw = screen["awards"]
             doc.add_heading("Federal awards (USAspending)", level=3)
             _bullets(doc, [award_line(e) for e in found])
+            shift = (aw.get("shifts") or {}).get(str(s["ref"]))
+            if shift:
+                _bullets(doc, [shift + "."])
+            fys = sorted({int(y) for e in found for y in e.get("by_fy", {})})[-6:]
+            if fys and (len(found) > 1 or any(e.get("growth") for e in found)):
+                _grid(doc, ["UEI"] + [f"FY{y % 100:02d}" for y in fys],
+                      [[e["uei"]] + [f"${e['by_fy'][str(y)]:,.0f}" if str(y) in e.get("by_fy", {}) else "" for y in fys]
+                       for e in found if e.get("by_fy")])
             top = sorted((a | {"uei": e["uei"]} for e in found for a in e["awards"]), key=lambda a: -a["amount"])[:10]
             if top:
                 _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],
                       [[a["award_id"], a["agency"], a["start"], f"${a['amount']:,.0f}", "Yes" if a["after_exclusion"] else ""] for a in top])
+            after = [a | {"uei": e["uei"]} for e in found for a in e.get("actions", []) if a["flagged"]]
+            if after:
+                doc.add_heading("Actions after the exclusion", level=3)
+                _grid(doc, ["Date", "Award ID", "Mod", "What happened", "Amount", "GSA Schedule"],
+                      [[a["date"], a["award_id"], a["mod"], a["label"], f"${a['amount']:,.0f}", "Yes" if a["schedule"] else ""]
+                       for a in after[:15]])
+                _small(doc, "Extending or adding to a contract after an exclusion needs a written compelling-reason "
+                            "determination (FAR 9.405-1). The contract file confirms what each modification did.")
             _small(doc, f"USAspending.gov, looked up {aw['fetched_at'][:10]}. Largest awards shown; the workbook lists all retrieved.")
         for cx in [c for c in (screen.get("context") or {}).get("entities", []) if c.get("ref") == s["ref"]]:
             _context(doc, cx)

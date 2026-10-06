@@ -340,12 +340,67 @@ export function Review({ ctx, notesTarget }: { ctx: CaseCtx; notesTarget?: strin
   )
 }
 
+function AfterExclusion({ e }: { e: AwardEntity }) {
+  const flagged = (e.actions ?? []).filter((a) => a.flagged)
+  if (e.actions_error) return <div className="mt-1 text-xs text-crimson">{e.actions_error}</div>
+  if (!flagged.length) return null
+  return (
+    <div className="mt-2 rounded-md bg-crimson-50 px-2 py-1.5 text-xs">
+      <div className="font-medium text-crimson">{e.actions_summary}</div>
+      <ul className="mt-1 divide-y divide-crimson/10">
+        {flagged.slice(0, 8).map((a) => (
+          <li key={a.award_id + a.mod + a.date} className="flex flex-wrap items-baseline justify-between gap-x-3 py-0.5">
+            <span>
+              <span className="tabular">{a.date}</span> · {a.label} ·{' '}
+              {a.url ? (
+                <a href={a.url} target="_blank" rel="noreferrer" className="font-mono text-navy underline">
+                  {a.award_id}
+                </a>
+              ) : (
+                <span className="font-mono">{a.award_id}</span>
+              )}
+              {a.mod && <span className="font-mono text-slate-500"> {a.mod}</span>}
+              {a.schedule && <span className="ml-1 rounded bg-white px-1 text-crimson">GSA Schedule</span>}
+            </span>
+            <span className="tabular">{money(a.amount)}</span>
+          </li>
+        ))}
+      </ul>
+      {flagged.length > 8 && <div className="text-slate-600">{flagged.length - 8} more in the workbook.</div>}
+    </div>
+  )
+}
+
+function ByYear({ e }: { e: AwardEntity }) {
+  const years = Object.keys(e.by_fy ?? {}).sort().slice(-6)
+  if (!years.length) return null
+  return (
+    <>
+      {e.growth && <div className="mt-1 text-xs font-medium text-crimson">{e.growth}</div>}
+      <div className="tabular mt-1 flex flex-wrap gap-x-3 text-xs text-slate-500">
+        {years.map((y) => (
+          <span key={y}>
+            FY{y.slice(2)} {money(e.by_fy![y])}
+          </span>
+        ))}
+      </div>
+    </>
+  )
+}
+
 export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awards: ScreenAwards }) {
+  const refs = new Set(entities.flatMap((e) => e.refs))
+  const shifts = [...refs].map((r) => awards.shifts?.[String(r)]).filter(Boolean)
   return (
     <section>
       <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
         Federal awards · USAspending, {awards.fetched_at.slice(0, 10)}
       </h3>
+      {[...new Set(shifts)].map((t) => (
+        <div key={t} className="mb-2 text-sm font-medium text-crimson">
+          {t}
+        </div>
+      ))}
       <div className="space-y-3">
         {entities.map((e) => (
           <div key={e.uei} className="text-sm">
@@ -353,6 +408,11 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
               {e.name} <span className="font-mono text-xs font-normal text-slate-500">{e.uei}</span>
               {e.role !== 'subject' && <span className="ml-1 text-xs font-normal text-slate-500">({e.role})</span>}
             </div>
+            {(e.anomalies ?? []).map((a) => (
+              <div key={a} className="text-xs font-medium text-amber-700">
+                {a}
+              </div>
+            ))}
             {e.error ? (
               <div className="text-xs text-crimson">{e.error}</div>
             ) : e.count === 0 ? (
@@ -369,6 +429,8 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
                     {e.after_exclusion} award{e.after_exclusion === 1 ? '' : 's'} started on or after the exclusion of {e.excluded_since}
                   </div>
                 )}
+                <AfterExclusion e={e} />
+                <ByYear e={e} />
                 <ul className="mt-1 divide-y divide-slate-100">
                   {e.awards.slice(0, 5).map((a) => (
                     <li key={a.award_id + a.start} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1 text-xs">

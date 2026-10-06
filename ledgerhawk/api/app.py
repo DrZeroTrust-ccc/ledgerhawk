@@ -889,7 +889,8 @@ def vendor_graph(run_id: str, uei: str):
 
 
 GAP_KINDS = {"address": "Shares a suite with an excluded party", "person": "Shares a contact with an excluded party",
-             "alias": "Named as an alias in an exclusion record", "name_match": "Same name as an excluded firm (supported)"}
+             "alias": "Named as an alias in an exclusion record", "name_match": "Same name as an excluded firm (supported)",
+             "jv_partner": "Joint venture carrying an excluded firm's name"}
 
 
 @app.get("/api/runs/{run_id}/exclusion-gaps")

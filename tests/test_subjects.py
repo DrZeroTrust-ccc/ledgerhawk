@@ -373,6 +373,25 @@ def _fake_usaspending(calls):
         uei = body["filters"]["recipient_search_text"][0]
         if uei == "FAILFAILFAIL":
             raise urllib.error.URLError("down")
+        if url.endswith("/spending_over_time/"):  # FY23 small, FY25 a jump
+            return {"results": [{"time_period": {"fiscal_year": 2023}, "aggregated_amount": 100000, "Contract_Obligations": 80000,
+                                 "Idv_Obligations": 20000},
+                                {"time_period": {"fiscal_year": 2025}, "aggregated_amount": 2.5e6, "Contract_Obligations": 2.5e6,
+                                 "Idv_Obligations": None}]}
+        if url.endswith("/spending_by_transaction/"):
+            if "IDV_A" in body["filters"]["award_type_codes"]:  # a GSA Schedule option exercise (PO mod)
+                rows = [{"Award ID": "47QTCA24D003M", "Mod": "PO0010", "Action Date": "2026-06-12", "Action Type": "M",
+                         "Transaction Amount": 0, "Recipient UEI": uei, "Awarding Agency": "General Services Administration"}]
+            else:
+                rows = [{"Award ID": "47QTCA25F0001", "Mod": "0", "Action Date": "2025-07-01", "Action Type": None,
+                         "Transaction Amount": 250000.5, "Recipient UEI": uei, "Awarding Agency": "General Services Administration"},
+                        {"Award ID": "47QTCA22F0002", "Mod": "P00004", "Action Date": "2025-08-01", "Action Type": "C",
+                         "Transaction Amount": -1200, "Recipient UEI": uei},  # deobligation: not flagged
+                        {"Award ID": "47QTCA22F0002", "Mod": "P00005", "Action Date": "2025-09-01", "Action Type": "K",
+                         "Transaction Amount": 0, "Recipient UEI": uei},  # closeout: not flagged
+                        {"Award ID": "OLD", "Mod": "P00001", "Action Date": "2024-01-01", "Action Type": "G",
+                         "Transaction Amount": 5000, "Recipient UEI": uei}]  # before the exclusion: dropped
+            return {"results": rows, "page_metadata": {"page": 1, "hasNext": False}}
         if "IDV_A" in body["filters"]["award_type_codes"]:
             return {"results": [{"internal_id": 3, "generated_internal_id": f"CONT_IDV_{uei}", "Award ID": "GS-00F-001",
                                  "Recipient UEI": uei, "Award Amount": 0, "Awarding Agency": "General Services Administration",
@@ -412,6 +431,30 @@ def test_awards_lookup(syn):
     assert any(e["role"] == "related, excluded" for e in aw["entities"])  # excluded related firms are looked up too
     affiliate = next(e for e in aw["entities"] if e["role"] == "subject" and e["uei"] != p["excluded_major"])
     assert affiliate["after_exclusion"] == 0 and not affiliate["excluded_since"]
+    assert not affiliate["actions"]  # no exclusion, no transaction lookup
+
+    # every action after the exclusion, by kind: a new order and a GSA Schedule option (PO mod) are flagged
+    kinds = [(a["award_id"], a["kind"], a["flagged"]) for a in major["actions"]]
+    assert kinds == [("47QTCA25F0001", "new", True), ("47QTCA22F0002", "admin", False),
+                     ("47QTCA22F0002", "wind_down", False), ("47QTCA24D003M", "option", True)]
+    assert major["actions_flagged"] == 2 and major["schedule_actions"] == 2 and major["actions_dollars"] == 250000.5
+    assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0010, 2026-06-12)" in major["actions_summary"]
+    assert major["by_fy"] == {"2023": 100000.0, "2025": 2500000.0} and major["lifetime"] == 2600000.0
+    assert major["growth"].startswith("FY25 obligations of $2.5M are 25x its best earlier year (FY23, $100,000")
+
+
+def test_growth_and_money_shift_notes():
+    from datetime import date as d
+    from ledgerhawk.pipeline.awards import growth_note, shift_note
+    today = d(2026, 10, 6)  # FY27 has just started
+    assert growth_note({2020: 300000, 2026: 400000}, today) == ""  # under $1M is not a story
+    assert growth_note({2020: 300000, 2026: 1.2e6}, today) == ""  # 4x is ordinary growth
+    assert "8x its best earlier year" in growth_note({2019: 150000, 2020: 200000, 2026: 1.6e6}, today)
+    assert growth_note({2026: 3e6}, today) == "No federal contract dollars before FY26; $3.0M in FY26"
+    shift = shift_note([{"uei": "OLDUEI", "by_fy": {2024: 1e6, 2025: 5e6, 2026: 400000}},
+                        {"uei": "NEWUEI", "by_fy": {2026: 4.2e6}}], today)
+    assert shift.startswith("Money moved between registrations: as OLDUEI fell from $5.0M in FY25 to $400,000 in FY26, NEWUEI went")
+    assert shift_note([{"uei": "A", "by_fy": {2025: 5e6, 2026: 5e6}}, {"uei": "B", "by_fy": {2026: 4e6}}], today) == ""  # A did not fall
 
 
 def test_awards_api_and_exports(syn, tmp_path):
@@ -447,6 +490,15 @@ def test_awards_api_and_exports(syn, tmp_path):
         doc = Document(io.BytesIO(client.get(f"{base}/subject-screen.docx").content))
         text = "\n".join(par.text for par in doc.paragraphs)
         assert "Federal awards (USAspending)" in text and "started on or after the exclusion of 2025-03-01" in text
+        assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0010, 2026-06-12)" in text
+        ws = wb["After Exclusion"]
+        rows = [[c.value for c in r] for r in ws.iter_rows(min_row=6, min_col=2, max_col=12)]
+        assert ["47QTCA24D003M", "PO0010", "option exercised", "Yes", "Yes"] == rows[-1][5:10]
+        assert any(t.cell(0, 0).text == "Date" for t in doc.tables)  # the after-exclusion table in the report
+        assert "25x its best earlier year" in text
+        ws = wb["By Fiscal Year"]
+        assert [c.value for c in ws[5]][1:8] == ["Subject #", "UEI", "Entity", "Role", "FY23 ($)", "FY25 ($)", "Lifetime ($)"]
+        assert ws["F6"].value == 100000 and ws["H6"].value == 2600000 and ws["I6"].value.startswith("FY25 obligations")
         assert any(a["action"] == "screen_awards" for a in client.get("/api/audit").json())
     finally:
         mp.undo()
@@ -460,3 +512,18 @@ def test_subject_file_with_title_rows_above_the_header(tmp_path):
     pd.DataFrame(rows).to_excel(p, header=False, index=False)
     got = parse_subjects(path=p)
     assert [(s["uei"], s["name"]) for s in got] == [("HFGCD12199B8", "ELB SERVICES LLC"), ("", "K2 CONTRACTING GROUP LLC")]
+
+
+def test_subject_list_dollars_and_data_checks(tmp_path):
+    from ledgerhawk.pipeline.awards import file_mismatch, odd_awards
+    p = tmp_path / "voi.csv"
+    p.write_text('UEI,Name,FY24 Obligated ($),FY25 Obligated ($)\nHFGCD12199B8,MUCOMMUNE LLC,"$6,450,000",(1200)\n')
+    got = parse_subjects(path=p)
+    assert got[0]["fy24"] == 6450000.0 and got[0]["fy25"] == -1200.0  # the list's own dollar columns are kept
+    assert file_mismatch({2024: 6.45e6, 2025: 0}, {2024: 306000}) == [
+        "Data check: the GSA file shows $6.5M for FY24; USAspending shows $306,000. Confirm the record before it counts toward totals"]
+    assert file_mismatch({2024: 1.2e6}, {2024: 900000}) == []  # close enough
+    odd = odd_awards([{"award_id": "19AQMM24P0001", "amount": 7.79e6, "start": "2024-03-01", "end": "2024-03-31"},
+                      {"award_id": "LONG", "amount": 9e6, "start": "2024-01-01", "end": "2025-01-01"}])
+    assert odd == ["Data check: 19AQMM24P0001 is $7.8M for 31 days of work (2024-03-01 to 2024-03-31). "
+                   "The amount may be in local currency or mis-keyed"]

@@ -149,3 +149,24 @@ def test_fiscal_year_dollar_columns_named_loosely():
     m = map_columns(["Vendor UEI", "Vendor Name", "FY24 Obligated ($)", "Fiscal Year 2025 Net Obligations", "FY24 Notes"])
     assert m == {"Vendor UEI": "uei", "Vendor Name": "name", "FY24 Obligated ($)": "fy24",
                  "Fiscal Year 2025 Net Obligations": "fy25"}
+
+
+def test_joint_venture_carrying_an_excluded_partners_name():
+    import pandas as pd
+
+    from ledgerhawk.pipeline.exclusions import ExclusionsExtract, exclusion_pass
+    from ledgerhawk.pipeline.rules import RuleSet
+
+    def rec(name, uei=""):
+        return {"display_name": name, "uei": uei, "agency": "AF", "etype": "Proposed Debarment", "program": "Reciprocal",
+                "ct_code": "", "active_date": "09/14/2026", "termination_date": "", "city": "DAYTON", "state": "OH",
+                "comments": "", "scope": "", "classification": "Firm", "nn": normalize_name(name), "aliases": []}
+    ex = ExclusionsExtract(pd.DataFrame([rec("Clemons, Inc.", "CLEMONSUEI01"), rec("Services Inc")]), date(2026, 10, 1), "x", 2)
+    df = pd.DataFrame({"uei": ["JVUEI0000001", "OTHERUEI0001", "JVUEI0000002"],
+                       "name": ["CLEMONS VAZQUEZ JV LLC", "CLEMONS VAZQUEZ LLC", "ACME SERVICES JV"]})
+    df["nn"] = df["name"].map(normalize_name)
+    out = exclusion_pass(df, ex, RuleSet()).set_index("uei")
+    assert "JV_PARTNER_EXCLUDED" in out.loc["JVUEI0000001", "exclusion_flags"]
+    assert out.loc["JVUEI0000001", "exclusion"][0]["kind"] == "jv_partner"
+    assert out.loc["OTHERUEI0001", "exclusion_flags"] == []  # not a JV
+    assert out.loc["JVUEI0000002", "exclusion_flags"] == []  # a generic word is not a partner name
