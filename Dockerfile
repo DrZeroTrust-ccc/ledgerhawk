@@ -16,4 +16,5 @@ COPY ledgerhawk/ ledgerhawk/
 RUN pip install --no-cache-dir .
 COPY --from=web /web/dist web/dist
 EXPOSE 10000
-CMD ["sh", "-c", "mkdir -p \"$LEDGERHAWK_DATA_DIR\" && exec uvicorn ledgerhawk.api.app:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*'"]
+# Keep idle connections open longer than Render's proxy does, so it never reuses one uvicorn already closed (a fast 502).
+CMD ["sh", "-c", "mkdir -p \"$LEDGERHAWK_DATA_DIR\" && exec uvicorn ledgerhawk.api.app:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips='*' --timeout-keep-alive 75"]
