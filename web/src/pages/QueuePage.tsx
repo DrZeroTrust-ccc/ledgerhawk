@@ -230,6 +230,41 @@ function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]
   )
 }
 
+const FILTER_KEYS = ['tier', 'signal', 'disposition', 'owner', 'assignee', 'q'] as const
+
+// An empty list under a tab that says it has vendors: say which filters hid them, and clear them in one click.
+function HiddenByFilters({
+  runId,
+  base,
+  active,
+  onClear,
+}: {
+  runId: string
+  base: Record<string, string>
+  active: string[]
+  onClear: () => void
+}) {
+  const { data } = useAsync(() => api.vendors(runId, { ...base, limit: '1' }), [runId, JSON.stringify(base)])
+  if (!data) return <p className="py-6 text-center text-sm text-slate-500">No vendors match these filters.</p>
+  return (
+    <div className="py-6 text-center text-sm text-slate-600">
+      {data.total > 0 ? (
+        <>
+          <p>
+            {num(data.total)} {data.total === 1 ? 'vendor in this tab is' : 'vendors in this tab are'} hidden by your{' '}
+            {active.length === 1 ? 'filter' : 'filters'}: <span className="font-medium text-ink">{active.join(' · ')}</span>
+          </p>
+          <button onClick={onClear} className="mt-2 rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink">
+            Clear {active.length === 1 ? 'the filter' : 'filters'} and show {data.total === 1 ? 'it' : `all ${num(data.total)}`}
+          </button>
+        </>
+      ) : (
+        <p>No vendors in this tab, even without the filters.</p>
+      )}
+    </div>
+  )
+}
+
 export default function QueuePage() {
   const { id = '' } = useParams()
   const [sp, setSp] = useSearchParams()
@@ -262,6 +297,8 @@ export default function QueuePage() {
   if (assignee) params.assignee = assignee
   if (q) params.q = q
 
+  const tabOnly: Record<string, string> = {}
+  for (const k of ['bucket', 'queue', 'lane']) if (params[k]) tabOnly[k] = params[k]
   const run = useAsync(() => api.run(id), [id])
   usePlace(run.data ? `Queue (${run.data.meta.label})` : null)
   const meta = useAsync(() => api.meta(), [])
@@ -322,6 +359,23 @@ export default function QueuePage() {
       else n.add(uei)
       return n
     })
+  const activeFilters = FILTER_KEYS.filter((k) => sp.get(k)).map((k) => {
+    const v = sp.get(k) ?? ''
+    if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : meta.data?.tiers[v] ?? `Tier ${v}`
+    if (k === 'signal') return `Signal ${v}`
+    if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier run' : v
+    if (k === 'owner') return `Owner: ${v}`
+    if (k === 'assignee') return `Assigned to ${v}`
+    return `Search "${v}"`
+  })
+  const clearFilters = () => {
+    const next = new URLSearchParams(sp)
+    FILTER_KEYS.forEach((k) => next.delete(k))
+    setSp(next)
+    setLimit(PAGE)
+    setSelected(new Set())
+    setFocus(null)
+  }
   const allOnPage = data ? data.rows.every((r) => selected.has(r.uei)) && data.rows.length > 0 : false
 
   return (
@@ -460,7 +514,12 @@ export default function QueuePage() {
         <Card>
           <ErrorNote error={error} />
           {!data && !error && <Loading />}
-          {data && data.total === 0 && <p className="py-6 text-center text-sm text-slate-500">No vendors match these filters.</p>}
+          {data && data.total === 0 &&
+            (activeFilters.length ? (
+              <HiddenByFilters key={sp.toString()} runId={id} base={tabOnly} active={activeFilters} onClear={clearFilters} />
+            ) : (
+              <p className="py-6 text-center text-sm text-slate-500">No vendors in this tab.</p>
+            ))}
           {data && data.total > 0 && (
             <div className="-mx-5 -my-5 overflow-x-auto">
               <table className="w-full text-sm">
