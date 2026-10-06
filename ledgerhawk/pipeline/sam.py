@@ -112,7 +112,7 @@ def _codes(field: str) -> list[str]:
 ENT_TEXT = list(SAM_LAYOUT) + ["zip5", "akey", "bkey", "nn"]
 ENT_FLAGS = ["active", "residential", "virtual"]
 POC_COLS = ["uei", "role", "first", "last", "title", "city", "state", "pkey"]
-CACHE_VERSION = "v3"  # v3: SQLite store (v2 added the entity URL)
+CACHE_VERSION = "v4"  # v4: records split on "!end" too; v3: SQLite store; v2: entity URL
 
 
 def _up(s: str) -> str:
@@ -206,16 +206,45 @@ class SamExtract:
                         self.records)
 
 
-def _lines(path: Path) -> Iterator[str]:
-    """Lines of the extract, read straight out of the ZIP SAM.gov ships it in when it is still zipped."""
+def _text(path: Path) -> Iterator[str]:
+    """Chunks of the extract's text, read straight out of the ZIP SAM.gov ships it in (or a ZIP inside it)."""
+    def chunks(raw) -> Iterator[str]:
+        wrapper = io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace", newline="")
+        while chunk := wrapper.read(1 << 20):
+            yield chunk
+
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as zf:
             member = max(zf.infolist(), key=lambda m: m.file_size)
             with zf.open(member) as raw:
-                yield from io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
+                if member.filename.lower().endswith(".zip"):
+                    with zipfile.ZipFile(raw) as inner:
+                        m2 = max(inner.infolist(), key=lambda m: m.file_size)
+                        with inner.open(m2) as raw2:
+                            yield from chunks(raw2)
+                else:
+                    yield from chunks(raw)
     else:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            yield from f
+        with open(path, "rb") as raw:
+            yield from chunks(raw)
+
+
+_RECORD_END = re.compile(r"!end|\r?\n|\r")
+
+
+def _lines(path: Path) -> Iterator[str]:
+    """One string per record. Records end with "!end", a line break, or both, so a file with every record on one
+    line reads the same as one with a record per line."""
+    buf = ""
+    for chunk in _text(path):
+        buf += chunk
+        parts = _RECORD_END.split(buf)
+        buf = parts.pop()  # may be cut mid-record; finish it with the next chunk
+        for rec in parts:
+            if rec.strip():
+                yield rec
+    if buf.strip():
+        yield buf
 
 
 def _build(path: Path, extract_date: date, db: Path) -> None:
@@ -243,11 +272,9 @@ def _build(path: Path, extract_date: date, db: Path) -> None:
         pocs.clear()
 
     for seq, line in enumerate(_lines(path)):
-        line = line.rstrip("\r\n")
-        if not line or line.startswith(("BOF", "EOF")):
+        line = line.strip("\r\n")
+        if line.startswith(("BOF", "EOF")):
             continue
-        if line.endswith("!end"):
-            line = line[:-4]
         parts = line.split("|")
         f = lambda pos: parts[pos - 1].strip() if pos - 1 < len(parts) else ""  # noqa: E731
         e = {k: f(pos) for k, pos in SAM_LAYOUT.items()}
@@ -299,4 +326,11 @@ def load_sam(path: str | Path, extract_date: date, cache_dir: str | Path | None 
     db = Path(cache_dir or path.parent) / f".{path.name}.{sha[:16]}.{extract_date.isoformat()}.{CACHE_VERSION}.sqlite"
     if not db.exists():
         _build(path, extract_date, db)
-    return SamExtract(db, extract_date, path.name, sha)
+        for old in db.parent.glob(f".{path.name}.*.sqlite"):  # tables from an older reader
+            if old != db:
+                old.unlink(missing_ok=True)
+    sam = SamExtract(db, extract_date, path.name, sha)
+    if not sam.records:
+        db.unlink(missing_ok=True)
+        raise ValueError(f"No SAM entities could be read from {path.name}. It may not be the public V2 entity extract.")
+    return sam

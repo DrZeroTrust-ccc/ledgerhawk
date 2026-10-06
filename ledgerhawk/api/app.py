@@ -151,6 +151,19 @@ def _sam_gov_loop() -> None:
         time.sleep(3600)
 
 
+def _index_newest_sam() -> None:
+    """Rebuild the newest SAM entity extract's lookup tables at startup when a new reader needs them, so the first
+    screen after a deploy doesn't wait minutes for it."""
+    for src in store.list_sources():
+        if src["kind"] == "sam" and src["uploaded_by"] != "system":
+            try:
+                print(f"SAM entity file {src['file']}: {store.index_sam(src['id']):,} entities", flush=True)
+            except Exception as exc:
+                print(f"SAM entity file {src['file']}: {type(exc).__name__}: {exc}", flush=True)
+            return
+
+
+threading.Thread(target=_index_newest_sam, daemon=True).start()
 if samgov.api_key():
     threading.Thread(target=_sam_gov_loop, daemon=True).start()
 

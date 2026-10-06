@@ -32,6 +32,34 @@ def test_zipped_extracts_load(tmp_path):
     assert len(load_exclusions(ze, date(2026, 10, 2)).records) == len(load_exclusions(excl, date(2026, 10, 2)).records)
 
 
+def test_extract_read_whatever_the_record_breaks(tmp_path):
+    """SAM.gov's file may put every record on one line ("!end" only), use CRLF, or start with a BOM."""
+    _, _, sam, _ = make_synthetic(tmp_path, n=300, seed=5)
+    want = load_sam(sam, date(2026, 9, 6)).records
+    assert want > 250
+    text = sam.read_text()
+    for name, body in {"oneline": text.replace("!end\n", "!end"), "crlf": text.replace("\n", "\r\n"),
+                       "bom": "\ufeff" + text}.items():
+        p = tmp_path / name / "SAM_PUBLIC_MONTHLY_V2_20261005.dat"
+        p.parent.mkdir()
+        p.write_bytes(body.encode("utf-8"))
+        z = p.with_suffix(".zip")
+        with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(p, p.name)
+        assert load_sam(p, date(2026, 10, 5)).records == want, name
+        assert load_sam(z, date(2026, 10, 5)).records == want, name
+
+
+def test_unreadable_extract_is_an_error_not_an_empty_screen(tmp_path):
+    p = tmp_path / "SAM_PUBLIC_MONTHLY_V2_20261005.dat"
+    p.write_text("BOF PUBLIC V2 00000000 20261005 0000000 0000000\nEOF PUBLIC V2\n")
+    try:
+        load_sam(p, date(2026, 10, 5))
+        raise AssertionError("expected an error")
+    except ValueError as exc:
+        assert "No SAM entities" in str(exc)
+
+
 def test_refresh_fetches_newest_once_and_reports_errors(tmp_path):
     _, excl, sam, _ = make_synthetic(tmp_path / "syn", n=300, seed=3)
     calls = []
@@ -59,6 +87,7 @@ def test_refresh_fetches_newest_once_and_reports_errors(tmp_path):
     srcs = {m["kind"]: m for m in st.list_sources()}
     assert srcs["sam"]["uploaded_by"] == Store.AUTO_BY and srcs["sam"]["file"] == "SAM_PUBLIC_MONTHLY_V2_20261004.ZIP"
     assert list(Path(srcs["sam"]["path"]).parent.glob("*.sqlite"))  # lookup tables built at download time
+    assert srcs["sam"]["entities"] > 250  # shown in Data sources so a misread file is obvious
     n = len(calls)
     assert len(calls) == 3 and all("api_key=k" in c for c in calls)
     st.refresh_sam_gov("k", today=date(2026, 10, 5), download=fake)

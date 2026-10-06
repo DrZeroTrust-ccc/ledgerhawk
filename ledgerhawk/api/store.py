@@ -202,6 +202,24 @@ class Store:
         meta["path"] = str(d / meta["file"])
         return meta
 
+    def index_sam(self, sid: str) -> int:
+        """Build (or reuse) a SAM entity extract's lookup tables and record how many entities it holds, so the Data
+        sources table shows whether the file was read. Raises ValueError when no entity could be read."""
+        src = self.source(sid)
+        meta_path = Path(src["path"]).parent / "meta.json"
+        try:
+            n = load_sam(src["path"], date.fromisoformat(src["as_of"]), Path(src["path"]).parent).records
+        except ValueError:
+            meta = json.loads(meta_path.read_text())
+            meta["entities"] = 0
+            meta_path.write_text(json.dumps(meta, indent=2))
+            raise
+        meta = json.loads(meta_path.read_text())
+        if meta.get("entities") != n:
+            meta["entities"] = n
+            meta_path.write_text(json.dumps(meta, indent=2))
+        return n
+
     # ---- automatic SAM.gov downloads ------------------------------------------------------------------------------
     AUTO_BY = "SAM.gov (automatic)"
     AUTO_KEEP = {"sam": 2, "exclusions": 14}
@@ -263,7 +281,10 @@ class Store:
                             dest = dest.rename(dest.with_name(Path(sent).name))
                         src = self.add_source(kind, dest, d, self.AUTO_BY, move=True)
                     if kind == "sam":
-                        load_sam(src["path"], d, Path(src["path"]).parent)  # build the lookup tables now, not mid-screen
+                        try:
+                            self.index_sam(src["id"])  # build the lookup tables now, not mid-screen
+                        except ValueError as exc:
+                            cur["error"] = str(exc)
                     cur.update(as_of=d.isoformat(), fetched_at=_now())
                     self._prune_auto(kind)
                     found = True
