@@ -340,6 +340,37 @@ export function Review({ ctx, notesTarget }: { ctx: CaseCtx; notesTarget?: strin
   )
 }
 
+function AfterExclusion({ e }: { e: AwardEntity }) {
+  const flagged = (e.actions ?? []).filter((a) => a.flagged)
+  if (e.actions_error) return <div className="mt-1 text-xs text-crimson">{e.actions_error}</div>
+  if (!flagged.length) return null
+  return (
+    <div className="mt-2 rounded-md bg-crimson-50 px-2 py-1.5 text-xs">
+      <div className="font-medium text-crimson">{e.actions_summary}</div>
+      <ul className="mt-1 divide-y divide-crimson/10">
+        {flagged.slice(0, 8).map((a) => (
+          <li key={a.award_id + a.mod + a.date} className="flex flex-wrap items-baseline justify-between gap-x-3 py-0.5">
+            <span>
+              <span className="tabular">{a.date}</span> · {a.label} ·{' '}
+              {a.url ? (
+                <a href={a.url} target="_blank" rel="noreferrer" className="font-mono text-navy underline">
+                  {a.award_id}
+                </a>
+              ) : (
+                <span className="font-mono">{a.award_id}</span>
+              )}
+              {a.mod && <span className="font-mono text-slate-500"> {a.mod}</span>}
+              {a.schedule && <span className="ml-1 rounded bg-white px-1 text-crimson">GSA Schedule</span>}
+            </span>
+            <span className="tabular">{money(a.amount)}</span>
+          </li>
+        ))}
+      </ul>
+      {flagged.length > 8 && <div className="text-slate-600">{flagged.length - 8} more in the workbook.</div>}
+    </div>
+  )
+}
+
 export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awards: ScreenAwards }) {
   return (
     <section>
@@ -369,6 +400,7 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
                     {e.after_exclusion} award{e.after_exclusion === 1 ? '' : 's'} started on or after the exclusion of {e.excluded_since}
                   </div>
                 )}
+                <AfterExclusion e={e} />
                 <ul className="mt-1 divide-y divide-slate-100">
                   {e.awards.slice(0, 5).map((a) => (
                     <li key={a.award_id + a.start} className="flex flex-wrap items-baseline justify-between gap-x-3 py-1 text-xs">

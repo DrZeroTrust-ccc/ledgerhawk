@@ -381,7 +381,25 @@ export type Award = {
   after_exclusion: boolean
 }
 
+export type AwardAction = {
+  award_id: string
+  mod: string
+  date: string
+  kind: string
+  label: string
+  amount: number
+  agency: string
+  schedule: boolean
+  flagged: boolean
+  url: string
+}
+
 export type AwardEntity = {
+  actions?: AwardAction[]
+  actions_flagged?: number
+  actions_summary?: string
+  actions_error?: string
+  schedule_actions?: number
   uei: string
   name: string
   refs: number[]

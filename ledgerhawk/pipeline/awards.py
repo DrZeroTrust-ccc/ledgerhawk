@@ -103,6 +103,106 @@ def awards_for_uei(uei: str, post: Post = _post, today: date | None = None) -> d
     return out
 
 
+TX_API = "https://api.usaspending.gov/api/v2/search/spending_by_transaction/"
+TX_FIELDS = ["Award ID", "Mod", "Action Date", "Action Type", "Transaction Amount", "Transaction Description",
+             "Awarding Agency", "Awarding Sub Agency", "Recipient Name", "Recipient UEI"]
+TX_LIMIT = 100
+# FPDS reason-for-modification codes. Ending or cleaning up a contract after an exclusion is expected; adding work,
+# money, time or an option is what FAR 9.405-1 says needs a written compelling-reason determination.
+ACTION_KINDS = {
+    "A": "work", "B": "work", "D": "work", "L": "work", "H": "work",
+    "C": "funding", "G": "option",
+    "E": "wind_down", "F": "wind_down", "K": "wind_down", "N": "wind_down", "X": "wind_down",
+}
+ACTION_TEXT = [("option", "option"), ("terminat", "wind_down"), ("close", "wind_down"), ("cancel", "wind_down"),
+               ("funding", "funding"), ("supplemental", "work"), ("additional work", "work"), ("change order", "work")]
+KIND_LABELS = {"new": "new award or order", "option": "option exercised", "work": "work added or changed",
+               "funding": "funding added", "admin": "other modification", "wind_down": "termination or closeout"}
+FLAGGED_KINDS = {"new", "option", "work", "funding"}
+
+
+def _action_kind(mod: str, action_type: str, amount: float, award_id: str) -> str:
+    mod = (mod or "").strip().upper()
+    if mod in ("", "0", "00", "000", "0000"):
+        return "new"
+    code = (action_type or "").strip().upper()
+    kind = ACTION_KINDS.get(code[:1]) if len(code) <= 2 else None
+    if not kind:
+        low = code.lower()
+        kind = next((k for word, k in ACTION_TEXT if word in low), None)
+    if not kind and mod.startswith("PO") and _schedule(award_id):
+        kind = "option"  # GSA numbers option exercises PO0001, PO0002...; the contract file confirms it
+    kind = kind or "admin"
+    if kind == "funding" and amount <= 0:
+        kind = "admin"  # money taken off is a deobligation, not new funding
+    return kind
+
+
+def _schedule(award_id: str) -> bool:
+    """GSA Multiple Award Schedule and other GSA vehicles: 47Q... (current) or GS-... (legacy) contract numbers."""
+    a = (award_id or "").upper().replace("-", "")
+    return a.startswith("47Q") or (a.startswith("GS") and len(a) >= 9 and a[2:4].isdigit())
+
+
+def actions_after(uei: str, since: str, post: Post = _post, today: date | None = None) -> dict:
+    """Every contract and IDV transaction for a UEI dated on or after its exclusion: new orders, option exercises,
+    funding and other modifications. Errors are returned, not raised."""
+    today = today or date.today()
+    out = {"actions": [], "truncated": False, "error": ""}
+    if not since or since > today.isoformat():
+        return out
+    for group, (codes, _) in GROUPS.items():
+        body = {"filters": {"award_type_codes": codes, "recipient_search_text": [uei],
+                            "time_period": [{"start_date": since, "end_date": today.isoformat()}]},
+                "fields": TX_FIELDS, "limit": TX_LIMIT, "page": 1, "sort": "Action Date", "order": "asc"}
+        try:
+            res = post(TX_API, body)
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            out["error"] = f"USAspending transactions did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"
+            continue
+        for row in res.get("results") or []:
+            got = (row.get("Recipient UEI") or "").strip().upper()
+            if got and got != uei:
+                continue
+            when = _iso(row.get("Action Date"))
+            if not when or when < since:
+                continue
+            amount = float(row.get("Transaction Amount") or 0)
+            award_id = row.get("Award ID") or ""
+            kind = _action_kind(str(row.get("Mod") or ""), str(row.get("Action Type") or ""), amount, award_id)
+            gid = row.get("generated_internal_id") or ""
+            out["actions"].append({
+                "group": group, "award_id": award_id, "mod": str(row.get("Mod") or ""), "date": when,
+                "action_type": str(row.get("Action Type") or ""), "kind": kind, "label": KIND_LABELS[kind],
+                "amount": amount, "description": (row.get("Transaction Description") or "").strip(),
+                "agency": row.get("Awarding Agency") or "", "sub_agency": row.get("Awarding Sub Agency") or "",
+                "schedule": _schedule(award_id), "flagged": kind in FLAGGED_KINDS,
+                "url": AWARD_PAGE + gid if gid else "",
+            })
+        out["truncated"] = out["truncated"] or bool((res.get("page_metadata") or {}).get("hasNext"))
+    out["actions"].sort(key=lambda a: a["date"])
+    return out
+
+
+def actions_summary(actions: list[dict], since: str) -> str:
+    """One line an investigator can read: what happened after the exclusion, by kind, with the GSA Schedule ones named."""
+    flagged = [a for a in actions if a["flagged"]]
+    if not flagged:
+        return ""
+    by_kind: dict[str, int] = {}
+    for a in flagged:
+        by_kind[a["label"]] = by_kind.get(a["label"], 0) + 1
+    parts = ", ".join(f"{k}: {n}" for k, n in by_kind.items())
+    money_after = sum(a["amount"] for a in flagged if a["amount"] > 0)
+    line = f"{len(flagged)} action{'' if len(flagged) == 1 else 's'} after the exclusion of {since} ({parts}; ${money_after:,.0f} obligated)"
+    sched = [a for a in flagged if a["schedule"]]
+    if sched:
+        last = sched[-1]
+        line += (f". GSA Schedule {last['award_id']} was modified after the exclusion"
+                 f" ({last['mod'] or 'mod'}, {last['date']})")
+    return line
+
+
 def _excluded_since(entity: dict) -> str:
     """Earliest active date of an exclusion recorded against this entity's own UEI (not facility-only)."""
     dates = [_iso(h.get("active_date")) for h in entity.get("exclusion", [])
@@ -128,13 +228,20 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
     ueis = list(targets)[:MAX_UEIS]
     with ThreadPoolExecutor(max_workers=6) as pool:
         found = list(pool.map(lambda u: awards_for_uei(u, post, today), ueis))
+        acts = dict(zip(ueis, pool.map(lambda u: actions_after(u, targets[u]["excluded_since"], post, today), ueis)))
     entities = []
     for res in found:
         t = targets[res["uei"]]
         since = t["excluded_since"]
         for a in res["awards"]:
             a["after_exclusion"] = bool(since and a["start"] and a["start"] >= since)
+        act = acts.get(res["uei"]) or {"actions": [], "truncated": False, "error": ""}
+        flagged = [a for a in act["actions"] if a["flagged"]]
         entities.append({
+            "actions": act["actions"], "actions_truncated": act["truncated"], "actions_error": act["error"],
+            "actions_flagged": len(flagged), "actions_dollars": round(sum(a["amount"] for a in flagged if a["amount"] > 0), 2),
+            "schedule_actions": sum(1 for a in flagged if a["schedule"]),
+            "actions_summary": actions_summary(act["actions"], since),
             **res, "name": t["name"], "refs": sorted(t["refs"]), "role": t["role"], "excluded_since": since,
             "total": round(sum(a["amount"] for a in res["awards"]), 2), "count": len(res["awards"]),
             "after_exclusion": sum(a["after_exclusion"] for a in res["awards"]),
@@ -143,7 +250,7 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             "last": max((a["start"] for a in res["awards"] if a["start"]), default=""),
         })
     return {
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award",
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award and spending_by_transaction",
         "entities": entities, "skipped": max(len(targets) - MAX_UEIS, 0),
         "errors": sum(1 for e in entities if e["error"]),
     }

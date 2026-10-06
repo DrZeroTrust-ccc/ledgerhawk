@@ -333,6 +333,14 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             if top:
                 _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],
                       [[a["award_id"], a["agency"], a["start"], f"${a['amount']:,.0f}", "Yes" if a["after_exclusion"] else ""] for a in top])
+            after = [a | {"uei": e["uei"]} for e in found for a in e.get("actions", []) if a["flagged"]]
+            if after:
+                doc.add_heading("Actions after the exclusion", level=3)
+                _grid(doc, ["Date", "Award ID", "Mod", "What happened", "Amount", "GSA Schedule"],
+                      [[a["date"], a["award_id"], a["mod"], a["label"], f"${a['amount']:,.0f}", "Yes" if a["schedule"] else ""]
+                       for a in after[:15]])
+                _small(doc, "Extending or adding to a contract after an exclusion needs a written compelling-reason "
+                            "determination (FAR 9.405-1). The contract file confirms what each modification did.")
             _small(doc, f"USAspending.gov, looked up {aw['fetched_at'][:10]}. Largest awards shown; the workbook lists all retrieved.")
         for cx in [c for c in (screen.get("context") or {}).get("entities", []) if c.get("ref") == s["ref"]]:
             _context(doc, cx)

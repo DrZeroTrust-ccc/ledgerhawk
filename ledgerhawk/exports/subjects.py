@@ -78,6 +78,8 @@ def award_line(e: dict) -> str:
             + (" (largest 100 per type shown)" if e["truncated"] else ""))
     if e["after_exclusion"]:
         line += f". {e['after_exclusion']} started on or after the exclusion of {e['excluded_since']}"
+    if e.get("actions_summary"):
+        line += f". {e['actions_summary']}"
     return line + "."
 
 
@@ -294,6 +296,22 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
                              a["description"], a["url"]])
         last = _rows(ws, 6, body, {12}, 30)
         ws.auto_filter.ref = f"B5:Q{last}"
+
+        acted = [e for e in aw["entities"] if e.get("actions")]
+        if acted:
+            ws = wb.create_sheet("After Exclusion")
+            _title(ws, "Actions After Exclusion", "Every contract and IDV transaction on or after the exclusion date: new "
+                   "orders, option exercises, funding and other modifications. Flagged ones add work, money, time or an "
+                   "option, which FAR 9.405-1 says needs a written compelling-reason determination. Terminations, "
+                   "closeouts and deobligations are listed but not flagged. The contract file confirms each one.")
+            _head(ws, 5, ["Subject #", "UEI", "Entity", "Excluded Since", "Action Date", "Award ID", "Mod", "What Happened",
+                          "Flagged", "GSA Schedule", "Amount ($)", "Awarding Agency", "Description", "USAspending Link"],
+                  [10, 15, 30, 12, 12, 22, 10, 26, 8, 10, 14, 30, 60, 50])
+            body = [[", ".join(str(r) for r in e["refs"]), e["uei"], e["name"], e["excluded_since"], a["date"], a["award_id"],
+                     a["mod"], a["label"], "Yes" if a["flagged"] else "", "Yes" if a["schedule"] else "", a["amount"],
+                     a["agency"], a["description"], a["url"]] for e in acted for a in e["actions"]]
+            last = _rows(ws, 6, body, {12}, 30)
+            ws.auto_filter.ref = f"B5:O{last}"
 
     cxs = (screen.get("context") or {}).get("entities") or []
     if cxs:
