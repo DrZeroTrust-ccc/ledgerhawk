@@ -560,7 +560,9 @@ export default function SubjectScreenPage() {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <Stat label="Subjects" value={c.subjects} />
           <Stat label="Excluded or tied to an excluded party" value={(c.excluded ?? 0) + (c.tied ?? 0)} />
-          <Stat label="Related entity excluded" value={c.related_excluded ?? 0} />
+          {/* Counted from the cards, not from statuses: a subject that is itself tied to an excluded party takes that
+              status, so the "related entity is excluded" status count would miss it */}
+          <Stat label="Subjects with an excluded related firm" value={data.subjects.filter((s) => s.related.some((r) => r.excluded)).length} />
           <Stat label="Related entities found" value={c.related} sub={c.people ? `${c.people} people screened` : undefined} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
