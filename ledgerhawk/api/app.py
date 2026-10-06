@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
@@ -182,7 +183,8 @@ async def add_source(kind: str = Form(...), as_of: str = Form(...), analyst: str
             while chunk := await file.read(1 << 22):
                 f.write(chunk)
         try:
-            return store.add_source(kind, p, d, analyst)
+            # off the event loop: reading a SAM extract takes minutes, and /api/healthz must keep answering
+            return await run_in_threadpool(store.add_source, kind, p, d, analyst)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
 
@@ -231,8 +233,8 @@ async def create_run(
             except KeyError:
                 raise HTTPException(400, "That SAM source no longer exists.")
         try:
-            run_id = store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst, sam_source=sam_source or None,
-                                      follows_id=follows or None)
+            run_id = await run_in_threadpool(store.create_run, vp, ep, ed, synthetic=synthetic, analyst=analyst,
+                                             sam_source=sam_source or None, follows_id=follows or None)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     return {"id": run_id}
@@ -274,7 +276,9 @@ async def create_subject_screen(
     try:
         if dollars_run:
             store.run_dir(dollars_run)
-        sid = store.create_subject_screen(
+        # off the event loop, so a long screen does not stall health checks (Render marks the server failed)
+        sid = await run_in_threadpool(
+            store.create_subject_screen,
             subjects, analyst=analyst, matter=matter, client=client, privileged=privileged, synthetic=synthetic,
             sam_source=sam_source or None, exclusions_source=exclusions_source or None, dollars_run=dollars_run or None,
             people=people)

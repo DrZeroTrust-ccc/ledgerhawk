@@ -554,3 +554,18 @@ def test_subject_list_dollars_and_data_checks(tmp_path):
                       {"award_id": "LONG", "amount": 9e6, "start": "2024-01-01", "end": "2025-01-01"}])
     assert odd == ["Data check: 19AQMM24P0001 is $7.8M for 31 days of work (2024-03-01 to 2024-03-31). "
                    "The amount may be in local currency or mis-keyed"]
+
+    # a short span that is really a termination (ATI's IRS contract, terminated for convenience after 42 days)
+    def fpds(url, body):
+        rows = {"2023H225C00025": [{"Award ID": "2023H225C00025", "Mod": "0", "Action Date": "2025-01-31", "Action Type": None},
+                                   {"Award ID": "2023H225C00025", "Mod": "P00001", "Action Date": "2025-03-14", "Action Type": "F"}],
+                "19AQMM24P0001": [{"Award ID": "19AQMM24P0001", "Mod": "P00001", "Action Date": "2024-06-12", "Action Type": "C"}]}
+        return {"results": rows[body["filters"]["award_ids"][0]]}
+    odd = odd_awards([{"group": "contract", "award_id": "2023H225C00025", "amount": 19787636.48, "start": "2025-01-31",
+                       "end": "2025-03-14"},
+                      {"group": "contract", "award_id": "19AQMM24P0001", "amount": 7.79e6, "start": "2024-03-01",
+                       "end": "2024-03-31"}], fpds)
+    assert odd[0] == ("Data check: 2023H225C00025 shows $19.8M obligated, but FPDS records a termination or cancellation "
+                      "(P00001, action type F, 2025-03-14) 42 days after award, and the amount was not brought down. "
+                      "Confirm whether the money was deobligated")
+    assert odd[1].endswith("The amount may be in local currency or mis-keyed")  # no termination: the H&S Water case

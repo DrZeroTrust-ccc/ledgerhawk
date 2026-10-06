@@ -323,15 +323,41 @@ def file_mismatch(file: dict[int, float], by_fy: dict[int, float]) -> list[str]:
     return out
 
 
-def odd_awards(awards: list[dict]) -> list[str]:
-    """An award of several million dollars that runs only a few weeks: often local currency or a typo, not the price."""
+def award_ending(award_id: str, post: Post = _post) -> dict | None:
+    """The first termination or cancellation FPDS records on one contract, if any. None when USAspending won't say."""
+    body = {"filters": {"award_type_codes": GROUPS["contract"][0], "award_ids": [award_id],
+                        "time_period": [{"start_date": EARLIEST, "end_date": date.today().isoformat()}]},
+            "fields": TX_FIELDS, "limit": TX_LIMIT, "page": 1, "sort": "Action Date", "order": "asc"}
+    try:
+        res = post(TX_API, body)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    for row in res.get("results") or []:
+        if (row.get("Award ID") or "") != award_id:
+            continue
+        code = str(row.get("Action Type") or "").strip().upper()
+        if ACTION_KINDS.get(code[:1]) == "cancel" and len(code) <= 2:
+            return {"mod": str(row.get("Mod") or ""), "date": _iso(row.get("Action Date")), "code": code}
+    return {}
+
+
+def odd_awards(awards: list[dict], post: Post | None = None) -> list[str]:
+    """An award of several million dollars that runs only a few weeks: often local currency or a typo, not the price.
+    When FPDS records a termination, the short span is the termination, and the question is whether the money came back."""
     out = []
     for a in awards:
         try:
             days = (date.fromisoformat(a["end"][:10]) - date.fromisoformat(a["start"][:10])).days
         except (TypeError, ValueError, KeyError):
             continue
-        if a.get("amount", 0) >= ODD_AMOUNT and 0 <= days <= ODD_DAYS:
+        if not (a.get("amount", 0) >= ODD_AMOUNT and 0 <= days <= ODD_DAYS):
+            continue
+        end = award_ending(a["award_id"], post) if post and a.get("group") == "contract" else None
+        if end:
+            out.append(f"Data check: {a['award_id']} shows {_m(a['amount'])} obligated, but FPDS records a termination or "
+                       f"cancellation ({end['mod'] or 'mod'}, action type {end['code']}, {end['date']}) {days} days after "
+                       "award, and the amount was not brought down. Confirm whether the money was deobligated")
+        else:
             out.append(f"Data check: {a['award_id']} is {_m(a['amount'])} for {days + 1} days of work "
                        f"({a['start'][:10]} to {a['end'][:10]}). The amount may be in local currency or mis-keyed")
     return out[:3]
@@ -386,7 +412,7 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
         entities.append({
             "by_fy": by_fy, "history_error": h["error"], "lifetime": round(sum(h["by_fy"].values()), 2),
             "growth": growth_note(h["by_fy"], today),
-            "anomalies": ([] if h["error"] else file_mismatch(t.get("file") or {}, h["by_fy"])) + odd_awards(res["awards"]),
+            "anomalies": ([] if h["error"] else file_mismatch(t.get("file") or {}, h["by_fy"])) + odd_awards(res["awards"], post),
             "actions": act["actions"], "actions_truncated": act["truncated"], "actions_error": act["error"],
             "actions_flagged": len(flagged), "actions_dollars": round(sum(a["amount"] for a in flagged if a["amount"] > 0), 2),
             "schedule_actions": sum(1 for a in flagged if a["schedule"]),
