@@ -69,7 +69,7 @@ def _fetch(url: str, headers: dict) -> bytes:
                 return r.read()
         except urllib.error.HTTPError as exc:
             log.warning("context source %s answered %s (attempt %s)", host, exc.code, attempt)
-            if attempt == 2 or not (exc.code >= 500 or exc.code == 429):
+            if attempt == 2 or not (exc.code >= 500 or (exc.code == 429 and "courtlistener" not in host)):
                 raise
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             log.warning("context source %s unreachable: %s (attempt %s)", host, exc, attempt)
@@ -410,14 +410,55 @@ def doj(q: str, fetch: Fetch) -> list[dict]:
     return out
 
 
+# CourtListener throttles hard, anonymous callers most of all (a 91-name screen hit its limit within seconds). Calls
+# are spaced out, and once it answers 429 every later lookup skips it until the limit resets, instead of hammering it.
+_cl_lock = threading.Lock()
+_cl_state = {"last": 0.0, "blocked_until": 0.0}
+
+
+class RateLimited(OSError):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _courts_wait() -> None:
+    gap = float(os.environ.get("COURTLISTENER_GAP_S", "1") or 1)
+    with _cl_lock:
+        now = time.monotonic()
+        if now < _cl_state["blocked_until"]:
+            mins = max(1, round((_cl_state["blocked_until"] - now) / 60))
+            raise RateLimited(f"its rate limit was reached; not checked, re-check in about {mins} min")
+        delay = _cl_state["last"] + gap - now
+        if delay > 0:
+            time.sleep(delay)
+        _cl_state["last"] = time.monotonic()
+
+
 def courts(q: str, fetch: Fetch) -> list[dict]:
-    token = os.environ.get("COURTLISTENER_TOKEN", "")
+    token = os.environ.get("COURTLISTENER_TOKEN", "").strip()
     headers = {"Authorization": f"Token {token}"} if token else {}
     out = []
     for kind, label in (("r", "Federal docket"), ("o", "Court opinion")):
         url = "https://www.courtlistener.com/api/rest/v4/search/?" + urllib.parse.urlencode(
             {"q": f'"{q}"', "type": kind, "order_by": "dateFiled desc"})
-        res = json.loads(fetch(url, headers))
+        _courts_wait()
+        try:
+            raw = fetch(url, headers)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 429:
+                raise
+            try:
+                wait = float(exc.headers.get("Retry-After") or 0) if exc.headers else 0.0
+            except ValueError:
+                wait = 0.0
+            wait = wait or (600.0 if token else 3600.0)
+            with _cl_lock:
+                _cl_state["blocked_until"] = time.monotonic() + wait
+            log.warning("CourtListener rate limit reached; skipping it for %.0f s%s", wait,
+                        "" if token else " (no COURTLISTENER_TOKEN set)")
+            raise RateLimited("its rate limit was reached" + ("" if token else "; add a free CourtListener API token")) from None
+        res = json.loads(raw)
         for r in (res.get("results") or [])[:PER_SOURCE]:
             path = r.get("docket_absolute_url") or r.get("absolute_url") or ""
             title = r.get("caseName") or r.get("case_name") or ""
