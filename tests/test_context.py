@@ -68,9 +68,28 @@ def fake_sources(calls=None, down=()):
 
 
 @pytest.fixture(autouse=True)
-def fresh_ofac():
+def fresh_ofac(monkeypatch):
     cx._ofac_cache.update(at=0.0, rows=None)
     osint._leie.update(at=0.0, rows=None)
+    cx._cl_state.update(last=0.0, blocked_until=0.0)
+    monkeypatch.setenv("COURTLISTENER_GAP_S", "0")
+
+
+def test_courtlistener_rate_limit_stops_further_calls(tmp_path):
+    hits = []
+
+    def fetch(url, headers):
+        if "courtlistener" in url:
+            hits.append(url)
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", {"Retry-After": "120"}, None)
+        return fake_sources([])(url, headers)
+
+    first = cx.lookup("RIDGE ANALYTICS LLC", fetch=fetch, cache_dir=tmp_path)
+    second = cx.lookup("OTHER FIRM LLC", fetch=fetch, cache_dir=tmp_path)
+    assert len(hits) == 1  # one 429, then CourtListener is skipped instead of retried
+    assert "rate limit" in first["sources"]["courts"]["error"]
+    assert "re-check in about 2 min" in second["sources"]["courts"]["error"]
+    assert not second["sources"]["doj"]["error"]  # other sources still run
 
 
 def test_lookup_all_sources(tmp_path):
