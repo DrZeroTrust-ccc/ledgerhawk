@@ -7,6 +7,7 @@ non-federal key without a SAM role allows 10 calls a day, so each check makes as
 from __future__ import annotations
 
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -16,8 +17,9 @@ from typing import Callable
 
 API = "https://api.sam.gov/data-services/v1/extracts"
 
-# (url, dest) -> None; raises FileNotFoundError when SAM.gov has no file for that date, RuntimeError otherwise.
-Download = Callable[[str, Path], None]
+# (url, dest) -> the file name SAM.gov gave the download, if it sent one. Raises FileNotFoundError when SAM.gov has
+# no file for those parameters, RuntimeError otherwise.
+Download = Callable[[str, Path], "str | None"]
 
 
 def api_key() -> str:
@@ -41,25 +43,44 @@ def entity_dates(today: date, months: int = 2) -> list[date]:
     return out
 
 
-def entity_url(d: date, key: str) -> str:
-    return f"{API}?" + urllib.parse.urlencode({"api_key": key, "fileName": f"SAM_PUBLIC_MONTHLY_V2_{d:%Y%m%d}.ZIP"})
+def entity_months(today: date) -> list[tuple[int, int]]:
+    """This month and last month, newest first."""
+    return [(today.year, today.month), (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)]
+
+
+def entity_url(year: int, month: int, key: str) -> str:
+    """The public monthly V2 extract for a month, whatever day SAM.gov dated it."""
+    return f"{API}?" + urllib.parse.urlencode({"api_key": key, "fileType": "ENTITY", "sensitivity": "PUBLIC",
+                                                "frequency": "MONTHLY", "date": f"{month:02d}/{year}"})
+
+
+def entity_date(file_name: str | None, year: int, month: int) -> date:
+    """The extract date from SAM.gov's file name (SAM_PUBLIC_MONTHLY_V2_YYYYMMDD.ZIP), else the month's first Sunday."""
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})", file_name or "")
+    if m:
+        try:
+            return date(int(m[1]), int(m[2]), int(m[3]))
+        except ValueError:
+            pass
+    return first_sunday(year, month)
 
 
 def exclusions_url(d: date, key: str) -> str:
     return f"{API}?" + urllib.parse.urlencode({"api_key": key, "fileName": f"SAM_Exclusions_Public_Extract_V2_{d:%y}{d.timetuple().tm_yday:03d}.ZIP"})
 
 
-def http_download(url: str, dest: Path) -> None:
+def http_download(url: str, dest: Path) -> str | None:
     req = urllib.request.Request(url, headers={"User-Agent": "LedgerHawk/1.0"})
     tmp = dest.with_name(dest.name + ".part")
     try:
         with urllib.request.urlopen(req, timeout=120) as resp, open(tmp, "wb") as f:
+            name = resp.headers.get_filename() or urllib.parse.urlparse(resp.url).path.rsplit("/", 1)[-1]
             while chunk := resp.read(1 << 22):
                 f.write(chunk)
     except urllib.error.HTTPError as exc:
         tmp.unlink(missing_ok=True)
         if exc.code in (400, 404):
-            raise FileNotFoundError(url.split("fileName=")[-1]) from None
+            raise FileNotFoundError(dest.name) from None  # never the URL: it carries the API key
         if exc.code in (401, 403):
             raise RuntimeError("SAM.gov rejected the API key. Generate a new one in your SAM.gov account and update "
                                "SAM_API_KEY in Render.") from None
@@ -70,3 +91,4 @@ def http_download(url: str, dest: Path) -> None:
         tmp.unlink(missing_ok=True)
         raise RuntimeError(f"Could not reach SAM.gov ({getattr(exc, 'reason', exc)}).") from None
     tmp.replace(dest)
+    return name
