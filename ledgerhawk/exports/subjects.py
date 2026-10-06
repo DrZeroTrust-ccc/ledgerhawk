@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from ..pipeline import context as context_mod
 from ..pipeline.subjects import STATUSES
@@ -80,6 +81,8 @@ def award_line(e: dict) -> str:
         line += f". {e['after_exclusion']} started on or after the exclusion of {e['excluded_since']}"
     if e.get("actions_summary"):
         line += f". {e['actions_summary']}"
+    if e.get("growth"):
+        line += f". {e['growth']}"
     return line + "."
 
 
@@ -312,6 +315,24 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
                      a["agency"], a["description"], a["url"]] for e in acted for a in e["actions"]]
             last = _rows(ws, 6, body, {12}, 30)
             ws.auto_filter.ref = f"B5:O{last}"
+
+        hist = [e for e in aw["entities"] if e.get("by_fy")]
+        if hist:
+            years = sorted({int(y) for e in hist for y in e["by_fy"]})[-8:]
+            shifts = aw.get("shifts") or {}
+            ws = wb.create_sheet("By Fiscal Year")
+            _title(ws, "Obligations by Fiscal Year", "Contract and IDV obligations per UEI and fiscal year from USAspending. "
+                   "Growth flags a recent year of $1M or more that is at least 5x the firm's best earlier year, or a first "
+                   "year with no history. Shift flags money leaving one registration of a company as another one (same "
+                   "legal name, different UEI) starts receiving it.")
+            _head(ws, 5, ["Subject #", "UEI", "Entity", "Role"] + [f"FY{y % 100:02d} ($)" for y in years]
+                  + ["Lifetime ($)", "Growth", "Shift"], [10, 15, 30, 16] + [14] * len(years) + [15, 60, 60])
+            body = [[", ".join(str(r) for r in e["refs"]), e["uei"], e["name"], e["role"]]
+                    + [e["by_fy"].get(str(y)) for y in years] + [e["lifetime"], e["growth"],
+                    " ".join(shifts.get(str(r), "") for r in e["refs"]).strip()] for e in hist]
+            money = set(range(6, 7 + len(years)))
+            last = _rows(ws, 6, body, money, 30)
+            ws.auto_filter.ref = f"B5:{get_column_letter(len(years) + 8)}{last}"
 
     cxs = (screen.get("context") or {}).get("entities") or []
     if cxs:

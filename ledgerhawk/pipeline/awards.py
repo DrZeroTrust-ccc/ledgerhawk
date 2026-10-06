@@ -27,7 +27,7 @@ GROUPS = {
 }
 OPTIONAL_FIELDS = {"Recipient UEI", "Awarding Sub Agency", "Total Outlays"}
 PER_GROUP = 100
-MAX_UEIS = 60
+MAX_UEIS = 200
 EARLIEST = "2007-10-01"  # USAspending search covers FY2008 onward
 
 Post = Callable[[str, dict], dict]
@@ -203,6 +203,85 @@ def actions_summary(actions: list[dict], since: str) -> str:
     return line
 
 
+HISTORY_API = "https://api.usaspending.gov/api/v2/search/spending_over_time/"
+GROWTH_MIN = 1_000_000   # a jump only matters at real money
+GROWTH_RATIO = 5         # this year at least 5x the best earlier year
+
+
+def fiscal_year(d: date) -> int:
+    return d.year + 1 if d.month >= 10 else d.year
+
+
+def history_for_uei(uei: str, post: Post = _post, today: date | None = None) -> dict:
+    """Contract and IDV obligations by fiscal year for one UEI, so a jump can be read against the firm's own record."""
+    today = today or date.today()
+    codes = GROUPS["contract"][0] + GROUPS["idv"][0]
+    body = {"group": "fiscal_year", "filters": {"award_type_codes": codes, "recipient_search_text": [uei],
+                                                "time_period": [{"start_date": EARLIEST, "end_date": today.isoformat()}]}}
+    try:
+        try:
+            res = post(HISTORY_API, body)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (400, 422):
+                raise
+            body["filters"]["award_type_codes"] = GROUPS["contract"][0]  # an API that won't mix contracts and IDVs
+            res = post(HISTORY_API, body)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        return {"by_fy": {}, "error": f"USAspending history did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"}
+    by_fy: dict[int, float] = {}
+    for r in res.get("results") or []:
+        try:
+            fy = int((r.get("time_period") or {}).get("fiscal_year"))
+        except (TypeError, ValueError):
+            continue
+        parts = [r.get("Contract_Obligations"), r.get("Idv_Obligations")]
+        amt = sum(float(x or 0) for x in parts) if any(x is not None for x in parts) else float(r.get("aggregated_amount") or 0)
+        by_fy[fy] = round(by_fy.get(fy, 0.0) + amt, 2)
+    return {"by_fy": by_fy, "error": ""}
+
+
+def _m(x: float) -> str:
+    return f"${x / 1e6:,.1f}M" if abs(x) >= 1e6 else f"${x:,.0f}"
+
+
+def growth_note(by_fy: dict[int, float], today: date) -> str:
+    """When the latest year's obligations dwarf anything the firm did before: the "outran its track record" signal."""
+    cur = fiscal_year(today)
+    recent = [(y, by_fy.get(y, 0.0)) for y in (cur - 2, cur - 1, cur) if by_fy.get(y, 0.0) >= GROWTH_MIN]
+    if not recent:
+        return ""
+    year, peak = max(recent, key=lambda t: t[1])
+    prior = {y: a for y, a in by_fy.items() if y < year and a > 0}
+    if not prior:
+        first = min((y for y, a in by_fy.items() if a > 0), default=year)
+        return f"No federal contract dollars before FY{first % 100:02d}; {_m(peak)} in FY{year % 100:02d}" if first == year else ""
+    py, best = max(prior.items(), key=lambda t: t[1])
+    if peak < GROWTH_RATIO * best:
+        return ""
+    years = len(prior)
+    return (f"FY{year % 100:02d} obligations of {_m(peak)} are {peak / best:,.0f}x its best earlier year "
+            f"(FY{py % 100:02d}, {_m(best)}; {years} earlier year{'s' if years != 1 else ''} with awards)")
+
+
+def shift_note(rows: list[dict], today: date) -> str:
+    """Several UEIs of one company: does money leave one registration as another one starts getting it?"""
+    cur = fiscal_year(today)
+    a_y, b_y = cur - 2, cur - 1
+    have = [r for r in rows if r.get("by_fy")]
+    if len(have) < 2:
+        return ""
+    falling = [r for r in have if r["by_fy"].get(a_y, 0) >= GROWTH_MIN and r["by_fy"].get(b_y, 0) <= 0.6 * r["by_fy"].get(a_y, 0)]
+    rising = [r for r in have if r["by_fy"].get(a_y, 0) <= 0.1 * max(r["by_fy"].get(b_y, 0), 1) and r["by_fy"].get(b_y, 0) >= GROWTH_MIN]
+    if not falling or not rising:
+        return ""
+    f, g = max(falling, key=lambda r: r["by_fy"][a_y]), max(rising, key=lambda r: r["by_fy"][b_y])
+    if f["uei"] == g["uei"]:
+        return ""
+    return (f"Money moved between registrations: as {f['uei']} fell from {_m(f['by_fy'][a_y])} in FY{a_y % 100:02d} to "
+            f"{_m(f['by_fy'].get(b_y, 0))} in FY{b_y % 100:02d}, {g['uei']} went from {_m(g['by_fy'].get(a_y, 0))} to "
+            f"{_m(g['by_fy'][b_y])}")
+
+
 def _excluded_since(entity: dict) -> str:
     """Earliest active date of an exclusion recorded against this entity's own UEI (not facility-only)."""
     dates = [_iso(h.get("active_date")) for h in entity.get("exclusion", [])
@@ -225,10 +304,18 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             if r["excluded"] and r["uei"] not in targets:
                 since = min((_iso(h.get("active_date")) for h in r.get("exclusion", []) if h.get("kind") == "direct"), default="")
                 targets[r["uei"]] = {"name": r["name"], "refs": {s["ref"]}, "role": "related, excluded", "excluded_since": since}
+    # Other registrations of the same company (same legal name under another UEI), for the money-shift check.
+    for s in screen["subjects"]:
+        for r in s["related"]:
+            if "name" in (r.get("via_keys") or []) and r["uei"] not in targets:
+                targets[r["uei"]] = {"name": r["name"], "refs": {s["ref"]}, "role": "related, same name", "excluded_since": ""}
+            elif "name" in (r.get("via_keys") or []):
+                targets[r["uei"]]["refs"].add(s["ref"])
     ueis = list(targets)[:MAX_UEIS]
     with ThreadPoolExecutor(max_workers=6) as pool:
         found = list(pool.map(lambda u: awards_for_uei(u, post, today), ueis))
         acts = dict(zip(ueis, pool.map(lambda u: actions_after(u, targets[u]["excluded_since"], post, today), ueis)))
+        hist = dict(zip(ueis, pool.map(lambda u: history_for_uei(u, post, today), ueis)))
     entities = []
     for res in found:
         t = targets[res["uei"]]
@@ -237,7 +324,11 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             a["after_exclusion"] = bool(since and a["start"] and a["start"] >= since)
         act = acts.get(res["uei"]) or {"actions": [], "truncated": False, "error": ""}
         flagged = [a for a in act["actions"] if a["flagged"]]
+        h = hist.get(res["uei"]) or {"by_fy": {}, "error": ""}
+        by_fy = {str(y): a for y, a in sorted(h["by_fy"].items())}
         entities.append({
+            "by_fy": by_fy, "history_error": h["error"], "lifetime": round(sum(h["by_fy"].values()), 2),
+            "growth": growth_note(h["by_fy"], today),
             "actions": act["actions"], "actions_truncated": act["truncated"], "actions_error": act["error"],
             "actions_flagged": len(flagged), "actions_dollars": round(sum(a["amount"] for a in flagged if a["amount"] > 0), 2),
             "schedule_actions": sum(1 for a in flagged if a["schedule"]),
@@ -249,8 +340,17 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             "first": min((a["start"] for a in res["awards"] if a["start"]), default=""),
             "last": max((a["start"] for a in res["awards"] if a["start"]), default=""),
         })
+    # One company, several UEIs: per subject, compare its own registrations with its same-name siblings.
+    shifts = {}
+    for s in screen["subjects"]:
+        rows = [{"uei": e["uei"], "by_fy": {int(y): a for y, a in e["by_fy"].items()}}
+                for e in entities if s["ref"] in e["refs"] and e["role"] in ("subject", "related, same name")]
+        note = shift_note(rows, today)
+        if note:
+            shifts[str(s["ref"])] = note
     return {
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award and spending_by_transaction",
+        "shifts": shifts,
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award, spending_by_transaction and spending_over_time",
         "entities": entities, "skipped": max(len(targets) - MAX_UEIS, 0),
         "errors": sum(1 for e in entities if e["error"]),
     }

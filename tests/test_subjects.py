@@ -373,6 +373,11 @@ def _fake_usaspending(calls):
         uei = body["filters"]["recipient_search_text"][0]
         if uei == "FAILFAILFAIL":
             raise urllib.error.URLError("down")
+        if url.endswith("/spending_over_time/"):  # FY23 small, FY25 a jump
+            return {"results": [{"time_period": {"fiscal_year": 2023}, "aggregated_amount": 100000, "Contract_Obligations": 80000,
+                                 "Idv_Obligations": 20000},
+                                {"time_period": {"fiscal_year": 2025}, "aggregated_amount": 2.5e6, "Contract_Obligations": 2.5e6,
+                                 "Idv_Obligations": None}]}
         if url.endswith("/spending_by_transaction/"):
             if "IDV_A" in body["filters"]["award_type_codes"]:  # a GSA Schedule option exercise (PO mod)
                 rows = [{"Award ID": "47QTCA24D003M", "Mod": "PO0010", "Action Date": "2026-06-12", "Action Type": "M",
@@ -434,6 +439,22 @@ def test_awards_lookup(syn):
                      ("47QTCA22F0002", "wind_down", False), ("47QTCA24D003M", "option", True)]
     assert major["actions_flagged"] == 2 and major["schedule_actions"] == 2 and major["actions_dollars"] == 250000.5
     assert "GSA Schedule 47QTCA24D003M was modified after the exclusion (PO0010, 2026-06-12)" in major["actions_summary"]
+    assert major["by_fy"] == {"2023": 100000.0, "2025": 2500000.0} and major["lifetime"] == 2600000.0
+    assert major["growth"].startswith("FY25 obligations of $2.5M are 25x its best earlier year (FY23, $100,000")
+
+
+def test_growth_and_money_shift_notes():
+    from datetime import date as d
+    from ledgerhawk.pipeline.awards import growth_note, shift_note
+    today = d(2026, 10, 6)  # FY27 has just started
+    assert growth_note({2020: 300000, 2026: 400000}, today) == ""  # under $1M is not a story
+    assert growth_note({2020: 300000, 2026: 1.2e6}, today) == ""  # 4x is ordinary growth
+    assert "8x its best earlier year" in growth_note({2019: 150000, 2020: 200000, 2026: 1.6e6}, today)
+    assert growth_note({2026: 3e6}, today) == "No federal contract dollars before FY26; $3.0M in FY26"
+    shift = shift_note([{"uei": "OLDUEI", "by_fy": {2024: 1e6, 2025: 5e6, 2026: 400000}},
+                        {"uei": "NEWUEI", "by_fy": {2026: 4.2e6}}], today)
+    assert shift.startswith("Money moved between registrations: as OLDUEI fell from $5.0M in FY25 to $400,000 in FY26, NEWUEI went")
+    assert shift_note([{"uei": "A", "by_fy": {2025: 5e6, 2026: 5e6}}, {"uei": "B", "by_fy": {2026: 4e6}}], today) == ""  # A did not fall
 
 
 def test_awards_api_and_exports(syn, tmp_path):
@@ -474,6 +495,10 @@ def test_awards_api_and_exports(syn, tmp_path):
         rows = [[c.value for c in r] for r in ws.iter_rows(min_row=6, min_col=2, max_col=12)]
         assert ["47QTCA24D003M", "PO0010", "option exercised", "Yes", "Yes"] == rows[-1][5:10]
         assert any(t.cell(0, 0).text == "Date" for t in doc.tables)  # the after-exclusion table in the report
+        assert "25x its best earlier year" in text
+        ws = wb["By Fiscal Year"]
+        assert [c.value for c in ws[5]][1:8] == ["Subject #", "UEI", "Entity", "Role", "FY23 ($)", "FY25 ($)", "Lifetime ($)"]
+        assert ws["F6"].value == 100000 and ws["H6"].value == 2600000 and ws["I6"].value.startswith("FY25 obligations")
         assert any(a["action"] == "screen_awards" for a in client.get("/api/audit").json())
     finally:
         mp.undo()

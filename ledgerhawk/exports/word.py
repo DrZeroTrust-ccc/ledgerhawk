@@ -329,6 +329,14 @@ def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> b
             aw = screen["awards"]
             doc.add_heading("Federal awards (USAspending)", level=3)
             _bullets(doc, [award_line(e) for e in found])
+            shift = (aw.get("shifts") or {}).get(str(s["ref"]))
+            if shift:
+                _bullets(doc, [shift + "."])
+            fys = sorted({int(y) for e in found for y in e.get("by_fy", {})})[-6:]
+            if fys and (len(found) > 1 or any(e.get("growth") for e in found)):
+                _grid(doc, ["UEI"] + [f"FY{y % 100:02d}" for y in fys],
+                      [[e["uei"]] + [f"${e['by_fy'][str(y)]:,.0f}" if str(y) in e.get("by_fy", {}) else "" for y in fys]
+                       for e in found if e.get("by_fy")])
             top = sorted((a | {"uei": e["uei"]} for e in found for a in e["awards"]), key=lambda a: -a["amount"])[:10]
             if top:
                 _grid(doc, ["Award ID", "Agency", "Start", "Obligated", "After exclusion"],

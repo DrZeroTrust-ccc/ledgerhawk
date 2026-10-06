@@ -395,6 +395,10 @@ export type AwardAction = {
 }
 
 export type AwardEntity = {
+  by_fy?: Record<string, number>
+  lifetime?: number
+  growth?: string
+  history_error?: string
   actions?: AwardAction[]
   actions_flagged?: number
   actions_summary?: string
@@ -472,7 +476,14 @@ export type AddressCheck = { address: string; rdi: string; cmra: boolean; vacant
 
 export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
 
-export type ScreenAwards = { fetched_at: string; fetched_by: string; entities: AwardEntity[]; skipped: number; errors: number }
+export type ScreenAwards = {
+  fetched_at: string
+  fetched_by: string
+  entities: AwardEntity[]
+  skipped: number
+  errors: number
+  shifts?: Record<string, string>
+}
 
 export type ScreenNote = {
   id: string
