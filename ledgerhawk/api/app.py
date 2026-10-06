@@ -289,17 +289,46 @@ async def create_subject_screen(
     return {"id": sid}
 
 
+def _screen_job(sid: str, kind: str, analyst: str, fn):
+    """Start a background job on a screen and return its status; the page polls /jobs for progress."""
+    try:
+        return store.start_screen_job(sid, kind, analyst, fn)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+
+
+@app.get("/api/subject-screens/{sid}/jobs")
+def subject_screen_jobs(sid: str):
+    try:
+        store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    return store.screen_jobs(sid)
+
+
 @app.post("/api/subject-screens/{sid}/recheck")
 def recheck_subject_screen(sid: str, analyst: str = Form(""), sam_source: str = Form(""), exclusions_source: str = Form("")):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the re-check is attributed.")
+
+    def run(progress):
+        try:
+            return {"id": store.recheck_subject_screen(sid, analyst, sam_source or None, exclusions_source or None, progress)}
+        except KeyError:
+            raise ValueError("A source or run this screen used no longer exists.")
+    return _screen_job(sid, "recheck", analyst, run)
+
+
+@app.post("/api/subject-screens/{sid}/rename")
+def rename_subject_screen(sid: str, analyst: str = Form(""), matter: str = Form(""), client: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the change is attributed.")
     try:
-        new_id = store.recheck_subject_screen(sid, analyst, sam_source or None, exclusions_source or None)
+        return store.rename_subject_screen(sid, analyst, matter, client)
     except KeyError:
-        raise HTTPException(404, "Subject screen, source or run not found")
+        raise HTTPException(404, "Subject screen not found")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    return {"id": new_id}
 
 
 @app.get("/api/subject-screens/{sid}")
@@ -349,24 +378,23 @@ def screen_evidence(sid: str, nid: str):
 def fetch_screen_awards(sid: str, analyst: str = Form("")):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
-    try:
-        return store.fetch_screen_awards(sid, analyst)
-    except KeyError:
-        raise HTTPException(404, "Subject screen not found")
-    except ConnectionError as exc:
-        raise HTTPException(502, str(exc))
+
+    def run(progress):
+        res = store.fetch_screen_awards(sid, analyst, progress)
+        return {"ueis": len(res["entities"]), "awards": sum(e["count"] for e in res["entities"]), "errors": res["errors"]}
+    return _screen_job(sid, "awards", analyst, run)
 
 
 @app.post("/api/subject-screens/{sid}/context")
 def screen_context(sid: str, analyst: str = Form("")):
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
-    try:
-        return store.screen_context(sid, analyst)
-    except KeyError:
-        raise HTTPException(404, "Subject screen not found")
-    except ConnectionError as exc:
-        raise HTTPException(502, str(exc))
+
+    def run(progress):
+        res = store.screen_context(sid, analyst, progress)
+        return {"names": len(res["entities"]), "items": sum(e["count"] for e in res["entities"]),
+                "strong": sum(e["tally"]["strong"] for e in res["entities"])}
+    return _screen_job(sid, "context", analyst, run)
 
 
 @app.get("/api/context")
