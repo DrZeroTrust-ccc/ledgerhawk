@@ -534,3 +534,44 @@ def test_hawk_writes_queue_reasons(sam_ctx):
     finally:
         appmod.store.summary_client = None
         appmod.store.hawk_inline = False
+
+
+def test_health_answers_while_a_screen_is_being_built(tmp_path):
+    # A long screen used to run on the event loop, so Render's 5-second health check timed out and marked the server
+    # failed. The screen now runs in a worker thread and /api/healthz answers meanwhile.
+    import asyncio
+    import time
+
+    import httpx
+
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+
+    def slow_screen(*args, **kwargs):
+        time.sleep(1.5)
+        return "SID"
+
+    mp.setattr(appmod.store, "create_subject_screen", slow_screen)
+
+    async def go():
+        transport = httpx.ASGITransport(app=appmod.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            screen = asyncio.create_task(c.post("/api/subject-screens", data={
+                "subjects_text": "ABCDEFGHJKLM", "analyst": "T", "exclusions_source": "x"}))
+            await asyncio.sleep(0.2)
+            t0 = time.monotonic()
+            health = await c.get("/api/healthz")
+            waited = time.monotonic() - t0
+            done_first = not screen.done()
+            r = await screen
+            return health.status_code, waited, done_first, r.json()
+
+    try:
+        status, waited, health_first, body = asyncio.run(go())
+        assert status == 200 and health_first and waited < 1.0
+        assert body == {"id": "SID"}
+    finally:
+        mp.undo()
