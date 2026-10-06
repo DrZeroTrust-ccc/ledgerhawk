@@ -15,7 +15,10 @@ def test_extract_dates_and_names():
     assert samgov.entity_dates(date(2026, 10, 3)) == [date(2026, 9, 6), date(2026, 8, 2)]
     assert samgov.entity_dates(date(2026, 10, 4))[0] == date(2026, 10, 4)
     assert "SAM_Exclusions_Public_Extract_V2_26278.ZIP" in samgov.exclusions_url(date(2026, 10, 5), "k")
-    assert "SAM_PUBLIC_MONTHLY_V2_20261004.ZIP" in samgov.entity_url(date(2026, 10, 4), "k")
+    assert "date=10%2F2026" in samgov.entity_url(2026, 10, "k") and "fileType=ENTITY" in samgov.entity_url(2026, 10, "k")
+    assert samgov.entity_months(date(2026, 1, 9)) == [(2026, 1), (2025, 12)]
+    assert samgov.entity_date("SAM_PUBLIC_MONTHLY_V2_20261005.ZIP", 2026, 10) == date(2026, 10, 5)
+    assert samgov.entity_date(None, 2026, 10) == date(2026, 10, 4)
 
 
 def test_zipped_extracts_load(tmp_path):
@@ -35,23 +38,32 @@ def test_refresh_fetches_newest_once_and_reports_errors(tmp_path):
 
     def fake(url, dest: Path):
         calls.append(url)
+        if "fileType=ENTITY" in url:
+            if "date=10%2F2026" not in url and "date=09%2F2026" not in url:
+                raise FileNotFoundError(dest.name)
+            sent = "SAM_PUBLIC_MONTHLY_V2_20261004.ZIP" if "date=10" in url else "SAM_PUBLIC_MONTHLY_V2_20260906.ZIP"
+            with zipfile.ZipFile(dest, "w") as z:
+                z.write(sam, sent.replace(".ZIP", ".dat"))
+            return sent
         name = url.split("fileName=")[-1]
         if name.endswith("26278.ZIP"):  # today's exclusions aren't out yet
             raise FileNotFoundError(name)
         with zipfile.ZipFile(dest, "w") as z:
-            z.write(sam if "MONTHLY" in name else excl, name.replace(".ZIP", ".dat" if "MONTHLY" in name else ".CSV"))
+            z.write(excl, name.replace(".ZIP", ".CSV"))
+        return name
 
     st = Store(tmp_path / "app")
     out = st.refresh_sam_gov("k", today=date(2026, 10, 5), download=fake)
     assert out["exclusions"]["as_of"] == "2026-10-04" and out["sam"]["as_of"] == "2026-10-04"
     assert not out["exclusions"]["error"] and not out["running"]
     srcs = {m["kind"]: m for m in st.list_sources()}
-    assert srcs["sam"]["uploaded_by"] == Store.AUTO_BY and srcs["sam"]["file"].endswith(".zip")
+    assert srcs["sam"]["uploaded_by"] == Store.AUTO_BY and srcs["sam"]["file"] == "SAM_PUBLIC_MONTHLY_V2_20261004.ZIP"
     assert list(Path(srcs["sam"]["path"]).parent.glob("*.sqlite"))  # lookup tables built at download time
     n = len(calls)
     assert len(calls) == 3 and all("api_key=k" in c for c in calls)
     st.refresh_sam_gov("k", today=date(2026, 10, 5), download=fake)
     assert len(calls) == n + 1  # only today's exclusions are retried; nothing new is downloaded
+    assert out["sam"]["as_of"] == "2026-10-04"
 
     def denied(url, dest):
         raise RuntimeError("SAM.gov rejected the API key.")
@@ -62,3 +74,33 @@ def test_refresh_fetches_newest_once_and_reports_errors(tmp_path):
         st.refresh_sam_gov("k", today=date(2026, 10, day), download=fake)
     kinds = [m["kind"] for m in st.list_sources()]
     assert kinds.count("exclusions") == Store.AUTO_KEEP["exclusions"]
+
+
+def test_demo_seed_does_not_block_real_extract(tmp_path):
+    """A synthetic seed dated like a real extract must not stop the download; a month not out yet falls back."""
+    _, excl, sam, _ = make_synthetic(tmp_path / "syn", n=200, seed=4)
+    st = Store(tmp_path / "app")
+    st.add_source("sam", sam, date(2026, 9, 6), "system")
+
+    def fake(url, dest: Path):
+        if "fileType=ENTITY" not in url:
+            raise FileNotFoundError(dest.name)
+        if "date=10%2F2026" in url:  # October's extract not published yet
+            raise FileNotFoundError(dest.name)
+        with zipfile.ZipFile(dest, "w") as z:
+            z.write(sam, "SAM_PUBLIC_MONTHLY_V2_20260906.dat")
+        return None  # no file name sent: the date falls back to the first Sunday
+
+    out = st.refresh_sam_gov("k", today=date(2026, 10, 6), download=fake)
+    assert out["sam"]["as_of"] == "2026-09-06" and not out["sam"]["error"]
+    assert [m["uploaded_by"] for m in st.list_sources() if m["kind"] == "sam"].count(Store.AUTO_BY) == 1
+    assert "no exclusions extract" in out["exclusions"]["error"]
+
+
+def test_restart_clears_partial_downloads(tmp_path):
+    Store(tmp_path)
+    part = tmp_path / "tmpab12cd" / "SAM_PUBLIC_MONTHLY_V2_20261004.zip.part"
+    part.parent.mkdir()
+    part.write_bytes(b"x" * 10)
+    Store(tmp_path)
+    assert not part.parent.exists() and (tmp_path / "runs").exists()

@@ -119,6 +119,8 @@ class Store:
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
         (self.root / "subjects").mkdir(parents=True, exist_ok=True)
         (self.root / "context").mkdir(parents=True, exist_ok=True)
+        for d in self.root.glob("tmp*"):  # a SAM.gov download cut off by a restart; it is fetched again
+            shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
@@ -224,19 +226,29 @@ class Store:
             for kind in ("exclusions", "sam"):
                 cur = st.setdefault(kind, {})
                 cur["checked_at"] = _now()
-                have = {m["as_of"] for m in self.list_sources() if m["kind"] == kind}
-                cands = samgov.entity_dates(today) if kind == "sam" else [today - timedelta(days=i) for i in range(3)]
                 cur["error"] = ""
-                for d in cands:
-                    if d.isoformat() in have:
+                # Files the server seeded for the demo don't count: only real extracts stop a download.
+                have = {m["as_of"] for m in self.list_sources()
+                        if m["kind"] == kind and m["uploaded_by"] != "system" and not m["file"].upper().startswith("SYNTHETIC")}
+                if kind == "sam":
+                    cands = [(f"SAM_PUBLIC_MONTHLY_V2_{y}{m:02d}.zip", samgov.entity_url(y, m, key), (y, m))
+                             for y, m in samgov.entity_months(today)]
+                    loaded = lambda c: any(a.startswith(f"{c[2][0]}-{c[2][1]:02d}") for a in have)  # noqa: E731
+                else:
+                    days = [today - timedelta(days=i) for i in range(3)]
+                    cands = [(f"SAM_Exclusions_Public_Extract_V2_{d:%y}{d.timetuple().tm_yday:03d}.zip",
+                              samgov.exclusions_url(d, key), d) for d in days]
+                    loaded = lambda c: c[2].isoformat() in have  # noqa: E731
+                found = False
+                for c in cands:
+                    if loaded(c):
+                        found = True
                         break  # the newest file SAM.gov could have is already loaded
-                    name = (f"SAM_PUBLIC_MONTHLY_V2_{d:%Y%m%d}.zip" if kind == "sam"
-                            else f"SAM_Exclusions_Public_Extract_V2_{d:%y}{d.timetuple().tm_yday:03d}.zip")
-                    url = samgov.entity_url(d, key) if kind == "sam" else samgov.exclusions_url(d, key)
+                    name, url, when = c
                     with tempfile.TemporaryDirectory(dir=self.root) as tmp:
                         dest = Path(tmp) / name
                         try:
-                            download(url, dest)
+                            sent = download(url, dest)
                         except FileNotFoundError:
                             continue  # not published for that date (yet)
                         except RuntimeError as exc:
@@ -246,12 +258,19 @@ class Store:
                             head = dest.read_bytes()[:300].decode("utf-8", "replace")
                             cur["error"] = f"SAM.gov sent something other than the extract: {head.strip()[:200]}"
                             break
+                        d = samgov.entity_date(sent, *when) if kind == "sam" else when
+                        if kind == "sam" and sent and sent.lower().endswith(".zip"):
+                            dest = dest.rename(dest.with_name(Path(sent).name))
                         src = self.add_source(kind, dest, d, self.AUTO_BY, move=True)
                     if kind == "sam":
                         load_sam(src["path"], d, Path(src["path"]).parent)  # build the lookup tables now, not mid-screen
                     cur.update(as_of=d.isoformat(), fetched_at=_now())
                     self._prune_auto(kind)
+                    found = True
                     break
+                if not found and not cur["error"] and not have:
+                    cur["error"] = ("SAM.gov has no " + ("entity extract for this month or last month" if kind == "sam"
+                                    else "exclusions extract for the last three days") + " yet. The next check tries again.")
             f.write_text(json.dumps(st, indent=2))
         finally:
             self._auto_lock.release()
@@ -264,7 +283,8 @@ class Store:
 
     def list_sources(self) -> list[dict]:
         out = [self.source(d.name) for d in (self.root / "sources").iterdir() if (d / "meta.json").exists()]
-        return sorted(out, key=lambda m: (m["kind"], m["as_of"]), reverse=True)
+        # Newest first; on the same date a real extract comes before the demo seed.
+        return sorted(out, key=lambda m: (m["kind"], m["as_of"], m.get("uploaded_by") != "system"), reverse=True)
 
     # ---- runs -------------------------------------------------------------
     def create_run(self, vendor_path: Path, exclusions_path: Path | None, exclusions_date: date | None,
