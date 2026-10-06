@@ -16,12 +16,15 @@ import re
 import secrets
 import shutil
 import sqlite3
+import tempfile
 import threading
-from datetime import date, datetime, timezone
+import zipfile
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from ..pipeline import awards as awards_mod
 from ..pipeline import context as context_mod
+from ..pipeline import samgov
 from ..pipeline import summary as summary_mod
 from ..pipeline.normalize import normalize_name
 from ..pipeline.exclusions import load_exclusions
@@ -122,6 +125,7 @@ class Store:
         self.summary_client = None  # and a fake Claude
         self.hawk_inline = False  # tests write queue reasons in the request instead of a background thread
         self._lock = threading.Lock()
+        self._auto_lock = threading.Lock()
         self._hawk_running: set[str] = set()  # runs the Hawk is writing reasons for in this process
         self.db_path = self.root / "state.db"
         with self._db() as db:
@@ -167,17 +171,18 @@ class Store:
         return sqlite3.connect(self.db_path)
 
     # ---- data sources (SAM extract, exclusions), uploaded once and shared by runs ----------
-    def add_source(self, kind: str, path: Path, as_of: date, analyst: str) -> dict:
+    def add_source(self, kind: str, path: Path, as_of: date, analyst: str, move: bool = False) -> dict:
         if kind not in SOURCE_KINDS:
             raise ValueError(f"Unknown source kind: {kind}")
         sha = file_sha256(path)
+        size = path.stat().st_size
         sid = f"{kind}-{as_of.isoformat()}-{sha[:8]}"
         d = self.root / "sources" / sid
         if not d.exists():
             d.mkdir(parents=True)
-            shutil.copyfile(path, d / path.name)
+            (shutil.move if move else shutil.copyfile)(str(path), str(d / path.name))
         meta = {"id": sid, "kind": kind, "label": SOURCE_KINDS[kind]["label"], "as_of": as_of.isoformat(),
-                "file": path.name, "sha256": sha, "bytes": path.stat().st_size, "uploaded_by": analyst, "uploaded_at": _now()}
+                "file": path.name, "sha256": sha, "bytes": size, "uploaded_by": analyst, "uploaded_at": _now()}
         if not (d / "meta.json").exists():
             (d / "meta.json").write_text(json.dumps(meta, indent=2))
             self.audit(analyst, "source_added", None, None, f"{meta['label']} as of {meta['as_of']} ({path.name})")
@@ -194,6 +199,68 @@ class Store:
         meta["stale_after_days"] = SOURCE_KINDS[meta["kind"]]["stale_days"]
         meta["path"] = str(d / meta["file"])
         return meta
+
+    # ---- automatic SAM.gov downloads ------------------------------------------------------------------------------
+    AUTO_BY = "SAM.gov (automatic)"
+    AUTO_KEEP = {"sam": 2, "exclusions": 14}
+
+    def auto_status(self) -> dict:
+        f = self.root / "sources" / "auto.json"
+        st = json.loads(f.read_text()) if f.exists() else {}
+        st["running"] = self._auto_lock.locked()
+        return st
+
+    def refresh_sam_gov(self, key: str, today: date | None = None, download=None) -> dict:
+        """Fetch any newer SAM exclusions and entity extracts from SAM.gov and add them as sources. Calls SAM.gov
+        only when the newest file it could have is not loaded yet, and stops at the first file it finds."""
+        if not self._auto_lock.acquire(blocking=False):
+            return self.auto_status()
+        try:
+            today = today or datetime.now(timezone.utc).date()
+            download = download or samgov.http_download
+            f = self.root / "sources" / "auto.json"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            st = json.loads(f.read_text()) if f.exists() else {}
+            for kind in ("exclusions", "sam"):
+                cur = st.setdefault(kind, {})
+                cur["checked_at"] = _now()
+                have = {m["as_of"] for m in self.list_sources() if m["kind"] == kind}
+                cands = samgov.entity_dates(today) if kind == "sam" else [today - timedelta(days=i) for i in range(3)]
+                cur["error"] = ""
+                for d in cands:
+                    if d.isoformat() in have:
+                        break  # the newest file SAM.gov could have is already loaded
+                    name = (f"SAM_PUBLIC_MONTHLY_V2_{d:%Y%m%d}.zip" if kind == "sam"
+                            else f"SAM_Exclusions_Public_Extract_V2_{d:%y}{d.timetuple().tm_yday:03d}.zip")
+                    url = samgov.entity_url(d, key) if kind == "sam" else samgov.exclusions_url(d, key)
+                    with tempfile.TemporaryDirectory(dir=self.root) as tmp:
+                        dest = Path(tmp) / name
+                        try:
+                            download(url, dest)
+                        except FileNotFoundError:
+                            continue  # not published for that date (yet)
+                        except RuntimeError as exc:
+                            cur["error"] = str(exc)
+                            break
+                        if not zipfile.is_zipfile(dest):
+                            head = dest.read_bytes()[:300].decode("utf-8", "replace")
+                            cur["error"] = f"SAM.gov sent something other than the extract: {head.strip()[:200]}"
+                            break
+                        src = self.add_source(kind, dest, d, self.AUTO_BY, move=True)
+                    if kind == "sam":
+                        load_sam(src["path"], d, Path(src["path"]).parent)  # build the lookup tables now, not mid-screen
+                    cur.update(as_of=d.isoformat(), fetched_at=_now())
+                    self._prune_auto(kind)
+                    break
+            f.write_text(json.dumps(st, indent=2))
+        finally:
+            self._auto_lock.release()
+        return self.auto_status()
+
+    def _prune_auto(self, kind: str) -> None:
+        auto = [m for m in self.list_sources() if m["kind"] == kind and m["uploaded_by"] == self.AUTO_BY]
+        for m in auto[self.AUTO_KEEP[kind]:]:
+            shutil.rmtree(self.root / "sources" / m["id"], ignore_errors=True)
 
     def list_sources(self) -> list[dict]:
         out = [self.source(d.name) for d in (self.root / "sources").iterdir() if (d / "meta.json").exists()]

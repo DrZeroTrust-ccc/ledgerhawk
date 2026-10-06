@@ -4,6 +4,7 @@ import io
 from datetime import date
 
 import pytest
+import pandas as pd
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
@@ -449,3 +450,13 @@ def test_awards_api_and_exports(syn, tmp_path):
         assert any(a["action"] == "screen_awards" for a in client.get("/api/audit").json())
     finally:
         mp.undo()
+
+
+def test_subject_file_with_title_rows_above_the_header(tmp_path):
+    # hand-built lead lists put a title and notes above the column headers
+    p = tmp_path / "voi.xlsx"
+    rows = [["LedgerHawk GSA Vendors of Interest", None, None], ["Built 2026-10-04", None, None], [None, None, None],
+            ["#", "UEI", "Name"], [1, "HFGCD12199B8", "ELB SERVICES LLC"], [2, "", "K2 CONTRACTING GROUP LLC"]]
+    pd.DataFrame(rows).to_excel(p, header=False, index=False)
+    got = parse_subjects(path=p)
+    assert [(s["uei"], s["name"]) for s in got] == [("HFGCD12199B8", "ELB SERVICES LLC"), ("", "K2 CONTRACTING GROUP LLC")]

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
 from ..pipeline.ledger import build_ledger
+from ..pipeline import samgov
 from ..pipeline import summary as summary_mod
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
@@ -116,7 +117,37 @@ def meta():
 
 @app.get("/api/sources")
 def list_sources():
-    return {"kinds": SOURCE_KINDS, "sources": store.list_sources()}
+    return {"kinds": SOURCE_KINDS, "sources": store.list_sources(),
+            "auto": {"enabled": bool(samgov.api_key()), **store.auto_status()}}
+
+
+@app.post("/api/sources/refresh")
+def refresh_sources(analyst: str = Form("")):
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the check is attributed.")
+    key = samgov.api_key()
+    if not key:
+        raise HTTPException(503, "Automatic SAM.gov downloads are off: SAM_API_KEY is not set on the server.")
+    store.audit(analyst, "sam_gov_check", None, None, "Checked SAM.gov for newer extracts")
+    threading.Thread(target=store.refresh_sam_gov, args=(key,), daemon=True).start()
+    return {"enabled": True, **store.auto_status(), "running": True}
+
+
+def _sam_gov_loop() -> None:
+    """Check SAM.gov twice a day for a newer exclusions extract (daily) and entity extract (monthly)."""
+    import time
+    while True:
+        try:
+            last = max((v.get("checked_at", "") for v in store.auto_status().values() if isinstance(v, dict)), default="")
+            if not last or (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() > 12 * 3600:
+                store.refresh_sam_gov(samgov.api_key())
+        except Exception as exc:  # never let the loop die; the status file shows SAM.gov errors
+            print(f"SAM.gov refresh failed: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(3600)
+
+
+if samgov.api_key():
+    threading.Thread(target=_sam_gov_loop, daemon=True).start()
 
 
 @app.post("/api/sources")

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { lastPlace } from '../nav'
-import { api, money, num, queueTotal, type RunMeta, type Source } from '../api'
+import { api, money, num, queueTotal, type AutoSources, type RunMeta, type Source } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
 
@@ -47,7 +47,7 @@ function SourceForm({ onAdded }: { onAdded: () => void }) {
       </label>
       <label className="space-y-1">
         <span className="block text-xs font-medium text-slate-600">File</span>
-        <input type="file" accept={kind === 'sam' ? '.dat,.txt' : '.csv'} onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
+        <input type="file" accept={kind === 'sam' ? '.zip,.dat,.txt' : '.zip,.csv'} onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
       </label>
       <label className="space-y-1">
         <span className="block text-xs font-medium text-slate-600">Extract date</span>
@@ -61,9 +61,60 @@ function SourceForm({ onAdded }: { onAdded: () => void }) {
   )
 }
 
-function DataSources({ sources, reload }: { sources: Source[] | null; reload: () => void }) {
+const when = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'never')
+
+function AutoFetch({ auto, reload }: { auto?: AutoSources; reload: () => void }) {
+  const [analyst] = useAnalystName()
+  const [error, setError] = useState<string | null>(null)
+  const [asked, setAsked] = useState(false)
+  if (!auto) return null
+  if (!auto.enabled)
+    return (
+      <p className="mb-4 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        Automatic SAM.gov downloads are off. An admin turns them on by adding a SAM.gov API key as <code>SAM_API_KEY</code> in Render. Until then,
+        upload the extracts below.
+      </p>
+    )
+  const errors = (['exclusions', 'sam'] as const).map((k) => auto[k]?.error).filter(Boolean)
+  const check = async () => {
+    setError(null)
+    const f = new FormData()
+    f.set('analyst', analyst)
+    try {
+      await api.refreshSources(f)
+      setAsked(true)
+      setTimeout(reload, 15000)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  return (
+    <div className="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          Updated automatically from SAM.gov: exclusions daily, the entity file monthly. Last checked {when(auto.exclusions?.checked_at)}.
+        </span>
+        <Button variant="secondary" className="ml-auto" disabled={auto.running || asked || !analyst.trim()} onClick={check}>
+          {auto.running || asked ? 'Checking SAM.gov…' : 'Check SAM.gov now'}
+        </Button>
+      </div>
+      {(auto.running || asked) && (
+        <p className="mt-1 text-xs">A new entity file is large, so it can take several minutes to download and index. Refresh this page to see it.</p>
+      )}
+      {errors.map((e) => (
+        <p key={e} className="mt-1 text-xs text-crimson">
+          {e}
+        </p>
+      ))}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
+function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto?: AutoSources; reload: () => void }) {
   return (
     <Card title="Data sources">
+      <AutoFetch auto={auto} reload={reload} />
       {!sources && <Loading />}
       {sources && sources.length === 0 && (
         <p className="mb-4 text-sm text-slate-500">No SAM or exclusions extracts loaded yet. Add them once here and every run can use them.</p>
@@ -169,7 +220,7 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
               ))}
             </select>
           ) : (
-            <input type="file" accept=".csv" onChange={(e) => setExclusions(e.target.files?.[0] ?? null)} className={field} />
+            <input type="file" accept=".zip,.csv" onChange={(e) => setExclusions(e.target.files?.[0] ?? null)} className={field} />
           )}
           <span className="block text-xs text-slate-500">The daily public CSV. Without it, the exclusion lane is empty.</span>
         </label>
@@ -262,7 +313,7 @@ export default function RunsPage() {
       <Card title="Start a new run">
         <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} runs={runs ?? []} />
       </Card>
-      <DataSources sources={sources.data?.sources ?? null} reload={sources.reload} />
+      <DataSources sources={sources.data?.sources ?? null} auto={sources.data?.auto} reload={sources.reload} />
       <Card title="Previous runs">
         <ErrorNote error={error} />
         {!runs && !error && <Loading />}

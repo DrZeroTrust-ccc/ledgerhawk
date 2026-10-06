@@ -1,15 +1,24 @@
-"""Stage 3: load the SAM.gov public entity extract (V2, pipe-delimited) and derive join keys.
+"""Stage 3: load the SAM.gov public entity extract (V2, pipe-delimited, plain or zipped) and derive join keys.
 
-The extract is parsed once and cached next to it, keyed by the file's SHA-256, so every later
-run on the same extract is a local table read. Field positions follow the V2 public layout and
-live in `SAM_LAYOUT`; confirm them against the current SAM layout document when a new version ships.
+The extract is streamed once, a line at a time, into a SQLite table next to it, keyed by the file's SHA-256. The
+monthly file holds ~800,000 entities, far too many to hold in memory on a small server, so a screen reads only the
+rows it needs: the vendors in a run, a subject and its one-hop neighbours, and how many entities share each key.
+Field positions follow the V2 public layout and live in `SAM_LAYOUT`; confirm them against the current SAM layout
+document when a new version ships.
 """
 from __future__ import annotations
 
+import io
+import json
+import os
 import re
+import sqlite3
+import threading
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import Iterable, Iterator
 
 import pandas as pd
 
@@ -100,8 +109,20 @@ def _codes(field: str) -> list[str]:
     return [t.strip()[:2] for t in (field or "").split("~") if t.strip()]
 
 
+ENT_TEXT = list(SAM_LAYOUT) + ["zip5", "akey", "bkey", "nn"]
+ENT_FLAGS = ["active", "residential", "virtual"]
+POC_COLS = ["uei", "role", "first", "last", "title", "city", "state", "pkey"]
+CACHE_VERSION = "v3"  # v3: SQLite store (v2 added the entity URL)
+
+
+def _up(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]+", " ", (s or "").upper())).strip()
+
+
 @dataclass
-class SamExtract:
+class SamSlice:
+    """The part of an extract one screen needs, in memory: entity and POC rows for some UEIs, and the universe-wide
+    count of entities sharing each suite, building and person key that appears in those rows."""
     entities: pd.DataFrame     # one row per UEI with derived keys
     pocs: pd.DataFrame         # one row per (UEI, POC role) with a person key
     freq_suite: dict[str, int]
@@ -110,78 +131,172 @@ class SamExtract:
     extract_date: date
     source_name: str
     sha256: str
-
-    @property
-    def records(self) -> int:
-        return len(self.entities)
+    records: int               # entities in the whole extract
 
 
-def _read_raw(path: Path) -> pd.DataFrame:
-    positions = sorted(set(SAM_LAYOUT.values()) | {b + o for b in POC_BLOCKS.values() for o in POC_OFFSETS.values()})
-    rows = []
-    with open(path, encoding="utf-8", errors="replace") as f:
-        for line in f:
-            line = line.rstrip("\r\n")
-            if not line or line.startswith(("BOF", "EOF")):
-                continue
-            if line.endswith("!end"):
-                line = line[:-4]
-            parts = line.split("|")
-            rows.append([parts[p - 1] if p - 1 < len(parts) else "" for p in positions])
-    return pd.DataFrame(rows, columns=[str(p) for p in positions], dtype=str)
+class SamExtract:
+    """A parsed extract on disk. Query it for the rows a screen needs, or take a `subset` for the pipeline."""
+
+    def __init__(self, db: Path, extract_date: date, source_name: str, sha256: str):
+        self.db, self.extract_date, self.source_name, self.sha256 = Path(db), extract_date, source_name, sha256
+        with self._conn() as c:
+            self.records = c.execute("SELECT COUNT(*) FROM ent").fetchone()[0]
+
+    def _conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(f"file:{self.db}?mode=ro", uri=True)
+
+    def _q(self, sql: str, args: Iterable = ()) -> list[tuple]:
+        with self._conn() as c:
+            return c.execute(sql, tuple(args)).fetchall()
+
+    def _many(self, sql: str, keys: Iterable[str]) -> list[tuple]:
+        """Run `sql` (with one `{qs}` placeholder list) over keys in chunks under SQLite's variable limit."""
+        keys = sorted({k for k in keys if k})
+        out: list[tuple] = []
+        with self._conn() as c:
+            for i in range(0, len(keys), 900):
+                part = keys[i:i + 900]
+                out += c.execute(sql.format(qs=",".join("?" * len(part))), part).fetchall()
+        return out
+
+    @staticmethod
+    def _ent_frame(rows: list[tuple]) -> pd.DataFrame:
+        df = pd.DataFrame(rows, columns=["seq", *ENT_TEXT, *ENT_FLAGS, "certs"])
+        for k in ENT_FLAGS:
+            df[k] = df[k].astype(bool)
+        df["certs"] = [json.loads(c) for c in df["certs"]]
+        return df.sort_values("seq").drop(columns="seq").reset_index(drop=True)
+
+    @staticmethod
+    def _poc_frame(rows: list[tuple]) -> pd.DataFrame:
+        df = pd.DataFrame(rows, columns=["role_idx", "seq", *POC_COLS])
+        return df.sort_values(["role_idx", "seq"]).drop(columns=["role_idx", "seq"]).reset_index(drop=True)
+
+    _ENT_SELECT = f"SELECT seq, {', '.join(ENT_TEXT + ENT_FLAGS)}, certs FROM ent"
+    _POC_SELECT = f"SELECT role_idx, seq, {', '.join(POC_COLS)} FROM pocs"
+
+    def entities_for(self, ueis: Iterable[str]) -> pd.DataFrame:
+        return self._ent_frame(self._many(self._ENT_SELECT + " WHERE uei IN ({qs})", ueis))
+
+    def pocs_for(self, ueis: Iterable[str]) -> pd.DataFrame:
+        return self._poc_frame(self._many(self._POC_SELECT + " WHERE uei IN ({qs})", ueis))
+
+    def pocs_with_pkeys(self, pkeys: Iterable[str]) -> pd.DataFrame:
+        return self._poc_frame(self._many(self._POC_SELECT + " WHERE pkey IN ({qs})", pkeys))
+
+    def pocs_named(self, first: str, last: str) -> pd.DataFrame:
+        """POCs whose first and last names match after upper-casing and dropping punctuation."""
+        return self._poc_frame(self._q(self._POC_SELECT + " WHERE ulast = ? AND ufirst = ?", (_up(last), _up(first))))
+
+    def ueis_named(self, nn: str, limit: int | None = None) -> list[str]:
+        sql = "SELECT uei FROM ent WHERE nn = ? ORDER BY seq" + (f" LIMIT {int(limit)}" if limit else "")
+        return [r[0] for r in self._q(sql, (nn,))] if nn else []
+
+    def ueis_at_suite(self, akey: str) -> list[str]:
+        return [r[0] for r in self._q("SELECT uei FROM ent WHERE akey = ? ORDER BY seq", (akey,))] if akey else []
+
+    def freq(self, table: str, keys: Iterable[str]) -> dict[str, int]:
+        return dict(self._many(f"SELECT key, n FROM {table} WHERE key IN ({{qs}})", keys))
+
+    def subset(self, ueis: Iterable[str]) -> SamSlice:
+        ent = self.entities_for(ueis)
+        pocs = self.pocs_for(ent["uei"])
+        return SamSlice(ent, pocs, self.freq("freq_suite", ent["akey"]), self.freq("freq_bldg", ent["bkey"]),
+                        self.freq("freq_person", pocs["pkey"]), self.extract_date, self.source_name, self.sha256,
+                        self.records)
+
+
+def _lines(path: Path) -> Iterator[str]:
+    """Lines of the extract, read straight out of the ZIP SAM.gov ships it in when it is still zipped."""
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as zf:
+            member = max(zf.infolist(), key=lambda m: m.file_size)
+            with zf.open(member) as raw:
+                yield from io.TextIOWrapper(raw, encoding="utf-8", errors="replace")
+    else:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            yield from f
+
+
+def _build(path: Path, extract_date: date, db: Path) -> None:
+    tmp = db.with_name(db.name + f".{os.getpid()}-{threading.get_ident()}.tmp")
+    tmp.unlink(missing_ok=True)
+    c = sqlite3.connect(tmp)
+    c.executescript(f"""
+        PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF;
+        CREATE TABLE ent (seq INTEGER, {', '.join(f'{k} TEXT' for k in ENT_TEXT)}, {', '.join(f'{k} INTEGER' for k in ENT_FLAGS)},
+                          certs TEXT, PRIMARY KEY (uei));
+        CREATE TABLE pocs (uei TEXT, role TEXT, role_idx INTEGER, seq INTEGER, first TEXT, last TEXT, title TEXT, city TEXT,
+                           state TEXT, pkey TEXT, ufirst TEXT, ulast TEXT, PRIMARY KEY (uei, role));
+    """)
+    ent_sql = f"INSERT OR REPLACE INTO ent VALUES ({','.join('?' * (len(ENT_TEXT) + len(ENT_FLAGS) + 2))})"
+    poc_sql = "INSERT OR REPLACE INTO pocs VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    ents: list[tuple] = []
+    pocs: list[tuple] = []
+    seen: set[str] = set()
+    as_of = extract_date.isoformat()
+
+    def flush():
+        c.executemany(ent_sql, ents)
+        c.executemany(poc_sql, pocs)
+        ents.clear()
+        pocs.clear()
+
+    for seq, line in enumerate(_lines(path)):
+        line = line.rstrip("\r\n")
+        if not line or line.startswith(("BOF", "EOF")):
+            continue
+        if line.endswith("!end"):
+            line = line[:-4]
+        parts = line.split("|")
+        f = lambda pos: parts[pos - 1].strip() if pos - 1 < len(parts) else ""  # noqa: E731
+        e = {k: f(pos) for k, pos in SAM_LAYOUT.items()}
+        uei = e["uei"]
+        if not uei:
+            continue
+        if uei in seen:  # a later row for the same UEI wins, with its own contacts
+            flush()
+            c.execute("DELETE FROM pocs WHERE uei = ?", (uei,))
+        seen.add(uei)
+        for k in ["reg_date", "exp_date", "last_update", "activation_date", "start_date"]:
+            e[k] = _date(e[k])
+        e["zip5"] = e["zip"][:5]
+        e["akey"] = suite_key(e["addr1"], e["addr2"], e["zip5"])
+        e["bkey"] = building_key(e["addr1"], e["zip5"])
+        e["nn"] = normalize_name(e["legal_name"])
+        addr = f"{e['addr1']} {e['addr2']}".upper()
+        certs = {CERT_CODES[x] for x in _codes(e["sba_types"]) if x in SBA_ONLY}
+        certs |= {CERT_CODES[x] for x in _codes(e["business_types"]) if x in CERT_CODES and x not in SBA_ONLY}
+        flags = [e["extract_code"].upper() == "A" and e["exp_date"] >= as_of,
+                 bool(RESIDENTIAL_RE.search(addr)), bool(VIRTUAL_RE.search(addr))]
+        ents.append((seq, *(e[k] for k in ENT_TEXT), *(int(x) for x in flags), json.dumps(sorted(certs))))
+        for role_idx, (role, start) in enumerate(POC_BLOCKS.items()):
+            p = {k: f(start + off) for k, off in POC_OFFSETS.items()}
+            pk = person_key(p["first"], p["last"], p["state"])
+            if pk:
+                pocs.append((uei, role, role_idx, seq, p["first"], p["last"], p["title"], p["city"], p["state"], pk,
+                             _up(p["first"]), _up(p["last"])))
+        if len(ents) >= 5000:
+            flush()
+    flush()
+    c.executescript("""
+        CREATE INDEX ent_nn ON ent (nn); CREATE INDEX ent_akey ON ent (akey);
+        CREATE INDEX pocs_pkey ON pocs (pkey); CREATE INDEX pocs_name ON pocs (ulast, ufirst);
+        CREATE TABLE freq_suite AS SELECT akey AS key, COUNT(*) AS n FROM ent WHERE akey != '' GROUP BY akey;
+        CREATE TABLE freq_bldg AS SELECT bkey AS key, COUNT(*) AS n FROM ent WHERE bkey != '' GROUP BY bkey;
+        CREATE TABLE freq_person AS SELECT pkey AS key, COUNT(DISTINCT uei) AS n FROM pocs GROUP BY pkey;
+        CREATE UNIQUE INDEX fs ON freq_suite (key); CREATE UNIQUE INDEX fb ON freq_bldg (key);
+        CREATE UNIQUE INDEX fp ON freq_person (key);
+    """)
+    c.commit()
+    c.close()
+    tmp.replace(db)
 
 
 def load_sam(path: str | Path, extract_date: date, cache_dir: str | Path | None = None) -> SamExtract:
     path = Path(path)
     sha = file_sha256(path)
-    cache = Path(cache_dir or path.parent) / f".{path.name}.{sha[:16]}.v2.pkl"  # v2: adds the entity URL
-    if cache.exists():
-        ent, pocs = pd.read_pickle(cache)
-    else:
-        ent, pocs = _derive(_read_raw(path), extract_date)
-        try:
-            pd.to_pickle((ent, pocs), cache)
-        except OSError:
-            pass  # read-only location; parse again next time
-    freq_suite = ent.loc[ent["akey"] != "", "akey"].value_counts().to_dict()
-    freq_bldg = ent.loc[ent["bkey"] != "", "bkey"].value_counts().to_dict()
-    freq_person = pocs.drop_duplicates(["uei", "pkey"])["pkey"].value_counts().to_dict()
-    return SamExtract(ent, pocs, freq_suite, freq_bldg, freq_person, extract_date, path.name, sha)
-
-
-def _derive(raw: pd.DataFrame, extract_date: date) -> tuple[pd.DataFrame, pd.DataFrame]:
-    col = lambda name: raw[str(SAM_LAYOUT[name])].fillna("").str.strip()  # noqa: E731
-    ent = pd.DataFrame({k: col(k) for k in SAM_LAYOUT})
-    ent = ent[ent["uei"] != ""].drop_duplicates("uei", keep="last").copy()
-    for k in ["reg_date", "exp_date", "last_update", "activation_date", "start_date"]:
-        ent[k] = ent[k].map(_date)
-    ent["zip5"] = ent["zip"].str[:5]
-    ent["akey"] = [suite_key(a, b, z) for a, b, z in zip(ent["addr1"], ent["addr2"], ent["zip5"])]
-    ent["bkey"] = [building_key(a, z) for a, z in zip(ent["addr1"], ent["zip5"])]
-    ent["nn"] = ent["legal_name"].map(normalize_name)
-    ent["active"] = (ent["extract_code"].str.upper() == "A") & (ent["exp_date"] >= extract_date.isoformat())
-
-    def certs(bt: str, sba: str) -> list[str]:
-        out = {CERT_CODES[c] for c in _codes(sba) if c in SBA_ONLY}
-        out |= {CERT_CODES[c] for c in _codes(bt) if c in CERT_CODES and c not in SBA_ONLY}
-        return sorted(out)
-
-    ent["certs"] = [certs(a, b) for a, b in zip(ent["business_types"], ent["sba_types"])]
-    addr = (ent["addr1"] + " " + ent["addr2"]).str.upper()
-    ent["residential"] = addr.str.contains(RESIDENTIAL_RE)
-    ent["virtual"] = addr.str.contains(VIRTUAL_RE)
-
-    poc_rows = []
-    idx = raw.set_index(raw[str(SAM_LAYOUT["uei"])].str.strip())
-    for role, start in POC_BLOCKS.items():
-        part = pd.DataFrame({
-            "uei": idx.index,
-            "role": role,
-            **{k: idx[str(start + off)].fillna("").str.strip().values for k, off in POC_OFFSETS.items()},
-        })
-        poc_rows.append(part)
-    pocs = pd.concat(poc_rows, ignore_index=True)
-    pocs = pocs[pocs["uei"].isin(ent["uei"])]
-    pocs["pkey"] = [person_key(f, l, s) for f, l, s in zip(pocs["first"], pocs["last"], pocs["state"])]
-    pocs = pocs[pocs["pkey"] != ""].drop_duplicates(["uei", "role"]).reset_index(drop=True)
-    return ent.reset_index(drop=True), pocs
+    db = Path(cache_dir or path.parent) / f".{path.name}.{sha[:16]}.{extract_date.isoformat()}.{CACHE_VERSION}.sqlite"
+    if not db.exists():
+        _build(path, extract_date, db)
+    return SamExtract(db, extract_date, path.name, sha)

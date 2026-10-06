@@ -44,6 +44,18 @@ signals and exclusion links), and `queue.csv`.
 | `pipeline/links.py` | Stage 3 SAM card and R signals, Stage 4 relationship pairs and L signals, address and contact ties to exclusions |
 | `pipeline/run.py` | Orchestration, funnel, manifest, outputs |
 
+## SAM.gov extracts
+
+- **Automatic downloads:** with `SAM_API_KEY` set (a free public API key from a SAM.gov account), the server checks
+  SAM.gov twice a day through the [Extracts API](https://open.gsa.gov/api/sam-entity-extracts-api/) and adds any newer
+  exclusions extract (daily) or public entity extract (V2, monthly, first Sunday) as a data source. It only calls
+  SAM.gov when the newest file it could get is not loaded yet, which keeps well inside the 10 calls a day a key
+  without a SAM role allows. It keeps the newest 2 entity files and 14 exclusions files it downloaded. "Check SAM.gov
+  now" on the Runs page runs the same check. Manual uploads still work, and both extracts can be uploaded zipped.
+- **Memory:** the entity extract (~800,000 entities) is streamed a line at a time into a SQLite file beside it the
+  first time it is used (a few minutes), and screens read only the rows they need. A simulated full-size extract
+  peaked at about 165 MB while building, against about 2.8 GB when it was parsed in memory.
+
 ## SAM enrichment and link analysis (milestone 3)
 
 With a SAM entity extract (`--sam`, or a data source in the app) the run adds:
