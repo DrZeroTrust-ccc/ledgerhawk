@@ -9,6 +9,7 @@ obligations as reported and can lag or be revised.
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -371,8 +372,10 @@ def _excluded_since(entity: dict) -> str:
     return min(dates) if dates else ""
 
 
-def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -> dict:
-    """Look up every subject UEI, and every excluded related entity, in one pass."""
+def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
+                  progress: Callable[[int, int, str], None] | None = None) -> dict:
+    """Look up every subject UEI, and every excluded related entity, in one pass. `progress` is told
+    (done, total, what) after each of the three lookups per UEI."""
     today = today or date.today()
     targets: dict[str, dict] = {}
     for s in screen["subjects"]:
@@ -395,10 +398,22 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None) -
             elif "name" in (r.get("via_keys") or []):
                 targets[r["uei"]]["refs"].add(s["ref"])
     ueis = list(targets)[:MAX_UEIS]
+    lock, done = threading.Lock(), [0]
+
+    def tick(step: str, u: str, res):
+        if progress:
+            with lock:
+                done[0] += 1
+                progress(done[0], 3 * len(ueis), f"{step}: {targets[u]['name']}")
+        return res
+
+    if progress:
+        progress(0, 3 * len(ueis), f"Looking up {len(ueis)} UEIs: contracts, actions after exclusion, yearly totals")
     with ThreadPoolExecutor(max_workers=6) as pool:
-        found = list(pool.map(lambda u: awards_for_uei(u, post, today), ueis))
-        acts = dict(zip(ueis, pool.map(lambda u: actions_after(u, targets[u]["excluded_since"], post, today), ueis)))
-        hist = dict(zip(ueis, pool.map(lambda u: history_for_uei(u, post, today), ueis)))
+        found = list(pool.map(lambda u: tick("Contracts and IDVs", u, awards_for_uei(u, post, today)), ueis))
+        acts = dict(zip(ueis, pool.map(lambda u: tick("Actions after exclusion", u, actions_after(
+            u, targets[u]["excluded_since"], post, today)), ueis)))
+        hist = dict(zip(ueis, pool.map(lambda u: tick("Year-by-year history", u, history_for_uei(u, post, today)), ueis)))
     entities = []
     for res in found:
         t = targets[res["uei"]]

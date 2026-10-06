@@ -306,7 +306,29 @@ export type SubjectScreenMeta = {
   data_class: string
   dollars_run: string | null
   parent_id?: string | null
+  original_matter?: string
+  original_client?: string
+  renamed_by?: string
+  renamed_at?: string
 }
+
+export type JobKind = 'awards' | 'context' | 'recheck'
+
+export type ScreenJob = {
+  kind: JobKind
+  label: string
+  state: 'running' | 'done' | 'error'
+  done: number
+  total: number
+  step: string
+  by: string
+  started_at: string
+  finished_at: string
+  error: string
+  result: Record<string, string | number> | null
+}
+
+export type ScreenJobs = Partial<Record<JobKind, ScreenJob>>
 
 export type SubjectChange = {
   ref: number
@@ -358,6 +380,7 @@ export type PersonResult = {
 
 export type SubjectScreen = {
   meta: SubjectScreenMeta
+  jobs?: ScreenJobs
   sources: SubjectScreenSources
   counts: Record<string, number>
   subjects: SubjectResult[]
@@ -606,7 +629,10 @@ export const api = {
   subjectScreens: () => req<SubjectScreenListItem[]>('/api/subject-screens'),
   subjectScreen: (id: string) => req<SubjectScreen>(`/api/subject-screens/${encodeURIComponent(id)}`),
   recheckSubjectScreen: (id: string, form: FormData) =>
-    req<{ id: string }>(`/api/subject-screens/${encodeURIComponent(id)}/recheck`, { method: 'POST', body: form }),
+    req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/recheck`, { method: 'POST', body: form }),
+  screenJobs: (id: string) => req<ScreenJobs>(`/api/subject-screens/${encodeURIComponent(id)}/jobs`),
+  renameScreen: (id: string, form: FormData) =>
+    req<SubjectScreenMeta>(`/api/subject-screens/${encodeURIComponent(id)}/rename`, { method: 'POST', body: form }),
   addScreenNote: (id: string, form: FormData) =>
     req<ScreenNote>(`/api/subject-screens/${encodeURIComponent(id)}/notes`, { method: 'POST', body: form }),
   deleteScreenNote: (id: string, nid: string, form: FormData) =>
@@ -620,9 +646,9 @@ export const api = {
   muteSite: (form: FormData) =>
     req<{ sites: Record<string, { by: string; at: string; note: string }> }>('/api/context/muted-sites', { method: 'POST', body: form }),
   fetchScreenContext: (id: string, form: FormData) =>
-    req<ScreenContext>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
+    req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>
-    req<ScreenAwards>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
+    req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),

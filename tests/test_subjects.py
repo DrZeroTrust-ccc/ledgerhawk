@@ -206,7 +206,8 @@ def test_recheck_api(syn, tmp_path):
         assert client.post("/api/subject-screens/nope/recheck", data={"analyst": "T"}).status_code == 404
         r = client.post(f"/api/subject-screens/{first}/recheck", data={"analyst": "T"})
         assert r.status_code == 200, r.text
-        got = client.get(f"/api/subject-screens/{r.json()['id']}").json()
+        assert r.json()["state"] == "done" and r.json()["kind"] == "recheck"
+        got = client.get(f"/api/subject-screens/{r.json()['result']['id']}").json()
         assert got["meta"]["parent_id"] == first and got["meta"]["matter"] == "M-1"
         assert got["sources"]["exclusions_extract_date"] == "2026-10-09"  # newest extract picked up
         assert got["changes"]["counts"]["worse"] == 1
@@ -222,7 +223,7 @@ def test_recheck_api(syn, tmp_path):
         with open(lst, "rb") as f:
             sid = client.post("/api/subject-screens", files={"subjects_file": ("voi.csv", f)},
                               data={"analyst": "T", "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]}).json()["id"]
-        again = client.post(f"/api/subject-screens/{sid}/recheck", data={"analyst": "T"}).json()["id"]
+        again = client.post(f"/api/subject-screens/{sid}/recheck", data={"analyst": "T"}).json()["result"]["id"]
         ent = client.get(f"/api/subject-screens/{again}").json()["subjects"][0]["entities"][0]
         assert ent["fy24"] == 6450000.0 and ent["dollars_from"] == "list"
     finally:
@@ -272,7 +273,7 @@ def test_people_only_screen_api(syn, tmp_path):
         assert any(par.text.startswith("Person 1.") for par in doc.paragraphs)
         r = client.post(f"/api/subject-screens/{sid}/recheck", data={"analyst": "T"})
         assert r.status_code == 200, r.text
-        again = client.get(f"/api/subject-screens/{r.json()['id']}").json()
+        again = client.get(f"/api/subject-screens/{r.json()['result']['id']}").json()
         assert again["people"][0]["status"] == "tied" and again["changes"]["people"] == []
     finally:
         mp.undo()
@@ -336,7 +337,7 @@ def test_notes_evidence_and_signoff(syn, tmp_path):
         assert any(a["action"] == "screen_approve" for a in client.get("/api/audit").json())
 
         # a re-check carries notes and evidence forward and starts sign-off again
-        new = client.post(f"{base}/recheck", data={"analyst": "Ana"}).json()["id"]
+        new = client.post(f"{base}/recheck", data={"analyst": "Ana"}).json()["result"]["id"]
         rv = client.get(f"/api/subject-screens/{new}").json()["review"]
         assert rv["state"] == "draft" and len(rv["notes"]) == 2 and rv["notes"][0]["carried_from"]["id"] == sid
         assert client.get(f"/api/subject-screens/{new}/evidence/{note['id']}").content == pdf
@@ -503,11 +504,16 @@ def test_awards_api_and_exports(syn, tmp_path):
         assert client.get(base).json()["awards"] is None
         appmod.store.awards_post = lambda url, body: (_ for _ in ()).throw(OSError("blocked"))
         r = client.post(f"{base}/awards", data={"analyst": "T"})
-        assert r.status_code == 502 and client.get(base).json()["awards"] is None  # a failed lookup saves nothing
+        assert r.status_code == 200 and r.json()["state"] == "error" and "USAspending did not answer" in r.json()["error"]
+        assert client.get(base).json()["awards"] is None  # a failed lookup saves nothing
+        assert client.get(f"{base}/jobs").json()["awards"]["state"] == "error"
         appmod.store.awards_post = _fake_usaspending([])
         assert client.post(f"{base}/awards", data={"analyst": ""}).status_code == 400
         r = client.post(f"{base}/awards", data={"analyst": "Ana"})
         assert r.status_code == 200, r.text
+        job = r.json()
+        assert job["state"] == "done" and job["by"] == "Ana" and job["result"]["ueis"] >= 1 and job["total"] == 3 * job["result"]["ueis"]
+        assert job["done"] == job["total"]  # progress reached the end
         got = client.get(base).json()["awards"]
         assert got["fetched_by"] == "Ana" and got["entities"][0]["after_exclusion"] == 1
         wb = load_workbook(io.BytesIO(client.get(f"{base}/subject-screen.xlsx").content))
@@ -569,3 +575,138 @@ def test_subject_list_dollars_and_data_checks(tmp_path):
                       "(P00001, action type F, 2025-03-14) 42 days after award, and the amount was not brought down. "
                       "Confirm whether the money was deobligated")
     assert odd[1].endswith("The amount may be in local currency or mis-keyed")  # no termination: the H&S Water case
+
+
+def _screen_app(syn, tmp_path, subjects_text):
+    """A fresh app with the synthetic extracts loaded and one screen of `subjects_text`."""
+    _, _, p, (vendors, excl, sam) = syn
+    mp = pytest.MonkeyPatch()
+    mp.setenv("LEDGERHAWK_DATA_DIR", str(tmp_path / "data"))
+    mp.setenv("LEDGERHAWK_WEB_DIST", str(tmp_path / "no-web"))
+    import ledgerhawk.api.app as appmod
+    appmod = importlib.reload(appmod)
+    client = TestClient(appmod.app)
+    ids = {}
+    for kind, path, d in (("sam", sam, "2026-09-06"), ("exclusions", excl, "2026-10-02")):
+        with open(path, "rb") as f:
+            ids[kind] = client.post("/api/sources", files={"file": f}, data={"kind": kind, "as_of": d, "analyst": "T"}).json()["id"]
+    sid = client.post("/api/subject-screens", data={"subjects_text": subjects_text, "analyst": "T", "matter": "M-1",
+                                                    "sam_source": ids["sam"], "exclusions_source": ids["exclusions"]}).json()["id"]
+    return mp, appmod, client, sid
+
+
+def test_screen_jobs_run_in_the_background_with_progress(syn, tmp_path):
+    import threading
+    import time
+    _, _, p, _ = syn
+    mp, appmod, client, sid = _screen_app(syn, tmp_path, f"{p['excluded_major']}\n{p['ex_affiliate']}")
+    try:
+        appmod.store.jobs_inline = False
+        gate = threading.Event()
+        fake = _fake_usaspending([])
+
+        def slow(url, body):  # hold the lookup until the test has seen it running
+            gate.wait(10)
+            return fake(url, body)
+        appmod.store.awards_post = slow
+        base = f"/api/subject-screens/{sid}"
+        first = client.post(f"{base}/awards", data={"analyst": "Ana"}).json()
+        assert first["state"] == "running" and first["label"] == "Looking up awards on USAspending" and first["by"] == "Ana"
+        again = client.post(f"{base}/awards", data={"analyst": "Bo"}).json()  # a second click joins the running job
+        assert again["started_at"] == first["started_at"] and again["by"] == "Ana"
+        assert client.get(base).json()["jobs"]["awards"]["state"] == "running"  # the page sees it on reload
+        gate.set()
+        seen = []
+        for _ in range(200):
+            j = client.get(f"{base}/jobs").json()["awards"]
+            seen.append(j["done"])
+            if j["state"] != "running":
+                break
+            time.sleep(0.05)
+        assert j["state"] == "done" and j["done"] == j["total"] > 0 and j["step"] == "Done" and j["finished_at"]
+        assert j["result"]["ueis"] * 3 == j["total"] and seen == sorted(seen)  # progress only moves forward
+        assert client.get(base).json()["awards"]["fetched_by"] == "Ana"
+        assert client.get("/api/subject-screens/nope/jobs").status_code == 404
+        assert client.post("/api/subject-screens/nope/awards", data={"analyst": "A"}).status_code == 404
+    finally:
+        mp.undo()
+
+
+def test_a_job_cut_off_by_a_restart_says_so(syn, tmp_path):
+    import json
+    _, _, p, _ = syn
+    mp, appmod, client, sid = _screen_app(syn, tmp_path, p["excluded_major"])
+    try:
+        f = tmp_path / "data" / "subjects" / sid / "jobs.json"
+        f.write_text(json.dumps({"context": {"kind": "context", "state": "running", "done": 3, "total": 40}}))
+        j = client.get(f"/api/subject-screens/{sid}/jobs").json()["context"]
+        assert j["state"] == "error" and "server restarted" in j["error"]
+    finally:
+        mp.undo()
+
+
+def test_rename_a_screen(syn, tmp_path):
+    from docx import Document
+    _, _, p, _ = syn
+    mp, appmod, client, sid = _screen_app(syn, tmp_path, p["excluded_major"])
+    base = f"/api/subject-screens/{sid}"
+    try:
+        assert client.post(f"{base}/rename", data={"analyst": "", "matter": "X"}).status_code == 400
+        assert client.post("/api/subject-screens/nope/rename", data={"analyst": "A", "matter": "X"}).status_code == 404
+        assert client.post(f"{base}/rename", data={"analyst": "A", "matter": "x" * 201}).status_code == 400
+        meta = client.post(f"{base}/rename", data={"analyst": "Ana", "matter": "GSA Vendors of Interest", "client": "GSA FAS"}).json()
+        assert meta["matter"] == "GSA Vendors of Interest" and meta["client"] == "GSA FAS" and meta["original_matter"] == "M-1"
+        assert meta["renamed_by"] == "Ana"
+        assert client.get("/api/subject-screens").json()[0]["matter"] == "GSA Vendors of Interest"
+        audit = client.get("/api/audit").json()[0]
+        assert audit["action"] == "subject_screen_renamed" and '"M-1" to "GSA Vendors of Interest"' in audit["detail"]
+        doc = Document(io.BytesIO(client.get(f"{base}/subject-screen.docx").content))
+        assert any("GSA Vendors of Interest" in par.text for par in doc.paragraphs)  # exports use the new name
+        new = client.post(f"{base}/recheck", data={"analyst": "Ana"}).json()["result"]["id"]
+        assert client.get(f"/api/subject-screens/{new}").json()["meta"]["matter"] == "GSA Vendors of Interest"  # carried forward
+        # approval locks the name, as it locks the notes
+        client.post(f"{base}/notes", data={"analyst": "Ana", "target": "screen", "text": "Checked."})
+        client.post(f"{base}/review", data={"analyst": "Ana", "action": "submit"})
+        client.post(f"{base}/review", data={"analyst": "Rev", "action": "approve"})
+        assert client.get(base).json()["review"]["state"] == "approved"
+        r = client.post(f"{base}/rename", data={"analyst": "Ana", "matter": "Other"})
+        assert r.status_code == 400 and "locked" in r.json()["detail"]
+    finally:
+        mp.undo()
+
+
+def test_outside_context_covers_every_subject(syn, tmp_path, monkeypatch):
+    # the old 40-name cap is gone: a screen's lookup covers every subject entity and person
+    from ledgerhawk.pipeline import context as context_mod
+    from ledgerhawk.api.store import Store
+    seen = {}
+
+    def fake_many(targets, fetch=None, cache_dir=None, progress=None):
+        seen["n"] = len(targets)
+        for i, t in enumerate(targets, 1):
+            progress and progress(i, len(targets), t["name"])
+        return [{"name": t["name"], "uei": t.get("uei", ""), "person": bool(t.get("person")), "count": 0, "errors": 0,
+                 "sources": {"x": {"items": [], "error": ""}}, "tally": {"strong": 0, "possible": 0, "weak": 0},
+                 "adverse": 0, "fetched_at": "2026-10-06T00:00:00+00:00"} for t in targets]
+    monkeypatch.setattr(context_mod, "lookup_many", fake_many)
+    st = Store(tmp_path / "data")
+    screen = {"subjects": [{"ref": n, "input_name": f"Firm {n}", "related": [],
+                            "entities": [{"uei": f"UEI{n:09d}", "name": f"Firm {n} LLC", "sam": None}]} for n in range(1, 61)],
+              "people": [{"ref": 1, "first": "Reese", "last": "Fosterling", "state": "NY", "registrations": []}]}
+    monkeypatch.setattr(st, "subject_screen", lambda sid: screen)
+    monkeypatch.setattr(st, "_save_context", lambda f: None)
+    monkeypatch.setattr(st, "_with_verdicts", lambda f: f)
+    (tmp_path / "data" / "subjects" / "S1").mkdir(parents=True)
+    ticks = []
+    st.screen_context("S1", "A", progress=lambda d, t, s: ticks.append((d, t)))
+    assert seen["n"] == 61 and ticks[-1] == (61, 61)
+
+
+def test_lookup_many_reports_progress_from_the_start(monkeypatch):
+    from ledgerhawk.pipeline import context as context_mod
+    monkeypatch.setattr(context_mod, "lookup", lambda name, **kw: {"name": name})
+    calls = []
+    out = context_mod.lookup_many([{"name": n} for n in ("A", "B", "C")], progress=lambda d, t, s: calls.append((d, t, s)))
+    assert [o["name"] for o in out] == ["A", "B", "C"]
+    assert calls[0][:2] == (0, 3) and calls[0][2].startswith("Looking up 3 names")  # the total shows before any name ends
+    assert sorted(c[0] for c in calls[1:]) == [1, 2, 3] and all(c[2].startswith("Finished: ") for c in calls[1:])

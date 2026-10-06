@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   api,
   money,
   SUBJECT_STATUS,
+  type JobKind,
   type PersonResult,
   type ScreenAwards,
+  type ScreenJob,
+  type ScreenJobs,
   type ScreenContext,
   type SubjectChanges,
   type SubjectResult,
@@ -242,115 +245,225 @@ function Changes({ ch }: { ch: SubjectChanges }) {
   )
 }
 
-function ContextButton({ id, has, reload }: { id: string; has: boolean; reload: () => void }) {
+const JOB_KINDS: JobKind[] = ['recheck', 'awards', 'context']
+
+function duration(ms: number) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return m < 60 ? `${m}m ${String(s % 60).padStart(2, '0')}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+// Long screen jobs run on the server in the background. The page polls their progress every two seconds while any is
+// running, and picks a running job back up after a reload or from another analyst's tab.
+function useScreenJobs(id: string, initial: ScreenJobs | undefined, onFinish: (kind: JobKind, job: ScreenJob) => void) {
+  const [jobs, setJobs] = useState<ScreenJobs>(initial ?? {})
+  const [retry, setRetry] = useState(0)
+  const running = JOB_KINDS.some((k) => jobs[k]?.state === 'running')
+  useEffect(() => {
+    if (!running) return
+    const t = setTimeout(async () => {
+      try {
+        const next = await api.screenJobs(id)
+        for (const k of JOB_KINDS) {
+          const n = next[k]
+          if (jobs[k]?.state === 'running' && n && n.state !== 'running') onFinish(k, n)
+        }
+        setJobs(next)
+      } catch {
+        setRetry((n) => n + 1) // the server was busy or restarting; ask again next round
+      }
+    }, 2000)
+    return () => clearTimeout(t)
+    // onFinish is left out on purpose: it is a new function each render, and listing it would restart the poll timer
+    // every time the page re-renders (oxlint warns about this)
+  }, [id, jobs, running, retry])
+  const started = (j: ScreenJob) => {
+    setJobs((prev) => ({ ...prev, [j.kind]: j }))
+    if (j.state !== 'running') onFinish(j.kind, j)
+  }
+  return { jobs, started }
+}
+
+function JobProgress({ job }: { job: ScreenJob }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const elapsed = now - Date.parse(job.started_at)
+  const pct = job.total ? Math.min(100, (job.done / job.total) * 100) : 0
+  const left = job.done > 0 && job.total > job.done ? `about ${duration((elapsed / job.done) * (job.total - job.done))} left` : ''
+  const unit = job.kind === 'context' ? 'names' : job.kind === 'awards' ? 'lookups' : 'steps'
+  return (
+    <div className="rounded-md border border-navy-100 bg-navy-50 px-3 py-2" role="status" aria-live="polite">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs text-slate-600">
+        <span className="font-medium text-ink">{job.label}…</span>
+        <span className="tabular">
+          {job.total ? `${job.done} of ${job.total} ${unit}` : 'starting'} · {duration(elapsed)}
+          {left && ` · ${left}`}
+        </span>
+      </div>
+      <div className="mt-1 h-2 overflow-hidden rounded-full bg-white" role="progressbar" aria-valuemin={0} aria-valuemax={job.total} aria-valuenow={job.done}>
+        <div
+          className={`h-full rounded-full bg-navy transition-all duration-700 ${job.done === 0 ? 'w-1/12 animate-pulse' : ''}`}
+          style={job.done ? { width: `${Math.max(pct, 2)}%` } : undefined}
+        />
+      </div>
+      <div className="mt-1 truncate text-xs text-slate-500">
+        {job.step || 'Working'} · started by {job.by}. You can leave this page; it keeps running and shows here when you come back.
+      </div>
+    </div>
+  )
+}
+
+function JobButton({
+  id,
+  kind,
+  job,
+  started,
+  label,
+  busyLabel,
+  title,
+}: {
+  id: string
+  kind: JobKind
+  job: ScreenJob | undefined
+  started: (j: ScreenJob) => void
+  label: string
+  busyLabel: string
+  title: string
+}) {
   const [analyst] = useAnalystName()
-  const [busy, setBusy] = useState(false)
+  const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const running = job?.state === 'running'
+  const start = { awards: api.fetchScreenAwards, context: api.fetchScreenContext, recheck: api.recheckSubjectScreen }[kind]
   return (
     <span className="flex flex-col items-end gap-1">
       <Button
         variant="secondary"
-        disabled={busy || !analyst.trim()}
-        title={analyst.trim() ? 'News, DOJ press releases, federal court records, SEC filings and the OFAC list for every subject and person' : 'Enter your name in the header first'}
+        disabled={sending || running || !analyst.trim()}
+        title={analyst.trim() ? title : 'Enter your name in the header first'}
         onClick={async () => {
-          setBusy(true)
+          setSending(true)
           setError(null)
           const f = new FormData()
           f.append('analyst', analyst)
           try {
-            await api.fetchScreenContext(id, f)
-            reload()
+            started(await start(id, f))
           } catch (err) {
             setError((err as Error).message)
           } finally {
-            setBusy(false)
+            setSending(false)
           }
         }}
       >
-        {busy ? 'Searching outside sources…' : has ? 'Refresh outside context' : 'Search news, courts, DOJ, SEC, OFAC'}
+        {running || sending ? busyLabel : label}
       </Button>
       <ErrorNote error={error} />
     </span>
   )
 }
 
-function AwardsButton({ id, has, reload }: { id: string; has: boolean; reload: () => void }) {
-  const [analyst] = useAnalystName()
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+function JobOutcome({ job }: { job: ScreenJob }) {
   return (
-    <span className="flex flex-col items-end gap-1">
-      <Button
-        variant="secondary"
-        disabled={busy || !analyst.trim()}
-        title={analyst.trim() ? 'Contracts and IDVs reported to USAspending.gov for each subject UEI and excluded related firm' : 'Enter your name in the header first'}
-        onClick={async () => {
-          setBusy(true)
-          setError(null)
-          const f = new FormData()
-          f.append('analyst', analyst)
-          try {
-            await api.fetchScreenAwards(id, f)
-            reload()
-          } catch (err) {
-            setError((err as Error).message)
-          } finally {
-            setBusy(false)
-          }
-        }}
-      >
-        {busy ? 'Looking up awards…' : has ? 'Refresh awards' : 'Look up awards (USAspending)'}
-      </Button>
-      <ErrorNote error={error} />
-    </span>
+    <div className="rounded-md bg-crimson-50 px-3 py-2 text-xs text-crimson">
+      {job.label} stopped{job.finished_at ? ` at ${job.finished_at.slice(11, 16)} UTC` : ''}: {job.error}
+    </div>
   )
 }
 
-function Recheck({ id }: { id: string }) {
+function Rename({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   const [analyst] = useAnalystName()
-  const nav = useNavigate()
-  const [busy, setBusy] = useState(false)
+  const m = data.meta
+  const [open, setOpen] = useState(false)
+  const [matter, setMatter] = useState(m.matter)
+  const [client, setClient] = useState(m.client)
   const [error, setError] = useState<string | null>(null)
-  return (
-    <span className="flex flex-col items-end gap-1">
-      <Button
-        variant="secondary"
-        disabled={busy || !analyst.trim()}
-        title={analyst.trim() ? 'Run the same subjects against the newest SAM and exclusions extracts' : 'Enter your name in the header first'}
-        onClick={async () => {
-          setBusy(true)
-          setError(null)
-          const f = new FormData()
-          f.append('analyst', analyst)
-          try {
-            const r = await api.recheckSubjectScreen(id, f)
-            nav(`/subjects/${r.id}`)
-          } catch (err) {
-            setError((err as Error).message)
-          } finally {
-            setBusy(false)
-          }
+  const locked = data.review.state === 'approved'
+  if (!open)
+    return (
+      <button
+        className="text-xs font-normal text-navy hover:underline disabled:text-slate-400 disabled:no-underline"
+        disabled={locked || !analyst.trim()}
+        title={locked ? 'Approved screens keep their name. Reopen the screen to rename it.' : analyst.trim() ? 'Rename this screen' : 'Enter your name in the header first'}
+        onClick={() => {
+          setMatter(m.matter)
+          setClient(m.client)
+          setOpen(true)
         }}
       >
-        {busy ? 'Re-checking…' : 'Re-check with latest data'}
-      </Button>
+        Rename
+      </button>
+    )
+  const save = async () => {
+    setError(null)
+    const f = new FormData()
+    f.append('analyst', analyst)
+    f.append('matter', matter)
+    f.append('client', client)
+    try {
+      await api.renameScreen(m.id, f)
+      setOpen(false)
+      reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+  return (
+    <form
+      className="flex w-full flex-wrap items-center gap-2 text-sm font-normal"
+      onSubmit={(e) => {
+        e.preventDefault()
+        save()
+      }}
+    >
+      <input
+        autoFocus
+        value={matter}
+        maxLength={200}
+        onChange={(e) => setMatter(e.target.value)}
+        placeholder="Matter name or number"
+        aria-label="Matter name or number"
+        className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-2 py-1"
+      />
+      <input
+        value={client}
+        maxLength={200}
+        onChange={(e) => setClient(e.target.value)}
+        placeholder="Client or instructing counsel"
+        aria-label="Client or instructing counsel"
+        className="min-w-[12rem] rounded-md border border-slate-300 px-2 py-1"
+      />
+      <Button type="submit">Save name</Button>
+      <button type="button" className="text-xs text-slate-600 hover:underline" onClick={() => setOpen(false)}>
+        Cancel
+      </button>
       <ErrorNote error={error} />
-    </span>
+    </form>
   )
 }
 
 function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   const m = data.meta
   const src = data.sources
+  const nav = useNavigate()
+  const { jobs, started } = useScreenJobs(m.id, data.jobs, (kind, job) => {
+    if (kind === 'recheck' && job.state === 'done' && job.result?.id) nav(`/subjects/${job.result.id}`)
+    else if (job.state === 'done') reload()
+  })
+  const running = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'running')
+  const failed = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'error')
   return (
     <div className="space-y-3">
       {m.privileged && (
         <div className="rounded-md bg-crimson-50 px-3 py-2 text-sm font-semibold text-crimson">Privileged and Confidential. Prepared at the direction of counsel.</div>
       )}
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-[18rem] flex-1">
           <h1 className="flex flex-wrap items-center gap-2 text-xl font-semibold text-ink">
-            {m.matter || 'Subject screen'} <DataClassBadge dataClass={m.data_class} />
+            {m.matter || 'Untitled matter'} <DataClassBadge dataClass={m.data_class} /> <Rename key={m.matter + m.client} data={data} reload={reload} />
           </h1>
           <p className="text-sm text-slate-500">
             {m.client && `${m.client} · `}Screened by {m.created_by} on {m.created_at.slice(0, 10)} ·{' '}
@@ -360,11 +473,42 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
             {data.awards && ` · awards from USAspending as of ${data.awards.fetched_at.slice(0, 16).replace('T', ' ')} UTC`}
             {data.context && ` · outside context as of ${data.context.fetched_at.slice(0, 16).replace('T', ' ')} UTC`}
           </p>
+          {m.renamed_at && (
+            <p className="text-xs text-slate-400">
+              Renamed by {m.renamed_by} on {m.renamed_at.slice(0, 10)} (screened as &ldquo;{m.original_matter || 'Untitled matter'}&rdquo;)
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-start gap-2">
-          <ContextButton id={m.id} has={!!data.context} reload={reload} />
-          {data.subjects.length > 0 && <AwardsButton id={m.id} has={!!data.awards} reload={reload} />}
-          <Recheck id={m.id} />
+          <JobButton
+            id={m.id}
+            kind="context"
+            job={jobs.context}
+            started={started}
+            label={data.context ? 'Refresh outside context' : 'Search news, courts, DOJ, SEC, OFAC'}
+            busyLabel="Searching outside sources…"
+            title="News, DOJ press releases, federal court records, SEC filings and the OFAC list for every subject and person"
+          />
+          {data.subjects.length > 0 && (
+            <JobButton
+              id={m.id}
+              kind="awards"
+              job={jobs.awards}
+              started={started}
+              label={data.awards ? 'Refresh awards' : 'Look up awards (USAspending)'}
+              busyLabel="Looking up awards…"
+              title="Contracts and IDVs reported to USAspending.gov for each subject UEI and excluded related firm"
+            />
+          )}
+          <JobButton
+            id={m.id}
+            kind="recheck"
+            job={jobs.recheck}
+            started={started}
+            label="Re-check with latest data"
+            busyLabel="Re-checking…"
+            title="Run the same subjects against the newest SAM and exclusions extracts"
+          />
           <a
             href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`}
             className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
@@ -386,6 +530,12 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
           </a>
         </div>
       </div>
+      {running.map((j) => (
+        <JobProgress key={j.kind} job={j} />
+      ))}
+      {failed.map((j) => (
+        <JobOutcome key={j.kind} job={j} />
+      ))}
     </div>
   )
 }
@@ -403,7 +553,7 @@ export default function SubjectScreenPage() {
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: 'Subject screens', to: '/subjects' }, { label: data.meta.matter || 'Untitled matter' }]} />
-      <Header data={data} reload={reload} />
+      <Header key={data.meta.id} data={data} reload={reload} />
       {data.changes && <Changes ch={data.changes} />}
       <Review ctx={ctx} notesTarget="screen" />
       <Card>

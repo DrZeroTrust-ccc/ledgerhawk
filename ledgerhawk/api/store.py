@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -126,6 +127,9 @@ class Store:
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self.summary_client = None  # and a fake Claude
         self.hawk_inline = False  # tests write queue reasons in the request instead of a background thread
+        # and run screen jobs (awards, outside context, re-check) in the request
+        self.jobs_inline = os.environ.get("LEDGERHAWK_JOBS_INLINE") == "1"
+        self._jobs_running: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._auto_lock = threading.Lock()
         self._hawk_running: set[str] = set()  # runs the Hawk is writing reasons for in this process
@@ -465,8 +469,10 @@ class Store:
     def create_subject_screen(self, subjects: list[dict], *, analyst: str, matter: str = "", client: str = "",
                               privileged: bool = False, synthetic: bool = False, sam_source: str | None = None,
                               exclusions_source: str | None = None, dollars_run: str | None = None,
-                              parent_id: str | None = None, people: list[dict] | None = None) -> str:
+                              parent_id: str | None = None, people: list[dict] | None = None, progress=None) -> str:
+        step = progress or (lambda *a: None)
         sam_meta = self.source(sam_source) if sam_source else None
+        step(0, 3, "Loading the SAM and exclusions extracts")
         ex_meta = self.source(exclusions_source) if exclusions_source else None
         sam = load_sam(sam_meta["path"], date.fromisoformat(sam_meta["as_of"]), Path(sam_meta["path"]).parent) if sam_meta else None
         ex = load_exclusions(ex_meta["path"], date.fromisoformat(ex_meta["as_of"])) if ex_meta else None
@@ -476,6 +482,7 @@ class Store:
                        for u, r in self.vendors(dollars_run)["by_uei"].items()}
         if sam is None and ex is None:
             raise ValueError("Pick a SAM entity extract, an exclusions extract, or both.")
+        step(1, 3, f"Screening {len(subjects)} subjects and their related registrations")
         res = (subject_screen(subjects, sam, ex, dollars=dollars).to_dict() if subjects else
                {"subjects": [], "counts": {"subjects": 0, "related": 0}, "sources": {
                    "sam_file": sam.source_name if sam else None, "sam_sha256": sam.sha256 if sam else None,
@@ -496,6 +503,7 @@ class Store:
             "parent_id": parent_id,
         }
         if parent_id:
+            step(2, 3, "Comparing with the last screen")
             parent = self.subject_screen(parent_id)
             res["changes"] = compare_screens(parent, res)
             res["changes"]["people"] = compare_people(parent.get("people") or [], res["people"])
@@ -512,7 +520,7 @@ class Store:
         return sid
 
     def recheck_subject_screen(self, sid: str, analyst: str, sam_source: str | None = None,
-                               exclusions_source: str | None = None) -> str:
+                               exclusions_source: str | None = None, progress=None) -> str:
         """Re-run a screen on the same subjects, by default against the newest extract of each kind it used."""
         old = self.subject_screen(sid)
         m = old["meta"]
@@ -524,7 +532,8 @@ class Store:
         new_id = self.create_subject_screen(
             m["input"], analyst=analyst, matter=m.get("matter", ""), client=m.get("client", ""),
             privileged=bool(m.get("privileged")), synthetic=m.get("data_class") == "synthetic", sam_source=sam,
-            exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid, people=m.get("input_people") or [])
+            exclusions_source=ex, dollars_run=m.get("dollars_run"), parent_id=sid, people=m.get("input_people") or [],
+            progress=progress)
         # Earlier notes and evidence carry forward (same subjects, same refs); sign-off starts again.
         notes = old["review"]["notes"]
         if notes:
@@ -542,7 +551,9 @@ class Store:
         if d.parent != (self.root / "subjects").resolve() or not (d / "screen.json").exists():
             raise KeyError(sid)
         screen = json.loads((d / "screen.json").read_text())
+        self._apply_label(d, screen["meta"])
         screen["review"] = self._review(sid)
+        screen["jobs"] = self.screen_jobs(sid)
         aw = d / "awards.json"
         screen["awards"] = json.loads(aw.read_text()) if aw.exists() else None
         cx = d / "context.json"
@@ -681,7 +692,7 @@ class Store:
                    f"{label}: {what} for {cur['name']}" + (f" ({note.strip()})" if note.strip() else ""))
         return self.context(uei=uei, name=name, person=person)
 
-    def screen_context(self, sid: str, analyst: str) -> dict:
+    def screen_context(self, sid: str, analyst: str, progress=None) -> dict:
         """Outside context for every subject entity and screened person on a screen, kept with the screen."""
         screen = self.subject_screen(sid)
         targets, seen = [], set()
@@ -702,8 +713,9 @@ class Store:
             clues = context_mod.clues_for(nm, state=x["state"], person=True,
                                           related=[r["name"] for r in x.get("registrations") or []])
             targets.append({"name": nm, "person": True, "state": x["state"], "person_ref": x["ref"], "clues": clues})
-        targets = targets[:40]
-        found = context_mod.lookup_many(targets, fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context")
+        # every subject entity and person: the lookup runs in the background, so screen size no longer hits a time limit
+        found = context_mod.lookup_many(targets, fetch=self.context_fetch or context_mod._fetch, cache_dir=self.root / "context",
+                                        progress=progress)
         if found and all(f["errors"] == len(f["sources"]) for f in found):
             raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
         for t, f in zip(targets, found):
@@ -718,10 +730,10 @@ class Store:
                    f"{sum(f['adverse'] for f in found)} with enforcement or litigation language")
         return out | {"entities": found}
 
-    def fetch_screen_awards(self, sid: str, analyst: str) -> dict:
+    def fetch_screen_awards(self, sid: str, analyst: str, progress=None) -> dict:
         """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""
         screen = self.subject_screen(sid)
-        res = awards_mod.screen_awards(screen, post=self.awards_post or awards_mod._post)
+        res = awards_mod.screen_awards(screen, post=self.awards_post or awards_mod._post, progress=progress)
         if res["entities"] and res["errors"] == len(res["entities"]):
             raise ConnectionError("USAspending did not answer. Try again in a few minutes; the last lookup, if any, is kept.")
         res["fetched_by"] = analyst.strip()
@@ -731,11 +743,111 @@ class Store:
                    f"{len(res['entities'])} UEIs" + (f", {res['errors']} lookups failed" if res["errors"] else ""))
         return res
 
+    # ---- background jobs on a subject screen (awards, outside context, re-check) ------------------------------------
+    # Each takes minutes, longer than a proxy will hold a request open, so it runs in a thread and reports progress to
+    # jobs.json beside the screen; the page polls it. One job of each kind per screen at a time.
+    JOB_LABELS = {"awards": "Looking up awards on USAspending", "context": "Searching outside sources",
+                  "recheck": "Re-checking with the latest data"}
+
+    def screen_jobs(self, sid: str) -> dict:
+        f = self.root / "subjects" / sid / "jobs.json"
+        with self._lock:  # the writer swaps the file in under the same lock; Windows refuses the swap while it's open
+            jobs = json.loads(f.read_text()) if f.exists() else {}
+        for kind, j in jobs.items():
+            if j.get("state") == "running" and (sid, kind) not in self._jobs_running:
+                j.update(state="error", error="The server restarted while this was running. Start it again.")
+        return jobs
+
+    def _write_job(self, sid: str, kind: str, change) -> dict:
+        f = self.root / "subjects" / sid / "jobs.json"
+        with self._lock:
+            jobs = json.loads(f.read_text()) if f.exists() else {}
+            j = jobs.setdefault(kind, {})
+            change(j)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(jobs, indent=2))
+            tmp.replace(f)
+            return dict(j)
+
+    def start_screen_job(self, sid: str, kind: str, analyst: str, fn) -> dict:
+        """Run fn(progress) for a screen in the background. progress(done, total, step) updates the job; fn's return
+        value is kept as the job's result. Starting a kind that is already running returns the running job."""
+        self.subject_screen(sid)  # KeyError if there is no such screen
+        with self._lock:
+            already = (sid, kind) in self._jobs_running
+            if not already:
+                self._jobs_running.add((sid, kind))
+        if already:
+            return self.screen_jobs(sid)[kind]
+
+        def fresh(j):
+            j.clear()
+            j.update(kind=kind, label=self.JOB_LABELS[kind], state="running", done=0, total=0, step="Starting",
+                     by=analyst.strip(), started_at=_now(), finished_at="", error="", result=None)
+        self._write_job(sid, kind, fresh)
+
+        def progress(done: int, total: int, step: str = ""):
+            self._write_job(sid, kind, lambda j: j.update(done=done, total=total, step=step))
+
+        def work():
+            try:
+                result = fn(progress)
+                self._write_job(sid, kind, lambda j: j.update(state="done", finished_at=_now(), step="Done", result=result))
+            except (ConnectionError, ValueError, KeyError) as exc:
+                msg = str(exc).strip("'\"") or type(exc).__name__
+                self._write_job(sid, kind, lambda j: j.update(state="error", finished_at=_now(), error=msg))
+            except Exception as exc:  # keep the reason visible on the page instead of losing it in a thread
+                logging.getLogger("ledgerhawk").exception("screen job %s on %s failed", kind, sid)
+                self._write_job(sid, kind, lambda j: j.update(
+                    state="error", finished_at=_now(), error=f"Unexpected error ({type(exc).__name__}). Try again."))
+            finally:
+                with self._lock:
+                    self._jobs_running.discard((sid, kind))
+
+        if self.jobs_inline:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+        return self.screen_jobs(sid)[kind]
+
+    # ---- renaming a screen: screen.json stays as written; the new name lives in label.json with its history -------
+    @staticmethod
+    def _apply_label(d: Path, meta: dict) -> None:
+        f = d / "label.json"
+        if f.exists():
+            lab = json.loads(f.read_text())
+            meta["original_matter"], meta["original_client"] = meta.get("matter", ""), meta.get("client", "")
+            meta["matter"], meta["client"] = lab["matter"], lab["client"]
+            meta["renamed_by"], meta["renamed_at"] = lab["by"], lab["at"]
+
+    def rename_subject_screen(self, sid: str, analyst: str, matter: str, client: str) -> dict:
+        d = self.root / "subjects" / sid
+        screen = self.subject_screen(sid)
+        if screen["review"]["state"] == "approved":
+            raise ValueError("This screen has been approved, so its name is locked. Reopen it first.")
+        matter, client = matter.strip(), client.strip()
+        if len(matter) > 200 or len(client) > 200:
+            raise ValueError("Keep the matter and client under 200 characters.")
+        before = screen["meta"].get("matter", "")
+        f = d / "label.json"
+        with self._lock:
+            lab = json.loads(f.read_text()) if f.exists() else {"history": []}
+            lab["history"].append({"matter": matter, "client": client, "by": analyst.strip(), "at": _now()})
+            lab.update(matter=matter, client=client, by=analyst.strip(), at=_now())
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(lab, indent=2))
+            tmp.replace(f)
+        self.audit(analyst, "subject_screen_renamed", None, None,
+                   f'Renamed screen {sid} from "{before or "Untitled matter"}" to "{matter or "Untitled matter"}"'
+                   + (f" (client: {client})" if client else ""))
+        return self.subject_screen(sid)["meta"]
+
     def list_subject_screens(self) -> list[dict]:
         out = []
         dirs = [d for d in (self.root / "subjects").iterdir() if (d / "screen.json").exists()]
         for d in sorted(dirs, key=lambda d: ((d / "screen.json").stat().st_mtime_ns, d.name), reverse=True):
             s = json.loads((d / "screen.json").read_text())
+            self._apply_label(d, s["meta"])
             out.append({**{k: v for k, v in s["meta"].items() if k not in ("input", "input_people")}, "counts": s["counts"], "sources": s["sources"],
                         "change_counts": (s.get("changes") or {}).get("counts"), "review_state": self._review(d.name)["state"]})
         return out

@@ -672,9 +672,22 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
     }
 
 
-def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | None = None) -> list[dict]:
-    """targets: [{name, uei?, state?, person?}]. Runs a few at a time to stay polite to the free APIs."""
+def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | None = None,
+                progress: Callable[[int, int, str], None] | None = None) -> list[dict]:
+    """targets: [{name, uei?, state?, person?}]. Runs a few at a time to stay polite to the free APIs. `progress` is
+    told (done, total, name) as each name finishes."""
+    lock, done = threading.Lock(), [0]
+
+    def one(t: dict) -> dict:
+        res = lookup(t["name"], uei=t.get("uei", ""), state=t.get("state", ""), person=bool(t.get("person")),
+                     fetch=fetch, cache_dir=cache_dir, clues=t.get("clues"), entity=t.get("entity"))
+        if progress:
+            with lock:
+                done[0] += 1
+                progress(done[0], len(targets), f"Finished: {t['name']}")
+        return res
+
+    if progress:
+        progress(0, len(targets), f"Looking up {len(targets)} names; the first ones also load the OFAC and HHS-OIG lists")
     with ThreadPoolExecutor(max_workers=3) as pool:
-        return list(pool.map(lambda t: lookup(t["name"], uei=t.get("uei", ""), state=t.get("state", ""),
-                                              person=bool(t.get("person")), fetch=fetch, cache_dir=cache_dir,
-                                              clues=t.get("clues"), entity=t.get("entity")), targets))
+        return list(pool.map(one, targets))
