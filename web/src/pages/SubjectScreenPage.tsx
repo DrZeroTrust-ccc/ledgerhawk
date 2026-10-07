@@ -18,7 +18,7 @@ import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
 import { ContextPanel } from '../Context'
 import { AwardBlock, type CaseCtx, Notes, Review, screenCtx } from '../Case'
-import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
+import { Button, Card, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, Loading, SignalChip, Stat, useAsync } from '../ui'
 
 const STATUS_STYLE: Record<string, string> = {
   excluded: 'bg-crimson-50 text-crimson ring-1 ring-crimson/30',
@@ -509,25 +509,13 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
             busyLabel="Re-checking…"
             title="Run the same subjects against the newest SAM and exclusions extracts"
           />
-          <a
-            href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`}
-            className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
-          >
-            Download report (Word)
-          </a>
-          <a
-            href={`/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.xlsx`}
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-          >
-            Workbook (Excel)
-          </a>
-          <a
-            href={`/api/subject-screens/${encodeURIComponent(m.id)}/link-chart.xlsx`}
-            title="Entities and links to import into i2 Analyst's Notebook or Maltego"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-          >
-            Link chart (i2 / Maltego)
-          </a>
+          <DownloadMenu
+            items={[
+              { label: 'Report (Word)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`, hint: 'Findings, next steps, notes and sign-off' },
+              { label: 'Workbook (Excel)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.xlsx`, hint: 'Every subject, related firm, award and source' },
+              { label: 'Link chart (i2 / Maltego)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/link-chart.xlsx`, hint: 'Entities and links to import' },
+            ]}
+          />
         </div>
       </div>
       {running.map((j) => (

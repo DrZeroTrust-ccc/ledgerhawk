@@ -536,6 +536,76 @@ def test_hawk_writes_queue_reasons(sam_ctx):
         appmod.store.hawk_inline = False
 
 
+def test_bulk_tier(sam_ctx):
+    client, run_id, _ = sam_ctx
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any"}).json()["rows"]
+    ueis = [r["uei"] for r in rows][:3]
+    url = f"/api/runs/{run_id}/tiers"
+    assert client.post(url, json={"ueis": ueis, "tier": "2", "reason": " ", "analyst": "Q"}).status_code == 400
+    assert client.post(url, json={"ueis": ueis, "tier": "9", "reason": "x", "analyst": "Q"}).status_code == 400
+    assert client.post(url, json={"ueis": ["NOPE"], "tier": "2", "reason": "x", "analyst": "Q"}).status_code == 404
+    assert client.post(url, json={"ueis": [], "tier": "2", "reason": "x", "analyst": "Q"}).status_code == 400
+    assert client.post(url, json={"ueis": ueis, "tier": "2", "reason": "Same address cluster", "analyst": "Q"}).json() == {"changed": 3}
+    got = {r["uei"]: r for r in client.get(f"/api/runs/{run_id}/vendors", params={"tier": "2", "limit": 500}).json()["rows"]}
+    assert all(got[u]["tier"] == "2" and got[u]["tier_change"]["reason"] == "Same address cluster" for u in ueis)
+    assert sum(a["action"] == "tier" for a in client.get("/api/audit").json()) >= 3
+
+
+def test_import_decisions_from_workbook(sam_ctx, tmp_path):
+    from openpyxl import Workbook
+    client, run_id, _ = sam_ctx
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()["rows"]
+    fresh = [r for r in rows if not r["disposition"] and r["tier"] not in ("1", "explained")][:2]
+    a, b = fresh[0]["uei"], fresh[1]["uei"]
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["LedgerHawk GSA Screen: Vendors of Interest"])  # a title row above the header, as in the real file
+    ws.append([])
+    ws.append(["#", "Tier", "Category", "Vendor UEI", "Vendor Name", "Recommended Next Step", "Routes To", "Analyst Disposition"])
+    ws.append([1, "1 - Elevated", "Reviewed: award records", a, "A Co", "Pull the award file.", "SBA 8(a) review", "Review"])
+    ws.append([2, "Explained by open source", "Venture-funded", b, "B Co", "", "", "Clear - lawful explanation"])
+    ws.append([3, "2 - Moderate", "Not here", "ZZZZZZZZZZZZ", "Gone", "", "", ""])
+    ws.append([4, "1 - Elevated", "", "not-a-uei", "Bad", "", "", ""])
+    ws.append([5, "1 - Elevated", "", a, "A Co", "", "", "Maybe later"])  # unknown disposition: reported
+    f = tmp_path / "voi.xlsx"
+    wb.save(f)
+    url = f"/api/runs/{run_id}/import-decisions"
+
+    def send(apply):
+        with open(f, "rb") as fh:
+            return client.post(url, files={"file": ("voi.xlsx", fh)}, data={"analyst": "Q", "apply": str(apply).lower()})
+    with open(f, "rb") as fh:
+        assert client.post(url, files={"file": ("voi.xlsx", fh)}, data={"analyst": ""}).status_code == 400
+    prev = send(False).json()
+    assert prev["applied"] is False and prev["unmatched"] == ["ZZZZZZZZZZZZ"]
+    assert any("not-a-uei" in p.upper() or "NOT-A-UEI" in p for p in prev["problems"])
+    assert any("Maybe later" in p for p in prev["problems"]) and any("more than once" in p for p in prev["problems"])
+    ch = {c["uei"]: c for c in prev["changes"]}
+    assert ch[a]["tier_to"] == "1" and ch[a]["disposition_to"] == "Review"
+    assert "Routes to: SBA 8(a) review." in ch[a]["detail"] and "Next step: Pull the award file." in ch[a]["detail"]
+    assert ch[b]["tier_to"] == "explained" and ch[b]["disposition_to"] == "Clear – lawful explanation"  # dash normalized
+    # a preview records nothing
+    assert next(r for r in client.get(f"/api/runs/{run_id}/vendors", params={"q": a}).json()["rows"])["tier"] != "1"
+    done = send(True).json()
+    assert done["applied"] is True
+    got = next(r for r in client.get(f"/api/runs/{run_id}/vendors", params={"q": a}).json()["rows"])
+    assert got["tier"] == "1" and got["disposition"]["value"] == "Review"
+    assert got["disposition"]["note"].startswith("Imported from voi.xlsx: Reviewed: award records.")
+    again = send(False).json()  # the same workbook twice changes nothing
+    assert again["changes"] == [] and again["unchanged"] >= 2
+    assert any(x["action"] == "import_decisions" for x in client.get("/api/audit").json())
+
+
+def test_tier_and_disposition_parsing():
+    from ledgerhawk.pipeline.decisions import disposition_of, tier_of
+    assert [tier_of(t) for t in ["1 - Elevated", "Tier 3", "5 - Screen hit, not yet reviewed", "Explained by open source", "", "High"]] == \
+        ["1", "3", "5", "explained", "", ""]
+    known = ["Clear – lawful explanation", "Review"]
+    assert disposition_of("clear - lawful explanation", known) == "Clear – lawful explanation"
+    assert disposition_of("REVIEW ", known) == "Review" and disposition_of("Escalate", known) == ""
+
+
+# Reloads the app module, which repoints the shared client: keep this test last in the file.
 def test_health_answers_while_a_screen_is_being_built(tmp_path):
     # A long screen used to run on the event loop, so Render's 5-second health check timed out and marked the server
     # failed. The screen now runs in a worker thread and /api/healthz answers meanwhile.

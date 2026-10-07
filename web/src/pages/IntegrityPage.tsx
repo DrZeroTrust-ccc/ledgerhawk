@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Breadcrumbs, runLabel, usePlace, useRuns } from '../nav'
 import { Link, useParams } from 'react-router-dom'
 import { api, money, num } from '../api'
-import { Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
+import { Card, DataClassBadge, DownloadMenu, ErrorNote, Loading, useAsync } from '../ui'
 
 const TIER_STYLE: Record<string, string> = {
   A: 'bg-crimson text-white',
@@ -43,12 +43,9 @@ export default function IntegrityPage() {
             <p className="mt-2 text-sm text-amber-700">This run has no exclusions extract, so the lane is empty.</p>
           )}
         </div>
-        <a
-          href={`/api/runs/${id}/exports/small-vendor-screen.xlsx`}
-          className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-        >
-          Download Small-Vendor Screen (XLSX)
-        </a>
+        <span className="ml-auto">
+          <DownloadMenu items={[{ label: 'Small-vendor screen (Excel)', href: `/api/runs/${id}/exports/small-vendor-screen.xlsx`, hint: 'This lane, tiered A to C' }]} />
+        </span>
       </div>
       <ErrorNote error={error} />
       {!data && !error && <Loading />}

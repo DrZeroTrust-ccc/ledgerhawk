@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { FLAG_LABEL, QUEUE_LABEL, type Signal } from './api'
 
 export function Card({ title, action, children, className = '' }: { title?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
@@ -130,6 +130,42 @@ export function Button({
     <button {...rest} className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:cursor-not-allowed ${styles} ${rest.className ?? ''}`}>
       {children}
     </button>
+  )
+}
+
+// One menu for a page's exports, instead of a row of equal-weight download buttons.
+export function DownloadMenu({ items, label = 'Download' }: { items: { label: string; href: string; hint?: string }[]; label?: string }) {
+  const ref = useRef<HTMLDetailsElement>(null)
+  useEffect(() => {
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      const d = ref.current
+      if (!d?.open) return
+      if (e instanceof KeyboardEvent ? e.key === 'Escape' : !d.contains(e.target as Node)) d.open = false
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', close)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', close)
+    }
+  }, [])
+  return (
+    <details ref={ref} className="relative">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-sm font-medium text-navy ring-1 ring-slate-300 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+        {label}
+        <span aria-hidden className="text-xs">▾</span>
+      </summary>
+      <ul className="absolute right-0 z-20 mt-1 w-72 overflow-hidden rounded-md bg-white py-1 text-sm shadow-lg ring-1 ring-slate-200">
+        {items.map((i) => (
+          <li key={i.href}>
+            <a href={i.href} className="block px-3 py-2 text-ink hover:bg-slate-50" onClick={() => ref.current?.removeAttribute('open')}>
+              <span className="font-medium">{i.label}</span>
+              {i.hint && <span className="block text-xs text-slate-500">{i.hint}</span>}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </details>
   )
 }
 
