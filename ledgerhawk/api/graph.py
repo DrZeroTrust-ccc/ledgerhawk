@@ -103,3 +103,67 @@ def _hops(a: str, b: str, edges: list[dict]) -> int | None:
         seen |= frontier
         d += 1
     return None
+
+
+SOURCE = {"person": "SAM entity extract (points of contact)", "suite": "SAM entity extract (physical address)",
+          "building": "SAM entity extract (physical address)", "excluded": "SAM exclusions extract"}
+
+
+def add_screens(g: dict, uei: str, screens: list[dict], by_uei: dict[str, dict]) -> dict:
+    """Layer what subject screens found onto a vendor's graph: related firms, same-name registrations with their
+    USAspending money by fiscal year, and subjects this vendor is related to. Every vendor node gets `money` by
+    fiscal year (the run's FY24/FY25, overlaid by USAspending where a screen looked it up) and `in_run`."""
+    nodes = {n["id"]: n for n in g["nodes"]}
+    edges = g["edges"]
+    center = f"v:{uei}"
+
+    def vnode(u: str, name: str, source: str) -> dict:
+        n = nodes.get(f"v:{u}")
+        if n is None:
+            r = by_uei.get(u, {})
+            n = nodes[f"v:{u}"] = {"id": f"v:{u}", "kind": "vendor", "label": r.get("name") or name, "uei": u,
+                                   "lane": r.get("lane", ""), "queue": r.get("queue", ""), "tot": r.get("tot", 0),
+                                   "excluded": "EXCLUDED" in r.get("exclusion_flags", []), "center": False}
+        n.setdefault("screen_sources", [])
+        if source not in n["screen_sources"]:
+            n["screen_sources"].append(source)
+        return n
+
+    def edge(a: str, b: str, kind: str, label: str = "") -> None:
+        if a != b and not any({e["source"], e["target"]} == {a, b} and e["kind"] == kind for e in edges):
+            edges.append({"source": a, "target": b, "kind": kind, "label": label})
+
+    for sc in screens:
+        src = f"Subject screen \u201c{sc.get('matter') or 'Untitled matter'}\u201d, {sc['created_at'][:10]}"
+        if sc["role"] == "subject":
+            for r in sc.get("related") or []:
+                n = vnode(r["uei"], r["name"], src)
+                n["excluded"] = n["excluded"] or bool(r.get("excluded"))
+                edge(center, n["id"], "screen_related", "; ".join(r.get("via") or []))
+            for e in (sc.get("awards") or {}).get("by_uei", []):
+                n = vnode(e["uei"], e["name"], src)
+                n["usaspending"] = {**n.get("usaspending", {}), **{str(k): v for k, v in e.get("by_fy", {}).items()}}
+                if e["uei"] != uei:
+                    edge(center, n["id"], "same_name_as", "same legal name (subject screen)")
+        else:
+            for su in sc.get("subject_ueis") or []:
+                n = vnode(su, sc.get("subject", su), src)
+                edge(n["id"], center, "screen_related", "; ".join(sc.get("via") or []))
+
+    years: set[str] = set()
+    for n in nodes.values():
+        if n["kind"] != "vendor":
+            n.setdefault("source", SOURCE.get(n["kind"], ""))
+            continue
+        r = by_uei.get(n["uei"])
+        n["in_run"] = r is not None
+        money = {"2024": r.get("fy24") or 0.0, "2025": r.get("fy25") or 0.0} if r else {}
+        money.update(n.pop("usaspending", {}))
+        n["money"] = money
+        years |= set(money)
+        n["source"] = "; ".join((["Run vendor file and SAM entity extract"] if r else [])
+                                + n.pop("screen_sources", [])) + ("; USAspending by fiscal year" if any(
+                                    k not in ("2024", "2025") for k in money) else "")
+    g["nodes"] = list(nodes.values())
+    g["years"] = sorted(years)
+    return g

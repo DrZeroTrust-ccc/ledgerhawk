@@ -31,7 +31,7 @@ from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
-from .graph import build_graph
+from .graph import add_screens, build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -940,7 +940,7 @@ def vendor_graph(run_id: str, uei: str):
     v = data["by_uei"].get(uei)
     if not v:
         raise HTTPException(404, "Vendor not in this run")
-    return build_graph(v, data["by_uei"], data["by_nn"])
+    return add_screens(build_graph(v, data["by_uei"], data["by_nn"]), uei, store.screens_for(uei), data["by_uei"])
 
 
 GAP_KINDS = {"address": "Shares a suite with an excluded party", "person": "Shares a contact with an excluded party",

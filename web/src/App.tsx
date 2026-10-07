@@ -16,6 +16,7 @@ import RunRecordPage from './pages/RunRecordPage'
 import MyCasesPage from './pages/MyCasesPage'
 import VendorsPage from './pages/VendorsPage'
 import VendorLookupPage from './pages/VendorLookupPage'
+import LinkMapPage from './pages/LinkMapPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -148,6 +149,7 @@ export default function App() {
             <Route path="/runs/:id" element={<RunDashboard />} />
             <Route path="/runs/:id/queue" element={<QueuePage />} />
             <Route path="/runs/:id/vendors/:uei" element={<VendorPage />} />
+            <Route path="/runs/:id/vendors/:uei/map" element={<LinkMapPage />} />
             <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
             <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
             <Route path="/runs/:id/record" element={<RunRecordPage />} />
