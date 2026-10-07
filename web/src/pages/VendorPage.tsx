@@ -3,9 +3,9 @@ import { Breadcrumbs, queueHref, runLabel, usePlace, useRuns } from '../nav'
 import { ContextPanel } from '../Context'
 import { AwardBlock, LedgerCard, leadCtx, Notes, Review, WrittenSummary } from '../Case'
 import { useAnalystName } from '../App'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
-import LinkGraph from '../LinkGraph'
+import LinkMap from '../LinkMap'
 import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
 import { Button, Card, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
@@ -165,17 +165,6 @@ function SamProfile({ c }: { c: SamCard }) {
         </ul>
       </dd>
     </dl>
-  )
-}
-
-function GraphCard({ runId, uei }: { runId: string; uei: string }) {
-  const { data, error } = useAsync(() => api.graph(runId, uei), [runId, uei])
-  return (
-    <Card title="Link graph">
-      <ErrorNote error={error} />
-      {!data && !error && <Loading />}
-      {data && <LinkGraph graph={data} runId={runId} uei={uei} />}
-    </Card>
   )
 }
 
@@ -426,6 +415,7 @@ function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
 const TABS = [
   ['money', 'Money'],
   ['screens', 'Subject screens'],
+  ['map', 'Link map'],
   ['people', 'People and links'],
   ['outside', 'Outside context'],
   ['notes', 'Notes and files'],
@@ -503,7 +493,8 @@ export default function VendorPage() {
   const { id = '', uei = '' } = useParams()
   const { data: v, error, reload } = useAsync(() => api.vendor(id, uei), [id, uei])
   const { runs } = useRuns()
-  const [tab, setTab] = useState<Tab>('money')
+  const [sp] = useSearchParams()
+  const [tab, setTab] = useState<Tab>(() => TABS.find(([k]) => k === sp.get('tab'))?.[0] ?? 'money')
   usePlace(v ? `${v.name} (case)` : null)
   if (error) return <ErrorNote error={error} />
   if (!v) return <Loading />
@@ -664,10 +655,14 @@ export default function VendorPage() {
                       </ul>
                     </Card>
                   )}
-                  {v.sam && <GraphCard runId={id} uei={v.uei} />}
                 </>
               )}
               {tab === 'screens' && <ScreenEvidence screens={v.screens} />}
+              {tab === 'map' && (
+                <Card title="Link map">
+                  <LinkMap runId={id} uei={v.uei} onNoted={reload} />
+                </Card>
+              )}
               {tab === 'outside' && <OutsideContextCard runId={id} v={v} />}
               {tab === 'notes' && (
                 <Card title="Notes and files">

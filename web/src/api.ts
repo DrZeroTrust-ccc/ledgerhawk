@@ -100,9 +100,18 @@ export type GraphNode = {
   active_date?: string
   scope?: string
   tot?: number
+  /** Vendors: obligations by fiscal year ("2024": dollars), from the run file and any USAspending lookup. */
+  money?: Record<string, number>
+  in_run?: boolean
+  source?: string
 }
 export type GraphEdge = { source: string; target: string; kind: string; label: string }
-export type Graph = { nodes: GraphNode[]; edges: GraphEdge[]; paths_to_excluded: { to: string; agency: string; hops: number | null }[] }
+export type Graph = {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  paths_to_excluded: { to: string; agency: string; hops: number | null }[]
+  years?: string[]
+}
 
 type AutoKind = { checked_at?: string; fetched_at?: string; as_of?: string; error?: string }
 /** Automatic downloads from SAM.gov: on when the server has a SAM_API_KEY. */

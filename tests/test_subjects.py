@@ -743,6 +743,17 @@ def test_vendor_record_across_runs_and_screens(syn, tmp_path):
         assert mine["run"]["id"] == run_id and mine["runs"] == 1 and mine["screens"] == 1
         assert client.get("/api/vendors", params={"q": uei}).json()["rows"][0]["uei"] == uei
         assert client.get("/api/vendors", params={"q": "x"}).json()["rows"] == []
+        # the link map carries the screens' related firms and money by fiscal year
+        g = client.get(f"/api/runs/{run_id}/vendors/{uei}/graph").json()
+        center = next(n for n in g["nodes"] if n.get("center"))
+        assert center["in_run"] and center["money"] and set(center["money"]) <= set(g["years"]) and "Subject screen" in center["source"]
+        scr_edges = [e for e in g["edges"] if e["kind"] == "screen_related"]
+        for r in scr["related"]:
+            assert any(r["uei"] in (e["source"][2:], e["target"][2:]) for e in scr_edges)
+        assert all(n["source"] for n in g["nodes"])
+        rg = client.get(f"/api/runs/{run_id}/vendors/{rel['uei']}/graph")
+        if rg.status_code == 200:  # a related firm in the run links back to the subject it was screened with
+            assert any(e["kind"] == "screen_related" and e["target"] == f"v:{rel['uei']}" for e in rg.json()["edges"])
         # a rename shows in the record
         client.post(f"/api/subject-screens/{sid}/rename", data={"analyst": "A", "matter": "Renamed"})
         assert client.get(f"/api/vendors/{uei}").json()["screens"][0]["matter"] == "Renamed"

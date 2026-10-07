@@ -539,7 +539,8 @@ class Store:
                         } if aw and ents else None,
                     })
                 else:
-                    item.update({"via": rel["via"], "excluded": rel["excluded"]})
+                    item.update({"via": rel["via"], "excluded": rel["excluded"],
+                                 "subject_ueis": [e["uei"] for e in s["entities"] if e.get("uei")]})
                 out.append(item)
                 break
             if len(out) >= limit:
