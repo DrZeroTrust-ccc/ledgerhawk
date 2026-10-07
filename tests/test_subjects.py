@@ -710,3 +710,41 @@ def test_lookup_many_reports_progress_from_the_start(monkeypatch):
     assert [o["name"] for o in out] == ["A", "B", "C"]
     assert calls[0][:2] == (0, 3) and calls[0][2].startswith("Looking up 3 names")  # the total shows before any name ends
     assert sorted(c[0] for c in calls[1:]) == [1, 2, 3] and all(c[2].startswith("Finished: ") for c in calls[1:])
+
+
+def test_vendor_record_across_runs_and_screens(syn, tmp_path):
+    _, _, p, (vendors, excl, sam) = syn
+    mp, appmod, client, sid = _screen_app(syn, tmp_path, f"{p['excluded_major']}\n{p['ex_affiliate']}")
+    try:
+        appmod.store.awards_post = _fake_usaspending([])
+        assert client.post(f"/api/subject-screens/{sid}/awards", data={"analyst": "A"}).json()["state"] == "done"
+        srcs = {s["kind"]: s["id"] for s in client.get("/api/sources").json()["sources"]}
+        with open(vendors, "rb") as v:
+            run_id = client.post("/api/runs", files={"vendors": v}, data={"synthetic": "true", "analyst": "A", "sam_source": srcs["sam"],
+                                                                           "exclusions_source": srcs["exclusions"]}).json()["id"]
+        uei = p["excluded_major"]
+        where = client.get(f"/api/vendors/{uei.lower()}").json()  # any case
+        assert where["uei"] == uei and [r["id"] for r in where["runs"]] == [run_id] and where["name"]
+        scr = where["screens"][0]
+        assert scr["id"] == sid and scr["role"] == "subject" and scr["matter"] == "M-1" and scr["findings"]
+        assert any(e["uei"] == uei for e in scr["awards"]["by_uei"]) and scr["awards"]["growth"].startswith("FY25 obligations")
+        assert (tmp_path / "data" / "runs" / run_id / "names.json").exists()  # the lookup index is kept beside the run
+        rel = next(r for s in client.get(f"/api/subject-screens/{sid}").json()["subjects"] for r in s["related"])
+        rel_where = client.get(f"/api/vendors/{rel['uei']}").json()
+        assert any(x["role"] == "related" and x["via"] for x in rel_where["screens"])
+        assert client.get("/api/vendors/ZZZZZZZZZZZZ").status_code == 404
+        # the run's vendor page carries the screens' evidence
+        v = client.get(f"/api/runs/{run_id}/vendors/{uei}").json()
+        assert v["screens"][0]["id"] == sid and v["screens"][0]["status"]
+        # search by name or UEI, across runs and screens
+        name = where["name"]
+        hits = client.get("/api/vendors", params={"q": name.split()[0].lower()}).json()["rows"]
+        mine = next(h for h in hits if h["uei"] == uei)
+        assert mine["run"]["id"] == run_id and mine["runs"] == 1 and mine["screens"] == 1
+        assert client.get("/api/vendors", params={"q": uei}).json()["rows"][0]["uei"] == uei
+        assert client.get("/api/vendors", params={"q": "x"}).json()["rows"] == []
+        # a rename shows in the record
+        client.post(f"/api/subject-screens/{sid}/rename", data={"analyst": "A", "matter": "Renamed"})
+        assert client.get(f"/api/vendors/{uei}").json()["screens"][0]["matter"] == "Renamed"
+    finally:
+        mp.undo()

@@ -161,6 +161,50 @@ export type VendorDetail = VendorRow & {
   summary_enabled: boolean
   sam: SamCard | null
   links: LinkedVendor[]
+  screens: VendorScreen[]
+}
+
+// What a subject screen found about one vendor, for the vendor record.
+export type VendorScreen = {
+  id: string
+  matter: string
+  created_at: string
+  ref: number
+  role: 'subject' | 'related'
+  subject: string
+  // as a subject
+  status?: string
+  status_label?: string
+  findings?: string[]
+  next_steps?: string[]
+  related?: { uei: string; name: string; via: string[]; excluded: boolean }[]
+  related_total?: number
+  awards?: {
+    fetched_at: string
+    by_uei: { uei: string; name: string; role: string; by_fy: Record<string, number> }[]
+    growth: string
+    anomalies: string[]
+    actions_summary: string
+    shift: string
+  } | null
+  // as a firm related to another subject
+  via?: string[]
+  excluded?: boolean
+}
+
+export type VendorWhere = {
+  uei: string
+  name: string
+  runs: { id: string; label: string; created_at: string; data_class: string }[]
+  screens: VendorScreen[]
+}
+
+export type VendorSearchRow = {
+  uei: string
+  name: string
+  run: { id: string; label: string; created_at: string } | null
+  runs: number
+  screens: number
 }
 
 export type FunnelStep = {
@@ -668,6 +712,8 @@ export const api = {
     req<CaseSummary>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/summary`, json(body)),
   bulkDisposition: (id: string, body: { ueis: string[]; value: string; note: string; analyst: string }) =>
     req<{ decided: number }>(`/api/runs/${id}/dispositions`, json(body)),
+  vendorWhere: (uei: string) => req<VendorWhere>(`/api/vendors/${encodeURIComponent(uei)}`),
+  searchVendors: (q: string) => req<{ rows: VendorSearchRow[] }>(`/api/vendors?${new URLSearchParams({ q })}`),
   bulkTier: (id: string, body: { ueis: string[]; tier: string; reason: string; analyst: string }) =>
     req<{ changed: number }>(`/api/runs/${id}/tiers`, json(body)),
   importDecisions: (id: string, form: FormData) =>

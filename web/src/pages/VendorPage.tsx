@@ -6,6 +6,7 @@ import { useAnalystName } from '../App'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkGraph from '../LinkGraph'
+import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
 import { Button, Card, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const KIND_LABEL: Record<string, string> = {
@@ -424,6 +425,7 @@ function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
 
 const TABS = [
   ['money', 'Money'],
+  ['screens', 'Subject screens'],
   ['people', 'People and links'],
   ['outside', 'Outside context'],
   ['notes', 'Notes and files'],
@@ -558,10 +560,14 @@ export default function VendorPage() {
             <dd>{v.case.review.state_label}</dd>
           </div>
         </dl>
+        <div className="mt-3">
+          <WhyHere headline={v.hawk || v.headline || ''} flags={v.exclusion_flags} screens={v.screens} />
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-6 lg:col-span-2">
+          <MoneyByYear uei={v.uei} screens={v.screens} />
           <Card title="Summary">
             <WrittenSummary
               runId={id}
@@ -602,6 +608,7 @@ export default function VendorPage() {
                   {label}
                   {k === 'notes' && notes > 0 && <span className="ml-1 text-xs text-slate-400">{notes}</span>}
                   {k === 'people' && v.links.length > 0 && <span className="ml-1 text-xs text-slate-400">{v.links.length}</span>}
+                  {k === 'screens' && v.screens.length > 0 && <span className="ml-1 text-xs text-slate-400">{v.screens.length}</span>}
                 </button>
               ))}
             </div>
@@ -660,6 +667,7 @@ export default function VendorPage() {
                   {v.sam && <GraphCard runId={id} uei={v.uei} />}
                 </>
               )}
+              {tab === 'screens' && <ScreenEvidence screens={v.screens} />}
               {tab === 'outside' && <OutsideContextCard runId={id} v={v} />}
               {tab === 'notes' && (
                 <Card title="Notes and files">

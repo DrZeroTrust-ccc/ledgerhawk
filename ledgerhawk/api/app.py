@@ -719,10 +719,32 @@ def vendor(run_id: str, uei: str):
     out["case"] = store.case(run_id, uei)
     out["ledger"] = _ledger(v, out["case"])
     out["summary_enabled"] = summary_mod.enabled() or store.summary_client is not None
+    out["screens"] = store.screens_for(uei)
     sm = out["case"]["summary"]
     if sm:
         sm["stale"] = sm.get("ledger_fp") != summary_mod.ledger_fingerprint(out["ledger"])
     return out
+
+
+@app.get("/api/vendors")
+def search_vendors(q: str = ""):
+    """Vendors by name or UEI across runs and subject screens, for the Vendors page."""
+    if len(q.strip()) < 2:
+        return {"rows": []}
+    return {"rows": store.search_vendors(q)}
+
+
+@app.get("/api/vendors/{uei}")
+def vendor_where(uei: str):
+    """Where a vendor appears: the runs that hold it (newest first) and the subject screens that found it. The vendor
+    record opens on the newest run; a vendor only on screens shows those."""
+    uei = uei.strip().upper()
+    runs = store.vendor_runs(uei)
+    screens = store.screens_for(uei, limit=20)
+    if not runs and not screens:
+        raise HTTPException(404, "No run or subject screen holds this UEI")
+    name = store.run_names(runs[0]["id"]).get(uei, "") if runs else screens[0]["subject"] if screens[0]["role"] == "subject" else ""
+    return {"uei": uei, "name": name, "runs": runs, "screens": screens}
 
 
 def _ledger(v: dict, case: dict) -> dict:

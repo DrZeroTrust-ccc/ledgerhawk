@@ -123,6 +123,7 @@ class Store:
         for d in self.root.glob("tmp*"):  # a SAM.gov download cut off by a restart; it is fetched again
             shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
+        self._names: dict[str, dict[str, str]] = {}  # run id -> {uei: name}, for vendor lookups across runs
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self.summary_client = None  # and a fake Claude
@@ -464,6 +465,116 @@ class Store:
                                  sam_source=meta.get("sam_source"))
         self.audit(analyst, "restored", uei, new_id, note)
         return new_id
+
+    # ---- one vendor across runs and subject screens (the vendor record) ------------------------------------------
+    def run_names(self, run_id: str) -> dict[str, str]:
+        """UEI -> name for one run, kept in names.json beside it so a lookup across runs never loads every run."""
+        with self._lock:
+            got = self._names.get(run_id)
+        if got is not None:
+            return got
+        d = self.run_dir(run_id)
+        f = d / "names.json"
+        if f.exists():
+            names = json.loads(f.read_text())
+        else:
+            names = {}
+            with open(d / "vendors.jsonl") as fh:
+                for line in fh:
+                    r = json.loads(line)
+                    if r.get("uei"):
+                        names[r["uei"]] = r.get("name", "")
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(names))
+            tmp.replace(f)
+        with self._lock:
+            self._names[run_id] = names
+        return names
+
+    def vendor_runs(self, uei: str) -> list[dict]:
+        """Runs that hold this UEI, newest first."""
+        return [{"id": m["id"], "label": m["label"], "created_at": m["created_at"], "data_class": m["data_class"]}
+                for m in self.list_runs() if uei in self.run_names(m["id"])]
+
+    def _screens(self):
+        """Every subject screen, newest first, as (id, screen dict with its rename applied, awards or None)."""
+        root = self.root / "subjects"
+        for d in sorted((x for x in root.iterdir() if (x / "screen.json").exists()), key=lambda x: x.name, reverse=True):
+            sc = json.loads((d / "screen.json").read_text())
+            self._apply_label(d, sc["meta"])
+            aw = d / "awards.json"
+            yield d.name, sc, (json.loads(aw.read_text()) if aw.exists() else None)
+
+    def screens_for(self, uei: str, limit: int = 5) -> list[dict]:
+        """What subject screens found about this vendor, newest first: as a subject (findings, related firms, award
+        history by fiscal year for it and its same-name registrations) or as a firm related to another subject."""
+        out = []
+        for sid, sc, aw in self._screens():
+            for s in sc["subjects"]:
+                own = any(e["uei"] == uei for e in s["entities"])
+                rel = next((r for r in s["related"] if r["uei"] == uei), None)
+                if not own and not rel:
+                    continue
+                item = {"id": sid, "matter": sc["meta"].get("matter", ""), "created_at": sc["meta"]["created_at"],
+                        "ref": s["ref"], "role": "subject" if own else "related",
+                        "subject": " / ".join((e.get("sam") or {}).get("legal_name") or e["name"] for e in s["entities"])
+                                   or s["input_name"]}
+                if own:
+                    ents = [e for e in (aw or {}).get("entities", [])
+                            if s["ref"] in e.get("refs", []) and e.get("role") in ("subject", "related, same name")]
+                    mine = next((e for e in ents if e["uei"] == uei), None)
+                    item.update({
+                        "status": s["status"], "status_label": s["status_label"], "findings": s["findings"],
+                        "next_steps": s["next_steps"],
+                        "related": [{"uei": r["uei"], "name": r["name"], "via": r["via"], "excluded": r["excluded"]}
+                                    for r in s["related"][:8]],
+                        "related_total": s["related_total"],
+                        "awards": {
+                            "fetched_at": aw["fetched_at"],
+                            "by_uei": [{"uei": e["uei"], "name": e["name"], "role": e["role"], "by_fy": e.get("by_fy", {})}
+                                       for e in ents],
+                            "growth": (mine or {}).get("growth", ""), "anomalies": (mine or {}).get("anomalies", []),
+                            "actions_summary": (mine or {}).get("actions_summary", ""),
+                            "shift": (aw.get("shifts") or {}).get(str(s["ref"]), ""),
+                        } if aw and ents else None,
+                    })
+                else:
+                    item.update({"via": rel["via"], "excluded": rel["excluded"]})
+                out.append(item)
+                break
+            if len(out) >= limit:
+                break
+        return out
+
+    def search_vendors(self, q: str, limit: int = 50) -> list[dict]:
+        """Vendors by name or UEI across runs (newest run first) and subject screens."""
+        words = lambda t: " " + " ".join(re.sub(r"[^A-Z0-9]+", " ", t.upper()).split()) + " "
+        want = words(q).strip() if len(q.strip()) >= 2 else ""
+        uq = q.strip().upper()
+        if not want:
+            return []
+
+        def hit(uei: str, name: str) -> bool:  # a UEI (or its start), or the words in the name, cheap enough for 100k rows
+            return uq == uei or (len(uq) >= 4 and uei.startswith(uq)) or f" {want} " in words(name) or want in name.upper()
+        found: dict[str, dict] = {}
+        for m in self.list_runs():
+            for uei, name in self.run_names(m["id"]).items():
+                if hit(uei, name):
+                    f = found.setdefault(uei, {"uei": uei, "name": name, "run": {"id": m["id"], "label": m["label"],
+                                                                                "created_at": m["created_at"]},
+                                               "runs": 0, "screens": 0})
+                    f["runs"] += 1
+            if len(found) >= limit * 4:
+                break
+        for sid, sc, _ in self._screens():
+            seen = set()
+            for s in sc["subjects"]:
+                for e in s["entities"]:
+                    name = (e.get("sam") or {}).get("legal_name") or e["name"]
+                    if e["uei"] and e["uei"] not in seen and hit(e["uei"], name):
+                        seen.add(e["uei"])
+                        found.setdefault(e["uei"], {"uei": e["uei"], "name": name, "run": None, "runs": 0, "screens": 0})["screens"] += 1
+        return sorted(found.values(), key=lambda f: (f["uei"] != uq, f["name"]))[:limit]
 
     # ---- subject screens (named targets or a client's list) -------------------
     def create_subject_screen(self, subjects: list[dict], *, analyst: str, matter: str = "", client: str = "",

@@ -14,6 +14,8 @@ import SubjectsPage from './pages/SubjectsPage'
 import SubjectScreenPage from './pages/SubjectScreenPage'
 import RunRecordPage from './pages/RunRecordPage'
 import MyCasesPage from './pages/MyCasesPage'
+import VendorsPage from './pages/VendorsPage'
+import VendorLookupPage from './pages/VendorLookupPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -38,6 +40,9 @@ function Nav() {
     <nav className="flex flex-wrap items-center gap-1">
       <NavLink to="/" end className={({ isActive }) => tab({ isActive: isActive || onRun })}>
         Runs
+      </NavLink>
+      <NavLink to="/vendors" className={tab}>
+        Vendors
       </NavLink>
       <NavLink to="/subjects" className={tab}>
         Subject screens
@@ -146,6 +151,8 @@ export default function App() {
             <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
             <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
             <Route path="/runs/:id/record" element={<RunRecordPage />} />
+            <Route path="/vendors" element={<VendorsPage />} />
+            <Route path="/vendors/:uei" element={<VendorLookupPage />} />
             <Route path="/subjects" element={<SubjectsPage />} />
             <Route path="/subjects/:id" element={<SubjectScreenPage />} />
             <Route path="/audit" element={<AuditPage />} />
