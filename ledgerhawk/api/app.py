@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from ..pipeline.decisions import parse_decisions
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
 from ..pipeline.ledger import build_ledger
 from ..pipeline import samgov
@@ -1077,6 +1078,80 @@ def bulk_disposition(run_id: str, body: BulkDispositionIn):
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"decided": len(set(body.ueis))}
+
+
+class BulkTierIn(BaseModel):
+    ueis: list[str]
+    tier: str
+    reason: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/tiers")
+def bulk_tier(run_id: str, body: BulkTierIn):
+    """The same tier and reason for several vendors at once, each change logged separately."""
+    data = _get(store.vendors, run_id)
+    if not body.ueis:
+        raise HTTPException(400, "Select at least one vendor.")
+    if len(body.ueis) > 1000:
+        raise HTTPException(400, "Change at most 1,000 tiers at a time.")
+    missing = [u for u in body.ueis if u not in data["by_uei"]]
+    if missing:
+        raise HTTPException(404, f"Not in this run: {', '.join(missing[:5])}")
+    state = store.analyst_state(run_id)
+    try:
+        for u in dict.fromkeys(body.ueis):
+            prior = _workflow(data["by_uei"][u], state.get(u, {}))["tier"]
+            store.set_tier(u, body.tier, prior, body.reason, body.analyst, run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"changed": len(set(body.ueis))}
+
+
+@app.post("/api/runs/{run_id}/import-decisions")
+async def import_decisions(run_id: str, file: UploadFile = File(...), analyst: str = Form(""), apply: bool = Form(False)):
+    """Tiers and dispositions from a Vendors of Interest workbook. Without `apply` it only previews what would change;
+    a decision that already matches is left alone, so importing the same workbook twice changes nothing."""
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the import is attributed.")
+    data = _get(store.vendors, run_id)
+    name = Path(file.filename or "decisions.xlsx").name
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / name
+        p.write_bytes(await file.read())
+        try:
+            rows, problems = parse_decisions(p, DISPOSITIONS)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    state, disp = store.analyst_state(run_id), store.dispositions(run_id)
+    changes, unmatched, same = [], [], 0
+    for r in rows:
+        v = data["by_uei"].get(r["uei"])
+        if not v:
+            unmatched.append(r["uei"])
+            continue
+        prior = _workflow(v, state.get(r["uei"], {}))["tier"]
+        cur = (disp.get(r["uei"]) or {}).get("value", "")
+        tier = r["tier"] if r["tier"] and r["tier"] != prior else ""
+        value = r["disposition"] if r["disposition"] and r["disposition"] != cur else ""
+        if not tier and not value:
+            same += 1
+            continue
+        changes.append({"uei": r["uei"], "name": v["name"], "tier_from": prior, "tier_to": tier,
+                        "disposition_from": cur, "disposition_to": value, "detail": r["detail"]})
+    out = {"file": name, "rows": len(rows), "changes": changes, "unchanged": same, "unmatched": unmatched,
+           "problems": problems, "applied": False}
+    if apply and changes:
+        for c in changes:
+            text = f"Imported from {name}" + (f": {c['detail']}" if c["detail"] else ".")
+            if c["tier_to"]:
+                store.set_tier(c["uei"], c["tier_to"], c["tier_from"], text, analyst, run_id)
+            if c["disposition_to"]:
+                store.set_disposition(c["uei"], c["disposition_to"], text, analyst, run_id)
+        store.audit(analyst, "import_decisions", None, run_id,
+                    f"Imported {len(changes)} decisions from {name} ({same} already matched, {len(unmatched)} not in this run)")
+        out["applied"] = True
+    return out
 
 
 @app.get("/api/runs/{run_id}/progress")

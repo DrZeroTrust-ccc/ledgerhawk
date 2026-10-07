@@ -6,7 +6,7 @@ import { useAnalystName } from '../App'
 import { Link, useParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkGraph from '../LinkGraph'
-import { Button, Card, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
+import { Button, Card, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const KIND_LABEL: Record<string, string> = {
   direct: 'Excluded under this UEI',
@@ -519,19 +519,13 @@ export default function VendorPage() {
           {v.exclusion_flags.map((f) => (
             <FlagChip key={f} flag={f} />
           ))}
-          <span className="ml-auto flex flex-wrap gap-2">
-            <a
-              href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-            >
-              Case file (Word)
-            </a>
-            <a
-              href={`/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`}
-              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-            >
-              PDF
-            </a>
+          <span className="ml-auto">
+            <DownloadMenu
+              items={[
+                { label: 'Case file (Word)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`, hint: 'Editable, with notes and sign-off' },
+                { label: 'Case file (PDF)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`, hint: 'For sharing as is' },
+              ]}
+            />
           </span>
         </div>
         <p className="mt-1 font-mono text-sm text-slate-500">

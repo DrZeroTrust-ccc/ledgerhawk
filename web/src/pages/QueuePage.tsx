@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Breadcrumbs, usePlace } from '../nav'
-import { api, LANE_LABEL, money, num, REASON_LABEL, type VendorRow } from '../api'
+import { api, LANE_LABEL, money, num, REASON_LABEL, type DecisionImport, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
 import { KEYS, Progress, TriagePane } from '../Triage'
-import { Button, Card, DataClassBadge, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
+import { Button, Card, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
@@ -41,76 +41,208 @@ function TierStrip({ runId, active, onPick, version }: { runId: string; active: 
   )
 }
 
-function BulkAssign({ runId, selected, onDone, dispositions }: { runId: string; selected: string[]; onDone: () => void; dispositions: string[] }) {
+// The selection bar: one decision (tier and/or disposition, one note) for every selected lead; assigning is separate.
+function BulkAssign({
+  runId,
+  selected,
+  onDone,
+  dispositions,
+  tiers,
+}: {
+  runId: string
+  selected: string[]
+  onDone: (notice: string) => void
+  dispositions: string[]
+  tiers: Record<string, string>
+}) {
   const [analyst] = useAnalystName()
   const [who, setWho] = useState('')
+  const [tier, setTier] = useState('')
   const [value, setValue] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const go = async (assignee: string) => {
+  const n = num(selected.length)
+  // The bar closes when the selection clears, so the confirmation is shown by the page, not here.
+  const run = async (work: () => Promise<string>) => {
     setBusy(true)
     setError(null)
     try {
-      await api.assign(runId, { ueis: selected, assignee, analyst })
-      setWho('')
-      onDone()
+      onDone(await work())
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setBusy(false)
     }
   }
+  const decide = () =>
+    run(async () => {
+      if (tier) await api.bulkTier(runId, { ueis: selected, tier, reason: note, analyst })
+      if (value) await api.bulkDisposition(runId, { ueis: selected, value, note, analyst })
+      const what = [tier && tiers[tier], value].filter(Boolean).join(' and ')
+      setTier('')
+      setValue('')
+      setNote('')
+      return `Recorded ${what} for ${n} ${selected.length === 1 ? 'lead' : 'leads'}.`
+    })
+  const assign = (assignee: string) =>
+    run(async () => {
+      await api.assign(runId, { ueis: selected, assignee, analyst })
+      setWho('')
+      return assignee ? `Assigned ${n} to ${assignee}.` : `Unassigned ${n}.`
+    })
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md bg-navy-50 px-3 py-2 text-sm">
-      <span className="font-medium text-navy">{num(selected.length)} selected</span>
-      <input
-        value={who}
-        onChange={(e) => setWho(e.target.value)}
-        placeholder="Assign to (analyst name)"
-        className="w-52 rounded-md border border-slate-300 px-2 py-1 text-sm"
-      />
-      <Button disabled={!who.trim() || busy || !analyst.trim()} onClick={() => go(who)}>
-        Assign
-      </Button>
-      <Button variant="ghost" disabled={busy || !analyst.trim()} onClick={() => go('')}>
-        Unassign
-      </Button>
-      <span className="mx-1 h-5 w-px bg-slate-300" aria-hidden />
-      <select value={value} onChange={(e) => setValue(e.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm">
-        <option value="">Decide all as…</option>
-        {dispositions.map((d) => (
-          <option key={d}>{d}</option>
-        ))}
-      </select>
-      <input
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="One note for all (required)"
-        className="w-64 rounded-md border border-slate-300 px-2 py-1 text-sm"
-      />
-      <Button
-        disabled={!value || !note.trim() || busy || !analyst.trim()}
-        onClick={async () => {
-          setBusy(true)
-          setError(null)
-          try {
-            await api.bulkDisposition(runId, { ueis: selected, value, note, analyst })
-            setValue('')
-            setNote('')
-            onDone()
-          } catch (e) {
-            setError((e as Error).message)
-          } finally {
-            setBusy(false)
-          }
-        }}
-      >
-        Decide {num(selected.length)}
-      </Button>
-      {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+    <div className="space-y-2 rounded-md bg-navy-50 px-3 py-3 text-sm" aria-label="Selected leads">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-navy">Decide {n} selected:</span>
+        <select value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Tier" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">
+          <option value="">Tier unchanged</option>
+          {Object.entries(tiers).map(([k, label]) => (
+            <option key={k} value={k}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select value={value} onChange={(e) => setValue(e.target.value)} aria-label="Disposition" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">
+          <option value="">Disposition unchanged</option>
+          {dispositions.map((d) => (
+            <option key={d}>{d}</option>
+          ))}
+        </select>
+        <input
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="One note for all (required)"
+          aria-label="Note"
+          className="min-w-[16rem] flex-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+        />
+        <Button disabled={(!tier && !value) || !note.trim() || busy || !analyst.trim()} onClick={decide}>
+          Apply to {n}
+        </Button>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-slate-600">Or assign them:</span>
+        <input
+          value={who}
+          onChange={(e) => setWho(e.target.value)}
+          placeholder="Analyst name"
+          aria-label="Assign to"
+          className="w-48 rounded-md border border-slate-300 px-2 py-1 text-sm"
+        />
+        <Button variant="secondary" disabled={!who.trim() || busy || !analyst.trim()} onClick={() => assign(who)}>
+          Assign
+        </Button>
+        <Button variant="ghost" disabled={busy || !analyst.trim()} onClick={() => assign('')}>
+          Unassign
+        </Button>
+        {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+      </div>
       <ErrorNote error={error} />
     </div>
+  )
+}
+
+// Tiers and dispositions from a Vendors of Interest workbook: preview what would change, then apply.
+function ImportDecisions({ runId, onClose, onApplied }: { runId: string; onClose: () => void; onApplied: () => void }) {
+  const [analyst] = useAnalystName()
+  const [file, setFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<DecisionImport | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const send = async (apply: boolean) => {
+    if (!file) return
+    setBusy(true)
+    setError(null)
+    const f = new FormData()
+    f.append('file', file)
+    f.append('analyst', analyst)
+    f.append('apply', String(apply))
+    try {
+      const r = await api.importDecisions(runId, f)
+      setPreview(r)
+      if (r.applied) onApplied()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const tiers = preview?.changes.filter((c) => c.tier_to).length ?? 0
+  const disps = preview?.changes.filter((c) => c.disposition_to).length ?? 0
+  return (
+    <Card title="Import decisions from a workbook" action={<button onClick={onClose} className="text-xs text-navy hover:underline">Close</button>}>
+      <div className="space-y-3 text-sm">
+        <p className="text-slate-600">
+          Reads the Tier and Analyst Disposition columns of a Vendors of Interest workbook, matched by UEI. Category, Routes To and Recommended Next Step become the
+          note. You see what would change before anything is recorded.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            aria-label="Workbook"
+            onChange={(e) => {
+              setFile(e.target.files?.[0] ?? null)
+              setPreview(null)
+            }}
+            className="text-sm"
+          />
+          <Button variant="secondary" disabled={!file || busy || !analyst.trim()} onClick={() => send(false)}>
+            {busy && !preview ? 'Reading…' : 'Preview'}
+          </Button>
+          {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+        </div>
+        <ErrorNote error={error} />
+        {preview && (
+          <div className="space-y-2">
+            <p role="status" className={preview.applied ? 'font-medium text-emerald-800' : 'text-ink'}>
+              {preview.applied ? 'Recorded: ' : 'Would change: '}
+              {num(preview.changes.length)} {preview.changes.length === 1 ? 'vendor' : 'vendors'} ({num(tiers)} tiers, {num(disps)} dispositions) ·{' '}
+              {num(preview.unchanged)} already match · {num(preview.unmatched.length)} not in this run
+            </p>
+            {preview.changes.length > 0 && (
+              <div className="max-h-64 overflow-auto rounded-md ring-1 ring-slate-200">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-left text-slate-500">
+                    <tr>
+                      <th className="px-2 py-1.5 font-medium">Vendor</th>
+                      <th className="px-2 py-1.5 font-medium">Tier</th>
+                      <th className="px-2 py-1.5 font-medium">Disposition</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.changes.map((c) => (
+                      <tr key={c.uei} className="border-t border-slate-100">
+                        <td className="px-2 py-1.5">
+                          {c.name} <span className="font-mono text-slate-400">{c.uei}</span>
+                        </td>
+                        <td className="px-2 py-1.5">{c.tier_to ? `${TIER_SHORT[c.tier_from] ?? 'none'} → ${TIER_SHORT[c.tier_to] ?? c.tier_to}` : 'unchanged'}</td>
+                        <td className="px-2 py-1.5">{c.disposition_to ? `${c.disposition_from || 'none'} → ${c.disposition_to}` : 'unchanged'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {preview.problems.length > 0 && (
+              <details className="text-xs text-slate-600">
+                <summary className="cursor-pointer">{num(preview.problems.length)} rows skipped or merged</summary>
+                <ul className="mt-1 list-disc pl-5">
+                  {preview.problems.map((p) => (
+                    <li key={p}>{p}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {!preview.applied && preview.changes.length > 0 && (
+              <Button disabled={busy} onClick={() => send(true)}>
+                {busy ? 'Recording…' : `Apply ${num(preview.changes.length)} changes`}
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   )
 }
 
@@ -380,15 +512,19 @@ export default function QueuePage() {
       else n.add(uei)
       return n
     })
-  const activeFilters = FILTER_KEYS.filter((k) => sp.get(k)).map((k) => {
-    const v = sp.get(k) ?? ''
+  const filterLabel = (k: string, v: string) => {
     if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : meta.data?.tiers[v] ?? `Tier ${v}`
-    if (k === 'signal') return `Signal ${v}`
+    if (k === 'signal') return `Signal ${meta.data?.signals[v] ? `${v} · ${meta.data.signals[v]}` : v}`
     if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier run' : v
     if (k === 'owner') return `Owner: ${v}`
     if (k === 'assignee') return `Assigned to ${v}`
     return `Search "${v}"`
-  })
+  }
+  const activeFilters = FILTER_KEYS.filter((k) => sp.get(k)).map((k) => filterLabel(k, sp.get(k) ?? ''))
+  // Chips for the filters on top of the tab; in a tier view the tier is the view itself, shown as its tab.
+  const chips = FILTER_KEYS.filter((k) => sp.get(k) && !(tierView && k === 'tier')).map((k) => ({ key: k, label: filterLabel(k, sp.get(k) ?? '') }))
+  const [importing, setImporting] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   const clearFilters = () => {
     const next = new URLSearchParams(sp)
     FILTER_KEYS.forEach((k) => next.delete(k))
@@ -405,13 +541,17 @@ export default function QueuePage() {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold text-navy">Queue</h1>
         {run.data && <DataClassBadge dataClass={run.data.meta.data_class} />}
-        <a
-          href={`/api/runs/${id}/exports/vendors-of-interest.xlsx`}
-          className="ml-auto rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
-          title="Tiered vendors in the layout of the hand-built Vendors of Interest list"
-        >
-          Download Vendors of Interest (XLSX)
-        </a>
+        <span className="ml-auto flex flex-wrap items-center gap-2">
+          <Button variant="secondary" onClick={() => setImporting((o) => !o)} aria-expanded={importing}>
+            Import decisions from workbook
+          </Button>
+          <DownloadMenu
+            items={[
+              { label: 'Vendors of Interest (Excel)', href: `/api/runs/${id}/exports/vendors-of-interest.xlsx`, hint: 'Tiered vendors in the hand-built list layout' },
+              { label: 'Small-vendor screen (Excel)', href: `/api/runs/${id}/exports/small-vendor-screen.xlsx`, hint: 'Integrity lane: vendors under $250K' },
+            ]}
+          />
+        </span>
         {run.data && (
           <Link to={`/runs/${id}`} className="text-sm text-navy hover:underline">
             {run.data.meta.label} · run dashboard
@@ -419,6 +559,13 @@ export default function QueuePage() {
         )}
       </div>
 
+      {importing && (
+        <ImportDecisions
+          runId={id}
+          onClose={() => setImporting(false)}
+          onApplied={() => setVersion((v) => v + 1)}
+        />
+      )}
       {progress.data && <Progress p={progress.data} />}
       <HawkReasons runId={id} onWritten={() => setVersion((n) => n + 1)} />
       <TierStrip runId={id} active={tier} onPick={openTier} version={version} />
@@ -519,16 +666,50 @@ export default function QueuePage() {
         )}
       </div>
 
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2" aria-label="Active filters">
+          <span className="text-xs font-medium text-slate-500">Filtered by</span>
+          {chips.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => set(c.key, '')}
+              aria-label={`Remove filter ${c.label}`}
+              className="inline-flex items-center gap-1.5 rounded-full bg-navy-50 py-1 pl-3 pr-1.5 text-xs font-medium text-navy ring-1 ring-navy/30 hover:bg-navy-100"
+            >
+              {c.label}
+              <span aria-hidden className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-navy text-[10px] text-white">
+                ×
+              </span>
+            </button>
+          ))}
+          {chips.length > 1 && (
+            <button onClick={clearFilters} className="text-xs text-navy underline hover:text-ink">
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
       {selected.size > 0 && (
         <BulkAssign
           runId={id}
           dispositions={meta.data?.dispositions ?? []}
+          tiers={meta.data?.tiers ?? {}}
           selected={[...selected]}
-          onDone={() => {
+          onDone={(msg) => {
             setSelected(new Set())
             setVersion((v) => v + 1)
+            setNotice(msg)
           }}
         />
+      )}
+      {notice && selected.size === 0 && (
+        <p role="status" className="flex items-center justify-between gap-3 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {notice}
+          <button onClick={() => setNotice(null)} className="text-xs underline">
+            Dismiss
+          </button>
+        </p>
       )}
 
       {view === 'board' && data && meta.data ? (

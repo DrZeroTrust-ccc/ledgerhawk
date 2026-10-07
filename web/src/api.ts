@@ -668,6 +668,10 @@ export const api = {
     req<CaseSummary>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/summary`, json(body)),
   bulkDisposition: (id: string, body: { ueis: string[]; value: string; note: string; analyst: string }) =>
     req<{ decided: number }>(`/api/runs/${id}/dispositions`, json(body)),
+  bulkTier: (id: string, body: { ueis: string[]; tier: string; reason: string; analyst: string }) =>
+    req<{ changed: number }>(`/api/runs/${id}/tiers`, json(body)),
+  importDecisions: (id: string, form: FormData) =>
+    req<DecisionImport>(`/api/runs/${id}/import-decisions`, { method: 'POST', body: form }),
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),
   myCases: (analyst: string) => req<{ rows: (VendorRow & { run: RunRef })[] }>(`/api/my-cases?${new URLSearchParams({ analyst })}`),
   record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
@@ -675,6 +679,16 @@ export const api = {
   confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>
     req<{ confirmed: number }>(`/api/runs/${id}/confirm-carried`, json(body)),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
+}
+
+export type DecisionImport = {
+  file: string
+  rows: number
+  changes: { uei: string; name: string; tier_from: string; tier_to: string; disposition_from: string; disposition_to: string; detail: string }[]
+  unchanged: number
+  unmatched: string[]
+  problems: string[]
+  applied: boolean
 }
 
 export function money(x: number): string {
