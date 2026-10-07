@@ -78,7 +78,10 @@ function Person({ p, ctx, context }: { p: PersonResult; ctx: CaseCtx; context: S
             <ul className="divide-y divide-slate-100 text-sm">
               {p.registrations.map((r) => (
                 <li key={r.uei} className="py-1.5">
-                  <span className="font-medium">{r.name}</span> <span className="font-mono text-xs text-slate-500">{r.uei}</span>{' '}
+                  <Link to={`/vendors/${encodeURIComponent(r.uei)}`} className="font-medium text-navy hover:underline">
+                    {r.name}
+                  </Link>{' '}
+                  <span className="font-mono text-xs text-slate-500">{r.uei}</span>{' '}
                   {r.excluded && <FlagChip flag="EXCLUDED" />}
                   <div className="text-xs text-slate-500">
                     {r.roles.join(', ')} · {r.place}
@@ -145,7 +148,13 @@ function Subject({ s, withDollars, ctx, awards, context }: { s: SubjectResult; w
             {s.entities.map((e) => (
               <section key={e.uei || e.name} className="rounded-md border border-slate-100 p-3 text-sm">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{e.sam?.legal_name || e.name}</span>
+                  {e.uei ? (
+                    <Link to={`/vendors/${encodeURIComponent(e.uei)}`} className="font-medium text-navy hover:underline" title="Open the vendor record">
+                      {e.sam?.legal_name || e.name}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{e.sam?.legal_name || e.name}</span>
+                  )}
                   {e.uei && <span className="font-mono text-xs text-slate-500">{e.uei}</span>}
                   {e.exclusion_flags.map((f) => (
                     <FlagChip key={f} flag={f} />
@@ -181,7 +190,10 @@ function Subject({ s, withDollars, ctx, awards, context }: { s: SubjectResult; w
                 <ul className="divide-y divide-slate-100 text-sm">
                   {s.related.map((r) => (
                     <li key={r.uei} className="py-1.5">
-                      <span className="font-medium">{r.name}</span> <span className="font-mono text-xs text-slate-500">{r.uei}</span>{' '}
+                      <Link to={`/vendors/${encodeURIComponent(r.uei)}`} className="font-medium text-navy hover:underline">
+                    {r.name}
+                  </Link>{' '}
+                  <span className="font-mono text-xs text-slate-500">{r.uei}</span>{' '}
                       {r.excluded && <FlagChip flag="EXCLUDED" />} {r.flags.filter((f) => f !== 'EXCLUDED').map((f) => <FlagChip key={f} flag={f} />)}
                       <div className="text-xs text-slate-500">{r.via.join('; ')}</div>
                     </li>
