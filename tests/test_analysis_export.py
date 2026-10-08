@@ -135,3 +135,27 @@ def test_bulk_usaspending_check_settles_excluded_vendors(sam_ctx_export):
     z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/runs/{run_id}/exports/analysis.zip").content))
     rows = {r["uei"]: r for r in csv.DictReader(io.StringIO(z.read("vendors.csv").decode("utf-8-sig")))}
     assert rows[paid]["exclusion_timing"] == "after" and rows[paid]["actions_after_exclusion"] == "2"
+
+
+def test_decisions_round_trip_through_the_workbook(sam_ctx_export, tmp_path):
+    """Decisions exported in the Vendors of Interest workbook import into another import of the same list, with the
+    analyst's note, and a tier that equals the pipeline's default still counts as the analyst's."""
+    client, run_id = sam_ctx_export
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()["rows"]
+    a, b = rows[0], rows[1]
+    client.post(f"/api/runs/{run_id}/vendors/{a['uei']}/disposition", json={"value": "Refer", "note": "Route to OIG.", "analyst": "A"})
+    client.post(f"/api/runs/{run_id}/vendors/{b['uei']}/tier", json={"tier": b["tier_default"] or "3", "reason": "Agreed", "analyst": "A"})
+    wb = client.get(f"/api/runs/{run_id}/exports/vendors-of-interest.xlsx").content
+    vendors, *_ = make_synthetic(tmp_path, n=800, seed=3)
+    with open(vendors, "rb") as v:
+        other = client.post("/api/runs", files={"vendors": v}, data={"synthetic": "true", "analyst": "A"}).json()["id"]
+    url = f"/api/runs/{other}/import-decisions"
+    prev = client.post(url, files={"file": ("voi.xlsx", wb)}, data={"analyst": "A"}).json()
+    assert not [p for p in prev["problems"] if "disposition" in p], prev["problems"]
+    ch = {c["uei"]: c for c in prev["changes"]}
+    assert ch[a["uei"]]["disposition_to"] == "Refer" and ch[a["uei"]]["detail"].startswith("Route to OIG.")
+    assert ch[b["uei"]]["tier_to"] == (b["tier_default"] or "3")  # equal to the default, still recorded
+    client.post(url, files={"file": ("voi.xlsx", wb)}, data={"analyst": "A", "apply": "true"})
+    got = client.get(f"/api/runs/{other}/vendors/{b['uei']}").json()
+    assert got["tier_change"] and got["tier"] == (b["tier_default"] or "3")
+    assert client.get(f"/api/runs/{other}/vendors/{a['uei']}").json()["color"] == "red"  # a referral is red

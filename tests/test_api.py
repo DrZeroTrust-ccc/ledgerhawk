@@ -603,6 +603,12 @@ def test_tier_and_disposition_parsing():
     known = ["Clear – lawful explanation", "Review"]
     assert disposition_of("clear - lawful explanation", known) == "Clear – lawful explanation"
     assert disposition_of("REVIEW ", known) == "Review" and disposition_of("Escalate", known) == ""
+    # LedgerHawk's own workbook writes the note after the disposition
+    from ledgerhawk.pipeline.decisions import note_of
+    cell = "Clear - lawful explanation: Venture-funded growth. (chase cunningham, 2026-10-07)"
+    assert disposition_of(cell, known) == "Clear – lawful explanation"
+    assert note_of(cell, "Clear – lawful explanation") == "Venture-funded growth. (chase cunningham, 2026-10-07)"
+    assert disposition_of("Reviewing: soon", known) == "" and note_of("Review", "Review") == ""
 
 
 # Reloads the app module, which repoints the shared client: keep this test last in the file.

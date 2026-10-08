@@ -1724,8 +1724,11 @@ async def import_decisions(run_id: str, file: UploadFile = File(...), analyst: s
             unmatched.append(r["uei"])
             continue
         prior = _workflow(v, state.get(r["uei"], {}))["tier"]
+        # a tier counts as already decided only when an analyst set it; one that merely equals the pipeline's
+        # default is still recorded, so it reads as an analyst's call
+        set_by_analyst = ((state.get(r["uei"], {}) or {}).get("tier") or {}).get("tier", "")
         cur = (disp.get(r["uei"]) or {}).get("value", "")
-        tier = r["tier"] if r["tier"] and r["tier"] != prior else ""
+        tier = r["tier"] if r["tier"] and r["tier"] != set_by_analyst else ""
         value = r["disposition"] if r["disposition"] and r["disposition"] != cur else ""
         if not tier and not value:
             same += 1

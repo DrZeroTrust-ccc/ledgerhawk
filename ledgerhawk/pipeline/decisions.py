@@ -36,11 +36,26 @@ def tier_of(cell) -> str:
     return "explained" if "explain" in t.lower() else ""
 
 
+def _norm(s) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[‐-―-]", "-", str(s or ""))).strip().casefold()
+
+
 def disposition_of(cell, known: list[str]) -> str:
-    """Match a disposition however the dash was typed ('Clear - lawful explanation')."""
-    norm = lambda s: re.sub(r"\s+", " ", re.sub(r"[‐-―-]", "-", str(s or ""))).strip().casefold()
-    want = norm(cell)
-    return next((d for d in known if norm(d) == want), "") if want else ""
+    """Match a disposition however the dash was typed ('Clear - lawful explanation'), alone or, as LedgerHawk's own
+    workbook writes it, followed by its note ('Review: Routes to ... (analyst, date)')."""
+    want = _norm(cell)
+    if not want:
+        return ""
+    exact = next((d for d in known if _norm(d) == want), "")
+    return exact or next((d for d in sorted(known, key=len, reverse=True) if want.startswith(_norm(d) + ":")), "")
+
+
+def note_of(cell, disposition: str) -> str:
+    """The note written after a disposition in LedgerHawk's workbook, if any."""
+    text = str(cell or "").strip()
+    if not disposition or ":" not in text or not _norm(text).startswith(_norm(disposition) + ":"):
+        return ""
+    return text.split(":", 1)[1].strip()
 
 
 def parse_decisions(path: str | Path, dispositions: list[str]) -> tuple[list[dict], list[str]]:
@@ -77,8 +92,9 @@ def parse_decisions(path: str | Path, dispositions: list[str]) -> tuple[list[dic
         bits = [f"{get('category')}." if get("category") else "",
                 f"Routes to: {get('routes')}." if get("routes") else "",
                 f"Next step: {get('next')}" if get("next") else ""]
-        row = {"uei": uei, "name": get("name"), "tier": tier, "disposition": disp,
-               "detail": " ".join(b for b in bits if b).strip()}
+        # the analyst's own note, when the workbook carries it, says it best
+        detail = note_of(disp_cell, disp) or " ".join(b for b in bits if b).strip()
+        row = {"uei": uei, "name": get("name"), "tier": tier, "disposition": disp, "detail": detail}
         if uei in seen:  # listed twice: a later non-empty value wins, field by field
             problems.append(f"Row {i} ({uei}): listed more than once; merged with the earlier row")
             seen[uei].update({k: v for k, v in row.items() if v})
