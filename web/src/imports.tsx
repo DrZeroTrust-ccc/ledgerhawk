@@ -104,6 +104,7 @@ export function ExclusionCheck({ runId, onDone }: { runId: string; onDone?: () =
             setErr(null)
             const f = new FormData()
             f.append('analyst', analyst)
+            if (!left) f.append('again', 'true') // everything has a lookup: refresh them all
             try {
               setJob((await api.startExclusionCheck(runId, f)).job)
             } catch (e) {

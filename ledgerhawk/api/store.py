@@ -20,6 +20,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1564,21 +1565,31 @@ class Store:
                                   "actions_error": e.get("actions_error", "")}
         return out
 
-    def check_excluded(self, run_id: str, analyst: str, progress) -> str:
-        """Look up every vendor on the exclusions list in USAspending (contracts, actions after the exclusion date,
-        yearly totals), biggest first, keeping each result in its case. A vendor USAspending can't answer for is
-        skipped and left as "not yet checked"."""
-        rows = sorted((r for r in self.vendors(run_id)["rows"] if "EXCLUDED" in (r.get("exclusion_flags") or [])),
+    def check_excluded(self, run_id: str, analyst: str, progress, again: bool = False, pause: float = 20.0) -> str:
+        """Look up vendors on the exclusions list in USAspending (contracts, actions after the exclusion date, yearly
+        totals), biggest first, keeping each result in its case. Vendors already looked up are skipped unless
+        `again`. One USAspending doesn't answer for is tried once more after a pause (it limits bursts), then left
+        as "not yet checked"."""
+        done = set() if again else set(self.case_awards_index(run_id))
+        rows = sorted((r for r in self.vendors(run_id)["rows"]
+                       if "EXCLUDED" in (r.get("exclusion_flags") or []) and r["uei"] not in done),
                       key=lambda r: -float(r.get("tot") or 0))
         ok = failed = 0
         for i, r in enumerate(rows, 1):
             progress(f"USAspending {i} of {len(rows)}: {r['name']}")
-            try:
-                self.fetch_case_awards(run_id, r["uei"], analyst)
-                ok += 1
-            except ConnectionError:
-                failed += 1
-        self.audit(analyst, "exclusion_check", None, run_id, f"USAspending check of {len(rows)} excluded vendors: "
+            for attempt in (1, 2):
+                try:
+                    self.fetch_case_awards(run_id, r["uei"], analyst)
+                    ok += 1
+                    break
+                except ConnectionError:
+                    if attempt == 2:
+                        failed += 1
+                    else:
+                        progress(f"USAspending {i} of {len(rows)}: {r['name']} (no answer; trying again shortly)")
+                        time.sleep(pause)
+        self.audit(analyst, "exclusion_check", None, run_id, f"USAspending check of {len(rows)} excluded vendors"
+                   + (" not yet looked up" if not again else "") + ": "
                    f"{ok} looked up" + (f", {failed} didn't answer" if failed else ""))
         return run_id
 

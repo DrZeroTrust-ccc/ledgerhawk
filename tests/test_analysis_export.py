@@ -159,3 +159,40 @@ def test_decisions_round_trip_through_the_workbook(sam_ctx_export, tmp_path):
     got = client.get(f"/api/runs/{other}/vendors/{b['uei']}").json()
     assert got["tier_change"] and got["tier"] == (b["tier_default"] or "3")
     assert client.get(f"/api/runs/{other}/vendors/{a['uei']}").json()["color"] == "red"  # a referral is red
+
+
+def test_exclusion_check_retries_and_skips_vendors_already_looked_up(sam_ctx_export):
+    import json as _json
+
+    import ledgerhawk.api.app as appmod
+    client, run_id = sam_ctx_export
+    st = appmod.store
+    excluded = [r["uei"] for r in st.vendors(run_id)["rows"] if "EXCLUDED" in r["exclusion_flags"]]
+    for u in excluded:  # start from nothing looked up
+        f = st._case_dir(run_id, u) / "awards.json"
+        if f.exists():
+            f.unlink()
+    calls, flaky = [], {excluded[0]: 1, excluded[1]: 9}  # answers on the 2nd try; never answers
+
+    def fake(rid, uei, analyst):
+        calls.append(uei)
+        if flaky.get(uei, 0) > 0:
+            flaky[uei] -= 1
+            raise ConnectionError("USAspending did not answer")
+        d = st._case_dir(rid, uei)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "awards.json").write_text(_json.dumps({"fetched_at": "2026-10-08", "entities": [{"actions_flagged": 0}]}))
+    orig, st.fetch_case_awards = st.fetch_case_awards, fake
+    try:
+        st.check_excluded(run_id, "A", lambda s: None, pause=0)
+        assert calls.count(excluded[0]) == 2 and calls.count(excluded[1]) == 2  # one retry each
+        assert set(st.case_awards_index(run_id)) == set(excluded) - {excluded[1]}
+        calls.clear()
+        st.check_excluded(run_id, "A", lambda s: None, pause=0)  # only what's still missing
+        assert set(calls) == {excluded[1]}
+        calls.clear()
+        flaky[excluded[1]] = 0
+        st.check_excluded(run_id, "A", lambda s: None, again=True, pause=0)
+        assert set(calls) == set(excluded)
+    finally:
+        st.fetch_case_awards = orig
