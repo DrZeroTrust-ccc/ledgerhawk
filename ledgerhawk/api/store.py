@@ -161,6 +161,9 @@ class Store:
                     run_id TEXT NOT NULL, uei TEXT NOT NULL, assignee TEXT NOT NULL, analyst TEXT NOT NULL,
                     at TEXT NOT NULL, PRIMARY KEY (run_id, uei));
                 CREATE TABLE IF NOT EXISTS migration (name TEXT PRIMARY KEY, at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS person (
+                    email TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, added_by TEXT NOT NULL,
+                    at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS audit_run ON audit (run_id);
                 """
             )
@@ -1420,6 +1423,43 @@ class Store:
             rows = db.execute(f"SELECT at, analyst, action, uei, run_id, detail FROM audit WHERE run_id IN ({self._in(own)}) "
                               "ORDER BY id DESC LIMIT ?", own + [limit]).fetchall()
         return [dict(zip(["at", "analyst", "action", "uei", "run_id", "detail"], r)) for r in rows]
+
+    # ---- people and roles (used when sign-in is on) ----------------------------------------
+    def people(self) -> list[dict]:
+        with self._db() as db:
+            rows = db.execute("SELECT email, name, role, added_by, at FROM person ORDER BY name COLLATE NOCASE").fetchall()
+        return [dict(zip(("email", "name", "role", "added_by", "at"), r)) for r in rows]
+
+    def person(self, email: str) -> dict | None:
+        return next((p for p in self.people() if p["email"] == email.strip().lower()), None)
+
+    def set_person(self, email: str, name: str, role: str, by: str) -> dict:
+        email, name = email.strip().lower(), " ".join(name.split())
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+            raise ValueError("Enter a full email address.")
+        if not name:
+            raise ValueError("Enter the person's name as it should appear on their work.")
+        before = self.person(email)
+        with self._db() as db:
+            db.execute("INSERT INTO person (email, name, role, added_by, at) VALUES (?,?,?,?,?) "
+                       "ON CONFLICT(email) DO UPDATE SET name = excluded.name, role = excluded.role, "
+                       "added_by = excluded.added_by, at = excluded.at", (email, name, role, by, _now()))
+        if not before:
+            what = f"Added {name} <{email}> as {role}"
+        else:
+            diffs = [f"role {before['role']} → {role}" if before["role"] != role else "",
+                     f"name {before['name']} → {name}" if before["name"] != name else ""]
+            what = f"Changed {name} <{email}>: " + ", ".join(d for d in diffs if d) if any(diffs) else f"Saved {name} <{email}>"
+        self.audit(by, "person", None, None, what)
+        return self.person(email)
+
+    def remove_person(self, email: str, by: str) -> None:
+        p = self.person(email)
+        if not p:
+            raise KeyError(email)
+        with self._db() as db:
+            db.execute("DELETE FROM person WHERE email = ?", (p["email"],))
+        self.audit(by, "person", None, None, f"Removed {p['name']} <{p['email']}> ({p['role']})")
 
     def audit(self, analyst: str, action: str, uei: str | None, run_id: str | None, detail: str) -> None:
         with self._db() as db:
