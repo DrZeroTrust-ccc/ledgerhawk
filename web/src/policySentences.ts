@@ -48,6 +48,10 @@ export const SENTENCES: SentenceGroup[] = [
         text: 'Two or more signals put a vendor in the priority queue. One signal is enough on its own (the strong queue) for any re-formed successor, a sole proprietor with a total of {strong_s4_total}, a spike with FY25 of at least {strong_s2_fy25}, or hypergrowth of {strong_s3_ratio} FY24 with FY25 of at least {strong_s3_fy25}.',
         note: 'Anything else with a signal goes on the watch list.',
       },
+      {
+        text: '{split_cert_alone} a certified firm split across UEIs on its own, in the relationship queue, when the family’s total across its registrations is at least {split_cert_alone_min}.',
+        note: 'Off by default: a split usually needs a second signal. This is the pattern behind Addon Services.',
+      },
     ],
   },
   {

@@ -26,6 +26,7 @@ const LIST_NOUN: Record<string, [string, string]> = {
 }
 
 function chipText(key: string, v: unknown): string {
+  if (typeof v === 'boolean') return key === 'split_cert_alone' ? (v ? 'Queue' : 'Don’t queue') : v ? 'On' : 'Off'
   if (Array.isArray(v)) {
     const [pre, noun] = LIST_NOUN[key] ?? ['', 'entries']
     return pre && pre !== 'these' ? `${pre} (${v.length} ${noun})` : `${pre ? pre + ' ' : ''}${v.length} ${noun}`
@@ -399,7 +400,10 @@ export default function PolicyEditorPage() {
                             <button
                               key={i}
                               type="button"
-                              onClick={() => setOpen(open === x.key ? '' : x.key)}
+                              onClick={() =>
+                                // an on/off rule flips in place; anything else opens its editor
+                                typeof rules[x.key] === 'boolean' ? setRules({ ...rules, [x.key]: !rules[x.key] }) : setOpen(open === x.key ? '' : x.key)
+                              }
                               aria-expanded={open === x.key}
                               className={`mx-0.5 rounded-md border-2 px-1.5 py-0.5 font-semibold ${
                                 changed.includes(x.key)

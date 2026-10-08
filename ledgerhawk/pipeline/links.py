@@ -7,6 +7,7 @@ common control.
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from itertools import combinations
 
@@ -83,9 +84,9 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
 
     sig = {i: list(s) for i, s in zip(df.index, df["signals"])}
 
-    def add(i, sid, detail):
+    def add(i, sid, detail, **extra):
         if pool[i] and not any(s["id"] == sid and s["detail"] == detail for s in sig[i]):
-            sig[i].append({"id": sid, "label": SIGNAL_LABELS[sid], "detail": detail})
+            sig[i].append({"id": sid, "label": SIGNAL_LABELS[sid], "detail": detail, **extra})
 
     # R_young
     for i, c in zip(df.index, cards):
@@ -116,7 +117,7 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
             detail = f"{len(g)} UEIs ({ueis}) share {', '.join(shared[:2])}; family total {money(family_tot)}"
             if certified and family_tot >= rules.r_split_cert_min:
                 certs = sorted({c for j in g.index for c in df.at[j, "sam"]["certs"]})
-                add(i, "R_split_cert", detail + f"; certified {', '.join(certs)}")
+                add(i, "R_split_cert", detail + f"; certified {', '.join(certs)}", family_total=family_tot)
             else:
                 add(i, "R_split", detail)
 
@@ -308,8 +309,19 @@ def _exclusion_links(df: pd.DataFrame, sam: SamSlice, ex: ExclusionsExtract, rul
     return df
 
 
-def relationship_bucket(df: pd.DataFrame) -> pd.Series:
-    """Two or more independent signals, at least one from SAM data, and not already priority."""
+def _family_total(s: dict) -> float:
+    """A split signal's family total: stored on new imports, read back from the evidence text on older ones."""
+    if "family_total" in s:
+        return float(s["family_total"])
+    m = re.search(r"family total \$([\d.]+)([KMBT]?)", s.get("detail", ""))
+    return float(m.group(1)) * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[m.group(2)] if m else 0.0
+
+
+def relationship_bucket(df: pd.DataFrame, rules: RuleSet | None = None) -> pd.Series:
+    """Two or more independent signals, at least one from SAM data, and not already priority. A pack can also let a
+    certified firm split across UEIs stand on its own (rules.split_cert_alone)."""
+    alone = rules is not None and rules.split_cert_alone
+
     def b(r):
         if r.lane != OUTLIER or r.bucket == "priority":
             return r.bucket
@@ -319,6 +331,9 @@ def relationship_bucket(df: pd.DataFrame) -> pd.Series:
         if dampened:
             core -= {"S2", "S3"}
         if len(core) >= 2 and core & SAM_SIGNALS:
+            return "relationship"
+        if alone and r.bucket != "strong" and any(
+                s["id"] == "R_split_cert" and _family_total(s) >= rules.split_cert_alone_min for s in r.signals):
             return "relationship"
         if not r.bucket and ids & SAM_SIGNALS:
             return "watch"

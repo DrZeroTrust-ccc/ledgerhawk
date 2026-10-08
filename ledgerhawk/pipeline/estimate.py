@@ -22,6 +22,7 @@ ESTIMATED = {
     "s1_min", "s1_fade_ratio", "s2_fy25_min", "s3_fy24_min", "s3_fy25_min", "s3_ratio", "s4_total", "s4_total_weapons",
     "s4_psc_prefixes", "s5_total", "s5_naics2", "s5_psc_prefixes", "s6_deob", "s6_share",
     "strong_s2_fy25", "strong_s3_ratio", "strong_s3_fy25", "strong_s4_total", "version",
+    "split_cert_alone", "split_cert_alone_min",  # works on the import's stored SAM signals
     "sam_stale_days", "exclusions_stale_days",  # warnings when starting an import; no effect on the queue
 }
 QUEUED = ("priority", "relationship", "strong", "exclusion", "integrity")
@@ -39,7 +40,7 @@ def screen(base: pd.DataFrame, baseline: dict[str, dict], rules: RuleSet, restor
     df = stage1(df, rules, restore)
     df = stage2(df, rules)
     df["signals"] = [s + [x for x in o.get("signals", []) if x["id"] in SAM_SIGNALS] for s, o in zip(df["signals"], old)]
-    df["bucket"] = relationship_bucket(df)
+    df["bucket"] = relationship_bucket(df, rules)
 
     def queue(r):
         if r.lane == INTEGRITY:

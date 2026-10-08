@@ -9,7 +9,16 @@ import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
 import { usePolicyRights } from './PoliciesPage'
 
 // Settings that only decide which queue a flagged vendor lands in (mirrors TRIAGE_KEYS in api/policies.py).
-const TRIAGE = new Set(['strong_s2_fy25', 'strong_s3_ratio', 'strong_s3_fy25', 'strong_s4_total', 'sam_stale_days', 'exclusions_stale_days'])
+const TRIAGE = new Set([
+  'strong_s2_fy25',
+  'strong_s3_ratio',
+  'strong_s3_fy25',
+  'strong_s4_total',
+  'split_cert_alone',
+  'split_cert_alone_min',
+  'sam_stale_days',
+  'exclusions_stale_days',
+])
 
 type Tab = 'out' | 'in' | 'tier' | 'conf'
 
