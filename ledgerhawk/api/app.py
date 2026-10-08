@@ -1101,9 +1101,9 @@ def _workflow(v: dict, st: dict) -> dict:
     }
 
 
-def _slim(v: dict, disp: dict, state: dict | None = None, hawk: dict | None = None) -> dict:
+def _slim(v: dict, disp: dict, state: dict | None = None, hawk: dict | None = None, awards: dict | None = None) -> dict:
     wf = _workflow(v, (state or {}).get(v["uei"], {}))
-    c, why = vendor_color(v, wf, disp.get(v["uei"]))
+    c, why = vendor_color(v, wf, disp.get(v["uei"]), (awards or {}).get(v["uei"]))
     return {
         "hawk": ((hawk or {}).get(v["uei"]) or {}).get("text", ""),
         **wf, "color": c, "color_why": why,
@@ -1155,10 +1155,11 @@ def list_vendors(
             rows = [r for r in rows if not wf.get(r["uei"], {}).get("assignee")]
         elif assignee:
             rows = [r for r in rows if wf.get(r["uei"], {}).get("assignee") == assignee]
+    awards = store.case_awards_index(run_id)
     if color:  # red, yellow, green, or several: "red,yellow"
         want = set(color.split(","))
         rows = [r for r in rows
-                if vendor_color(r, _workflow(r, state.get(r["uei"], {})), disp.get(r["uei"]))[0] in want]
+                if vendor_color(r, _workflow(r, state.get(r["uei"], {})), disp.get(r["uei"]), awards.get(r["uei"]))[0] in want]
     if queue == "any":
         rows = [r for r in rows if r["queue"]]
     elif queue:
@@ -1193,7 +1194,7 @@ def list_vendors(
     return {
         "total": total,
         "dollars": dollars,
-        "rows": [_slim(r, disp, state, hawk) for r in rows[offset: offset + limit]],
+        "rows": [_slim(r, disp, state, hawk, awards) for r in rows[offset: offset + limit]],
     }
 
 
@@ -1224,7 +1225,7 @@ def vendor(run_id: str, uei: str):
     out["hawk"] = (store.hawk_reasons(run_id)["reasons"].get(uei) or {}).get("text", "")
     out["disposition"] = store.dispositions(run_id).get(uei)
     out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
-    out["color"], out["color_why"] = vendor_color(v, out, out["disposition"])
+    out["color"], out["color_why"] = vendor_color(v, out, out["disposition"], store.case_awards_index(run_id).get(uei))
     out["history"] = _history(run_id, uei)
     out["case"] = store.case(run_id, uei)
     out["ledger"] = _ledger(v, out["case"])
@@ -1426,6 +1427,29 @@ def export_voi(run_id: str):
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/runs/{run_id}/exclusion-check")
+def exclusion_check_status(run_id: str):
+    """How many vendors on the exclusions list this import has, and how many have a USAspending lookup."""
+    rows = [r for r in _get(store.vendors, run_id)["rows"] if "EXCLUDED" in (r.get("exclusion_flags") or [])]
+    awards = store.case_awards_index(run_id)
+    return {"excluded": len(rows), "checked": sum(1 for r in rows if r["uei"] in awards),
+            "paid_after": sum(1 for r in rows if awards.get(r["uei"], {}).get("actions_flagged")
+                              or awards.get(r["uei"], {}).get("after_exclusion"))}
+
+
+@app.post("/api/runs/{run_id}/exclusion-check")
+def start_exclusion_check(run_id: str, analyst: str = Form("")):
+    """Look up every excluded vendor in USAspending in the background, so the colors know who was paid after
+    exclusion. Takes a few seconds per vendor."""
+    analyst = who(analyst)
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the check is attributed.")
+    meta = _get(store.run_meta, run_id)
+    job = store.start_import("check", f"Excluded vendors in {meta['label']}", analyst,
+                             lambda progress: store.check_excluded(run_id, analyst, progress))
+    return {"job": job}
+
+
 @app.get("/api/runs/{run_id}/exports/analysis.zip")
 def export_analysis(run_id: str, colors: str = "red,yellow"):
     """Red and yellow vendors (or the colors asked for) as flat tables for analysis: vendors.csv with one column per
@@ -1436,7 +1460,9 @@ def export_analysis(run_id: str, colors: str = "red,yellow"):
     data = _get(store.vendors, run_id)
     disp = store.dispositions(run_id)
     state = store.analyst_state(run_id)
-    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])} for r in data["rows"]]
+    awards = store.case_awards_index(run_id)
+    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"]), "awards": awards.get(r["uei"])}
+             for r in data["rows"]]
     body, counts = build_analysis_zip(items, store.summary(run_id), want)
     u = CURRENT_USER.get()
     store.audit(u.name if u else "", "export", None, run_id,

@@ -23,7 +23,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from ..pipeline.integrity import INTEGRITY_MEANING
+from ..pipeline.integrity import FY_START, INTEGRITY_MEANING, _parse_date
 from ..pipeline.rules import policy_label
 from ..pipeline.stages import SIGNAL_LABELS
 from ..pipeline.tiering import TIERS
@@ -33,35 +33,59 @@ COLORS = ("red", "yellow", "green")
 SIGNAL_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "R_young", "R_split", "R_split_cert", "L_successor", "L_affil_cert"]
 
 
-def color(v: dict, wf: dict, disposition: dict | None) -> tuple[str, list[str]]:
-    """A vendor's color and the reasons for it; ("", []) when it is none of the three."""
+def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
+    """For a vendor on the exclusions list: ("after", why) when money moved after the exclusion date, by fiscal year
+    in the vendor file or by contract actions in USAspending; ("cleared", why) when USAspending was checked and shows
+    nothing after it; ("unchecked", why) otherwise. ("", "") for a vendor that isn't excluded."""
+    if (v.get("integrity") or {}).get("tier") == "A":  # the small-vendor lane already found money after exclusion
+        return "after", INTEGRITY_MEANING["A"]
+    if "EXCLUDED" not in (v.get("exclusion_flags") or []):
+        return "", ""
+    direct = [h for h in v.get("exclusion") or [] if h.get("kind") == "direct" and h.get("scope") != "Facility-only"]
+    since = min((d for d in (_parse_date(h.get("active_date", "")) for h in direct) if d), default=None)
+    if since:
+        paid = [fy for fy in ("fy24", "fy25") if FY_START[fy] >= since and float(v.get(fy) or 0) > 0]
+        if paid:
+            return "after", f"Excluded {since:%b %d, %Y}; obligations in {' and '.join(x.upper() for x in paid)}, which began after it"
+    if awards:
+        n, dollars, new = awards.get("actions_flagged", 0), awards.get("actions_dollars", 0), awards.get("after_exclusion", 0)
+        if n or new:
+            bits = ([f"{n} contract action{'s' if n != 1 else ''} (${dollars / 1e6:.1f}M)" if n else ""]
+                    + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""])
+            return "after", "USAspending: " + " and ".join(b for b in bits if b) + " after the exclusion date"
+        return "cleared", f"Excluded{f' {since:%b %d, %Y}' if since else ''}; USAspending shows no contract actions after it"
+    return "unchecked", "On the SAM exclusions list; payments after the exclusion date not yet checked"
+
+
+def color(v: dict, wf: dict, disposition: dict | None, awards: dict | None = None) -> tuple[str, list[str]]:
+    """A vendor's color and the reasons for it; ("", []) when it is none of the three. `awards` is the vendor's
+    USAspending lookup summary, when one was run (it settles whether an excluded vendor was paid after exclusion)."""
     d = (disposition or {}).get("value", "")
     tier = str(wf.get("tier") or "")
-    flags = set(v.get("exclusion_flags") or [])
+    by_analyst = bool(wf.get("tier_change"))  # a tier an analyst set; the pipeline's default tier doesn't count
     integ = v.get("integrity") or {}
     if d.startswith("Clear") or tier == "explained":
         return "green", [f"Analyst decision: {d}" if d else "Explained by open source"]
     red = []
     if v.get("queue") == "priority":
         red.append("Two or more independent signals")
-    if "EXCLUDED" in flags:
-        red.append("On the SAM exclusions list")
-    if integ.get("tier") == "A":
-        red.append(INTEGRITY_MEANING["A"])
-    if tier == "1":
+    timing, why_excl = exclusion_timing(v, awards)
+    if timing in ("after", "unchecked"):
+        red.append(why_excl)
+    if tier == "1" and by_analyst:
         red.append("Analyst set Tier 1")
     if d == "Refer":
         red.append("Analyst decided to refer")
     if red:
         return "red", red
-    yellow = []
+    yellow = [why_excl] if timing == "cleared" else []
     q = v.get("queue")
     if q in ("strong", "relationship", "exclusion"):
         yellow.append({"strong": "One strong signal", "relationship": "Related firms in SAM",
                        "exclusion": "Tied to an excluded party"}[q])
     if integ.get("tier") in ("B", "C"):
         yellow.append(INTEGRITY_MEANING[integ["tier"]])
-    if tier in ("2", "3"):
+    if tier in ("2", "3") and by_analyst:
         yellow.append(f"Analyst set Tier {tier}")
     if yellow:
         return "yellow", yellow
@@ -80,8 +104,8 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
     """items: [{"v", "wf", "disposition"}]. Returns (vendors, evidence, links) for the vendors in `colors`."""
     vendors, evidence, links = [], [], []
     for it in items:
-        v, wf, disp = it["v"], it["wf"], it["disposition"]
-        c, why = color(v, wf, disp)
+        v, wf, disp, aw = it["v"], it["wf"], it["disposition"], it.get("awards")
+        c, why = color(v, wf, disp, aw)
         if c not in colors:
             continue
         sam = v.get("sam") or {}
@@ -103,6 +127,10 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "exclusion_flags": "; ".join(v.get("exclusion_flags") or []),
             "integrity_tier": integ.get("tier", ""),
             "paid_after_exclusion": round(float(integ.get("after_exclusion") or 0), 2) if integ else "",
+            "exclusion_timing": exclusion_timing(v, aw)[0],
+            "usaspending_checked": (aw or {}).get("fetched_at", "")[:10] if aw else "",
+            "actions_after_exclusion": (aw or {}).get("actions_flagged", "") if aw else "",
+            "action_dollars_after_exclusion": round(float((aw or {}).get("actions_dollars") or 0), 2) if aw else "",
             "linked_firms": len(v.get("links") or []), "neighbors": len(v.get("neighbors") or []),
             "family_total": _family_total(v) or "",
             "ownership": "; ".join(sam.get("owner") or []), "certifications": "; ".join(sam.get("certs") or []),
@@ -158,11 +186,14 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "",
         "Colors",
         "------",
-        "RED: two or more independent signals (priority queue); a direct match on the SAM exclusions list; an excluded",
-        "  vendor with obligations in a fiscal year that began after its exclusion date; an analyst's Tier 1; or a",
+        "RED: two or more independent signals (priority queue); a vendor on the SAM exclusions list that was paid after",
+        "  its exclusion date (obligations in a fiscal year that began after it, or contract actions after it in",
+        "  USAspending), or whose payments after the date have not been checked yet; an analyst's Tier 1; or a",
         "  decision to refer.",
-        "YELLOW: one strong signal; related firms in SAM (shared contacts, suites, a family of registrations); a tie to",
-        "  an excluded party; a small vendor tied to an excluded party or sharing its suite; an analyst's Tier 2 or 3.",
+        "YELLOW: an excluded vendor that USAspending shows was not paid after its exclusion date; one strong signal;",
+        "  related firms in SAM (shared contacts, suites, a family of registrations); a tie to an excluded party; a",
+        "  small vendor tied to an excluded party or sharing its suite; an analyst's Tier 2 or 3.",
+        "Tiers count only when an analyst set them; the pipeline's default tiers do not color a vendor.",
         "GREEN (not in this export unless asked): the watch list, and anything an analyst cleared or explained. A",
         "  clearing decision outranks every other rule.",
         "",

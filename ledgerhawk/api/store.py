@@ -1550,6 +1550,38 @@ class Store:
         self.audit(analyst, f"case_{action}", uei, run_id, REVIEW_STATES[new] + (f": {comment.strip()}" if comment.strip() else ""))
         return out
 
+    def case_awards_index(self, run_id: str) -> dict[str, dict]:
+        """UEI -> the summary of its USAspending lookup in this import (only vendors that have one)."""
+        out = {}
+        for f in (self.root / "cases" / run_id).glob("*/awards.json"):
+            try:
+                res = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            e = (res.get("entities") or [{}])[0]
+            out[f.parent.name] = {"fetched_at": res.get("fetched_at", ""), "actions_flagged": e.get("actions_flagged", 0),
+                                  "actions_dollars": e.get("actions_dollars", 0), "after_exclusion": e.get("after_exclusion", 0),
+                                  "actions_error": e.get("actions_error", "")}
+        return out
+
+    def check_excluded(self, run_id: str, analyst: str, progress) -> str:
+        """Look up every vendor on the exclusions list in USAspending (contracts, actions after the exclusion date,
+        yearly totals), biggest first, keeping each result in its case. A vendor USAspending can't answer for is
+        skipped and left as "not yet checked"."""
+        rows = sorted((r for r in self.vendors(run_id)["rows"] if "EXCLUDED" in (r.get("exclusion_flags") or [])),
+                      key=lambda r: -float(r.get("tot") or 0))
+        ok = failed = 0
+        for i, r in enumerate(rows, 1):
+            progress(f"USAspending {i} of {len(rows)}: {r['name']}")
+            try:
+                self.fetch_case_awards(run_id, r["uei"], analyst)
+                ok += 1
+            except ConnectionError:
+                failed += 1
+        self.audit(analyst, "exclusion_check", None, run_id, f"USAspending check of {len(rows)} excluded vendors: "
+                   f"{ok} looked up" + (f", {failed} didn't answer" if failed else ""))
+        return run_id
+
     def fetch_case_awards(self, run_id: str, uei: str, analyst: str) -> dict:
         d = self._case_dir(run_id, uei)
         v = self.vendors(run_id)["by_uei"][uei]
