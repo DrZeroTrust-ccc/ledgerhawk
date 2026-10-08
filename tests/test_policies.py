@@ -120,3 +120,65 @@ def test_saved_rules_survive_new_settings():
     assert r.hub_cap == RuleSet().hub_cap and r.s1_min == 1
     assert diff({"a": 1, "l": ["X", "Y"]}, {"a": 2, "l": ["Y", "Z"]}) == [
         {"key": "a", "from": 1, "to": 2}, {"key": "l", "added": ["Z"], "removed": ["X"]}]
+
+
+def test_drafts_estimate_sensitivity_and_must_catch(pctx):
+    appmod, c, vendors, excl = pctx
+    pid = "va-small-business"  # created above as a copy, nothing imported under it yet: estimates use the newest import
+    live = c.get(f"/api/policies/{pid}").json()
+    assert live["draft"] is None and live["must_catch"] == [] and live["workload"]["hours_per_lead"] == 2.5
+    rules = live["live_rules"]
+    # drafting: checked, attributed, one draft per pack, nothing live changes
+    assert c.post(f"/api/policies/{pid}/draft", json={"rules": {**rules, "s2_fy25_min": -1}, "analyst": "Ana"}).status_code == 400
+    assert c.post(f"/api/policies/{pid}/draft", json={"rules": {**rules, "majors": ["(unclosed"]}, "analyst": "Ana"}).status_code == 400
+    assert c.post(f"/api/policies/{DEFAULTS_ID}/draft", json={"rules": rules, "analyst": "Ana"}).status_code == 400
+    d = c.post(f"/api/policies/{pid}/draft", json={"rules": {**rules, "s2_fy25_min": 1}, "reason": "try", "analyst": "Ana"}).json()
+    d2 = c.post(f"/api/policies/{pid}/draft", json={"rules": {**rules, "s2_fy25_min": 2_000_000, "hub_cap": 9},
+                                                    "analyst": "Bo"}).json()
+    assert d2["n"] == d["n"] and d2["created_by"] == "Ana" and d2["updated_by"] == "Bo" and d2["reason"] == "try"
+    assert {x["key"] for x in d2["changes"]} == {"s2_fy25_min", "hub_cap"}
+    p = c.get(f"/api/policies/{pid}").json()
+    assert p["draft"]["n"] == d2["n"] and p["live"] == 1 and p["live_rules"]["s2_fy25_min"] == rules["s2_fy25_min"]
+    # the estimate: under the live rules it changes nothing; a lower spike threshold brings vendors in, with reasons
+    same = c.post(f"/api/policies/{pid}/estimate", json={"rules": rules}).json()
+    assert same["moves"] == [] and same["live"] == same["draft"] and same["changes"] == []
+    rid = same["import"]["id"]
+    assert same["draft"]["leads"] == sum(v for k, v in c.get(f"/api/runs/{rid}").json()["queue_counts"].items()
+                                         if k in ("priority", "relationship", "strong", "exclusion")) + \
+        c.get(f"/api/runs/{rid}").json()["queue_counts"]["integrity_leads"]
+    low = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 500_000, "hub_cap": 9}}).json()
+    assert low["draft"]["leads"] >= low["live"]["leads"] and low["unestimated"] == ["hub_cap"]
+    high = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 1e12, "s3_fy25_min": 1e12,
+                                                                      "s1_min": 1e12}}).json()
+    out = [m for m in high["moves"] if m["kind"] == "out"]
+    assert out and high["draft"]["leads"] < high["live"]["leads"] and all(m["because"] for m in out)
+    assert any("no longer applies" in m["because"] for m in out)
+    # a decision on a vendor the draft would drop is a conflict; a pinned vendor it drops fails the must-catch check
+    victim = out[0]
+    c.post(f"/api/runs/{rid}/vendors/{victim['uei']}/disposition", json={"value": "Refer", "note": "n", "analyst": "Ana"})
+    assert c.post(f"/api/policies/{pid}/must-catch", data={"uei": victim["uei"], "name": victim["name"], "reason": "",
+                                                          "analyst": "Ana"}).status_code == 400
+    s = c.post(f"/api/policies/{pid}/must-catch", data={"uei": victim["uei"], "name": victim["name"],
+                                                       "reason": "known case", "analyst": "Ana"}).json()
+    assert s["must_catch"][0]["uei"] == victim["uei"]
+    again = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 1e12,
+                                                          "s3_fy25_min": 1e12, "s1_min": 1e12}}).json()
+    assert any(x["uei"] == victim["uei"] and x["decision"] == "Refer" for x in again["conflicts"])
+    assert again["must_catch"][0]["status"] == "dropped"
+    assert c.post(f"/api/policies/{pid}/estimate", json={"rules": rules}).json()["must_catch"][0]["status"] == "kept"
+    assert c.post(f"/api/policies/{pid}/must-catch/remove", data={"uei": victim["uei"], "reason": "",
+                                                                 "analyst": "Ana"}).status_code == 400
+    assert c.post(f"/api/policies/{pid}/must-catch/remove", data={"uei": victim["uei"], "reason": "closed",
+                                                                 "analyst": "Ana"}).json()["must_catch"] == []
+    # sensitivity: fewer leads as the threshold rises
+    sens = c.post(f"/api/policies/{pid}/sensitivity", json={"rules": rules, "key": "s2_fy25_min",
+                                                           "values": [1e5, 1e6, 5e6, 1e8]}).json()["points"]
+    leads = [x["leads"] for x in sens]
+    assert leads == sorted(leads, reverse=True)
+    assert c.post(f"/api/policies/{pid}/sensitivity", json={"rules": rules, "key": "hub_cap", "values": [3]}).status_code == 400
+    # workload, and discarding the draft
+    assert c.post(f"/api/policies/{pid}/workload", data={"hours_per_lead": 3, "analysts": 4,
+                                                        "analyst": "Ana"}).json() == {"hours_per_lead": 3.0, "analysts": 4, "set": True}
+    assert c.post(f"/api/policies/{pid}/draft/discard", data={"analyst": "Ana"}).json() == {"ok": True}
+    assert c.get(f"/api/policies/{pid}").json()["draft"] is None
+    assert c.post(f"/api/policies/{pid}/draft/discard", data={"analyst": "Ana"}).status_code == 404

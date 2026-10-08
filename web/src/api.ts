@@ -134,10 +134,29 @@ export type PolicyPack = {
   versions: PolicyVersion[]
   imports: number
 }
+export type MustCatch = { uei: string; name: string; reason: string; added_by: string; at: string }
+export type Workload = { hours_per_lead: number; analysts: number; set: boolean }
 export type PolicyDetail = Omit<PolicyPack, 'imports'> & {
   live_rules: Record<string, unknown>
   vs_defaults: PolicyChange[]
   imports: { id: string; label: string; created_at: string; version: number }[]
+  draft: (PolicyVersion & { rules: Record<string, unknown>; updated_by?: string }) | null
+  must_catch: MustCatch[]
+  workload: Workload
+}
+export type PolicyMove = { uei: string; name: string; fy24: number; fy25: number; tot: number; kind: 'in' | 'out' | 'moved'; from: string; to: string; because: string }
+type QueueTally = { leads: number; dollars: number; by_queue: Record<string, number> }
+export type PolicyEstimate = {
+  import: RunRef
+  live: QueueTally
+  draft: QueueTally
+  moves: PolicyMove[]
+  moves_total: number
+  conflicts: (PolicyMove & { decision: string; decided_by: string })[]
+  must_catch: (MustCatch & { status: 'kept' | 'dropped' | 'absent' })[]
+  changes: PolicyChange[]
+  unestimated: string[]
+  workload: Workload
 }
 
 export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 'executive'; added_by: string; at: string }
@@ -703,6 +722,22 @@ export const api = {
   policies: () => req<{ packs: PolicyPack[] }>('/api/policies'),
   policy: (id: string) => req<PolicyDetail>(`/api/policies/${encodeURIComponent(id)}`),
   createPolicy: (form: FormData) => req<PolicyPack>('/api/policies', { method: 'POST', body: form }),
+  savePolicyDraft: (id: string, body: { rules: Record<string, unknown>; reason: string; analyst: string }) =>
+    req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/draft`, json(body)),
+  discardPolicyDraft: (id: string, form: FormData) =>
+    req<{ ok: boolean }>(`/api/policies/${encodeURIComponent(id)}/draft/discard`, { method: 'POST', body: form }),
+  policyEstimate: (id: string, body: { rules: Record<string, unknown>; import_id?: string }) =>
+    req<PolicyEstimate>(`/api/policies/${encodeURIComponent(id)}/estimate`, json(body)),
+  policySensitivity: (id: string, body: { rules: Record<string, unknown>; key: string; values: number[] }) =>
+    req<{ import: RunRef; key: string; points: { value: number; leads: number; dollars: number }[] }>(
+      `/api/policies/${encodeURIComponent(id)}/sensitivity`,
+      json(body),
+    ),
+  addMustCatch: (id: string, form: FormData) =>
+    req<{ must_catch: MustCatch[] }>(`/api/policies/${encodeURIComponent(id)}/must-catch`, { method: 'POST', body: form }),
+  removeMustCatch: (id: string, form: FormData) =>
+    req<{ must_catch: MustCatch[] }>(`/api/policies/${encodeURIComponent(id)}/must-catch/remove`, { method: 'POST', body: form }),
+  setWorkload: (id: string, form: FormData) => req<Workload>(`/api/policies/${encodeURIComponent(id)}/workload`, { method: 'POST', body: form }),
   describePolicy: (id: string, form: FormData) =>
     req<PolicyPack>(`/api/policies/${encodeURIComponent(id)}/describe`, { method: 'POST', body: form }),
   runs: () => req<RunMeta[]>('/api/runs'),

@@ -248,8 +248,15 @@ made it and why. Packs live under `<data>/policies/`.
 Starting an import, you pick a pack; the import uses that pack's live version and keeps a copy of those exact rules
 (`rules.json`) beside its results. A restore re-screens with the import's own rules; a follow-up uses its pack's
 current live version. The import dashboard, the import record, the Word and PDF case files and the Vendors of
-Interest workbook name the pack and version. Editing rules as plain-English sentences, with a preview of the
-impact, is next.
+Interest workbook name the pack and version.
+
+**Edit rules** shows every rule as a sentence ("Flag a new-entrant spike when a vendor had nothing in FY24 and at
+least **$5M** in FY25"); click a value to change it. Analysts and Admins edit into a draft (one per pack); nothing
+changes for anyone until a draft is approved and deployed. As you edit, a quick estimate re-scores the latest import
+in seconds (`pipeline/estimate.py`: it re-runs the cheap stages and reuses the import's SAM and exclusion results)
+and shows leads, dollars, review hours, work per analyst, who comes in or drops out and why, decisions the change
+would undo, and the pack's must-catch vendors. Thresholds show a small chart of how many leads each value gives.
+SAM, link and exclusion-matching settings are marked for the full preview, which re-runs everything (next step).
 
 ### Sign-in and roles
 
