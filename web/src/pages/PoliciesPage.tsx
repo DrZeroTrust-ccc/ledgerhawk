@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { api } from '../api'
+import { api, money, num } from '../api'
 import { useAnalystName } from '../App'
 import { usePlace } from '../nav'
 import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
+import { changeText } from '../policyLabels'
 
 /** Admins (or anyone, while sign-in is off) create and change packs; everyone can read them. */
 export function useCanManagePolicies() {
@@ -44,6 +45,33 @@ export default function PoliciesPage() {
         </p>
       </div>
       <ErrorNote error={error} />
+      {data && data.recent.length > 0 && (
+        <Card title="Recent policy changes">
+          <ul className="divide-y divide-slate-100 text-sm">
+            {data.recent.map((r) => (
+              <li key={`${r.pack_id}-${r.n}`} className="py-2.5">
+                <div>
+                  <Link to={`/policies/${r.pack_id}`} className="font-medium text-navy hover:underline">
+                    {r.pack_name} v{r.n}
+                  </Link>{' '}
+                  <span className="text-xs text-slate-500">
+                    deployed {r.approved_at.slice(0, 10)} by {r.approved_by}, written by {r.created_by}
+                    {r.impact.triage_only ? ' · triage change' : ''}
+                  </span>
+                </div>
+                <div className="text-slate-700">{r.changes.map(changeText).join('; ')}</div>
+                {r.impact.leads && (
+                  <div className="text-xs text-slate-600">
+                    Impact on {r.impact.import.label}: leads {num(r.impact.leads[0])} → {num(r.impact.leads[1])}, dollars under review{' '}
+                    {money(r.impact.dollars[0])} → {money(r.impact.dollars[1])}, {num(r.impact.moves)} vendors moved
+                    {r.impact.conflicts ? `, ${r.impact.conflicts} decided leads dropped from new imports` : ''}. “{r.approval_comment}”
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
       {!data && !error && <Loading />}
       {data && (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">

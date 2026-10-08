@@ -20,6 +20,15 @@ from pathlib import Path
 from ..pipeline.rules import RuleSet
 
 DEFAULTS_ID = "ledgerhawk-defaults"
+# Settings that only decide which queue a flagged vendor lands in, not whether it is flagged. A draft that changes
+# nothing else is a triage change: an Admin can deploy it without a second person. Any other change is a screening
+# change and needs an Admin who didn't write the draft.
+TRIAGE_KEYS = {"strong_s2_fy25", "strong_s3_ratio", "strong_s3_fy25", "strong_s4_total",
+               "sam_stale_days", "exclusions_stale_days"}
+
+
+def is_triage_only(changes: list[dict]) -> bool:
+    return all(c["key"] in TRIAGE_KEYS for c in changes)
 DEFAULTS_NAME = "LedgerHawk defaults"
 
 
@@ -171,6 +180,58 @@ class PolicyBook:
         return self.pack(pid)
 
     # ---- drafts (one per pack), must-catch vendors, workload ----
+    # ---- review and deploy ----
+    def _update_draft(self, pid: str, **kw) -> dict:
+        with self._lock:
+            v = self.draft(pid)
+            if not v:
+                raise KeyError("no draft")
+            v.update(kw)
+            self._write_version(pid, v)
+        return v
+
+    def submit(self, pid: str, by: str) -> dict:
+        return self._update_draft(pid, submitted_by=by, submitted_at=_now(), returned=None)
+
+    def return_draft(self, pid: str, by: str, comment: str) -> dict:
+        return self._update_draft(pid, submitted_by="", submitted_at="", returned={"by": by, "at": _now(), "comment": comment})
+
+    def deploy(self, pid: str, by: str, comment: str, impact: dict) -> dict:
+        """The draft becomes the live version; the old live version is retired. Imports already made keep the rules
+        they used; new imports in this pack use this version."""
+        self._pack_file(pid)
+        with self._lock:
+            p = self._load(pid)
+            draft = next((v for v in p["versions"] if v["status"] == "draft"), None)
+            if not draft:
+                raise KeyError("no draft")
+            for v in p["versions"]:
+                if v["status"] == "live":
+                    self._write_version(pid, {**v, "status": "retired", "retired_at": _now()})
+            draft.update(status="live", approved_by=by, approved_at=_now(), approval_comment=comment.strip(), impact=impact,
+                         returned=None)
+            self._write_version(pid, draft)
+        return draft
+
+    def recent(self, limit: int = 8) -> list[dict]:
+        """Versions deployed in any pack, newest first, with their impact: the executives' summary."""
+        out = []
+        for p in self.packs()[1:]:
+            for v in self._load(p["id"])["versions"]:
+                if v.get("approved_at"):
+                    out.append({"pack_id": p["id"], "pack_name": p["name"], "n": v["n"], "approved_by": v["approved_by"],
+                                "approved_at": v["approved_at"], "created_by": v["created_by"], "reason": v.get("reason", ""),
+                                "approval_comment": v.get("approval_comment", ""), "changes": v.get("changes", []),
+                                "impact": v.get("impact") or {}})
+        return sorted(out, key=lambda x: x["approved_at"], reverse=True)[:limit]
+
+    def rollback(self, pid: str, n: int, by: str) -> dict:
+        """A new draft holding an earlier version's rules. It goes through preview and approval like any change."""
+        if self.draft(pid):
+            raise ValueError("This pack already has a draft. Deploy or discard it first.")
+        old = self.version(pid, n)
+        return self.save_draft(pid, old["rules"], by, f"Roll back to v{n}")
+
     def _pack_file(self, pid: str) -> Path:
         if pid == DEFAULTS_ID:
             raise ValueError(f"{DEFAULTS_NAME} can't be changed. Copy it to make your own pack.")
@@ -192,7 +253,8 @@ class PolicyBook:
             v = {"n": old["n"] if old else max(x["n"] for x in p["versions"]) + 1, "status": "draft",
                  "rules": r.to_dict(), "fingerprint": r.fingerprint(),
                  "created_by": old["created_by"] if old else by, "updated_by": by, "approved_by": "", "at": _now(),
-                 "reason": reason.strip() or (old or {}).get("reason", ""), "changes": diff(live["rules"], r.to_dict())}
+                 "reason": reason.strip() or (old or {}).get("reason", ""), "changes": diff(live["rules"], r.to_dict()),
+                 "submitted_by": "", "submitted_at": "", "returned": (old or {}).get("returned")}
             self._write_version(pid, v)
         return v
 

@@ -140,15 +140,17 @@ def test_drafts_estimate_sensitivity_and_must_catch(pctx):
     p = c.get(f"/api/policies/{pid}").json()
     assert p["draft"]["n"] == d2["n"] and p["live"] == 1 and p["live_rules"]["s2_fy25_min"] == rules["s2_fy25_min"]
     # the estimate: under the live rules it changes nothing; a lower spike threshold brings vendors in, with reasons
-    same = c.post(f"/api/policies/{pid}/estimate", json={"rules": rules}).json()
+    # an import screened under exactly these rules, so the estimate can be checked against its real queue
+    rid = next(r["id"] for r in c.get("/api/runs").json()
+               if (r.get("policy") or {}).get("fingerprint") == RuleSet().fingerprint() and not r["restore"])
+    same = c.post(f"/api/policies/{pid}/estimate", json={"rules": rules, "import_id": rid}).json()
     assert same["moves"] == [] and same["live"] == same["draft"] and same["changes"] == []
-    rid = same["import"]["id"]
     assert same["draft"]["leads"] == sum(v for k, v in c.get(f"/api/runs/{rid}").json()["queue_counts"].items()
                                          if k in ("priority", "relationship", "strong", "exclusion")) + \
         c.get(f"/api/runs/{rid}").json()["queue_counts"]["integrity_leads"]
-    low = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 500_000, "hub_cap": 9}}).json()
+    low = c.post(f"/api/policies/{pid}/estimate", json={"import_id": rid, "rules": {**rules, "s2_fy25_min": 500_000, "hub_cap": 9}}).json()
     assert low["draft"]["leads"] >= low["live"]["leads"] and low["unestimated"] == ["hub_cap"]
-    high = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 1e12, "s3_fy25_min": 1e12,
+    high = c.post(f"/api/policies/{pid}/estimate", json={"import_id": rid, "rules": {**rules, "s2_fy25_min": 1e12, "s3_fy25_min": 1e12,
                                                                       "s1_min": 1e12}}).json()
     out = [m for m in high["moves"] if m["kind"] == "out"]
     assert out and high["draft"]["leads"] < high["live"]["leads"] and all(m["because"] for m in out)
@@ -161,24 +163,119 @@ def test_drafts_estimate_sensitivity_and_must_catch(pctx):
     s = c.post(f"/api/policies/{pid}/must-catch", data={"uei": victim["uei"], "name": victim["name"],
                                                        "reason": "known case", "analyst": "Ana"}).json()
     assert s["must_catch"][0]["uei"] == victim["uei"]
-    again = c.post(f"/api/policies/{pid}/estimate", json={"rules": {**rules, "s2_fy25_min": 1e12,
+    again = c.post(f"/api/policies/{pid}/estimate", json={"import_id": rid, "rules": {**rules, "s2_fy25_min": 1e12,
                                                           "s3_fy25_min": 1e12, "s1_min": 1e12}}).json()
     assert any(x["uei"] == victim["uei"] and x["decision"] == "Refer" for x in again["conflicts"])
     assert again["must_catch"][0]["status"] == "dropped"
-    assert c.post(f"/api/policies/{pid}/estimate", json={"rules": rules}).json()["must_catch"][0]["status"] == "kept"
+    assert c.post(f"/api/policies/{pid}/estimate", json={"import_id": rid, "rules": rules}).json()["must_catch"][0]["status"] == "kept"
     assert c.post(f"/api/policies/{pid}/must-catch/remove", data={"uei": victim["uei"], "reason": "",
                                                                  "analyst": "Ana"}).status_code == 400
     assert c.post(f"/api/policies/{pid}/must-catch/remove", data={"uei": victim["uei"], "reason": "closed",
                                                                  "analyst": "Ana"}).json()["must_catch"] == []
     # sensitivity: fewer leads as the threshold rises
-    sens = c.post(f"/api/policies/{pid}/sensitivity", json={"rules": rules, "key": "s2_fy25_min",
+    sens = c.post(f"/api/policies/{pid}/sensitivity", json={"import_id": rid, "rules": rules, "key": "s2_fy25_min",
                                                            "values": [1e5, 1e6, 5e6, 1e8]}).json()["points"]
     leads = [x["leads"] for x in sens]
     assert leads == sorted(leads, reverse=True)
-    assert c.post(f"/api/policies/{pid}/sensitivity", json={"rules": rules, "key": "hub_cap", "values": [3]}).status_code == 400
+    assert c.post(f"/api/policies/{pid}/sensitivity", json={"import_id": rid, "rules": rules, "key": "hub_cap", "values": [3]}).status_code == 400
     # workload, and discarding the draft
     assert c.post(f"/api/policies/{pid}/workload", data={"hours_per_lead": 3, "analysts": 4,
                                                         "analyst": "Ana"}).json() == {"hours_per_lead": 3.0, "analysts": 4, "set": True}
     assert c.post(f"/api/policies/{pid}/draft/discard", data={"analyst": "Ana"}).json() == {"ok": True}
     assert c.get(f"/api/policies/{pid}").json()["draft"] is None
     assert c.post(f"/api/policies/{pid}/draft/discard", data={"analyst": "Ana"}).status_code == 404
+
+
+def test_full_preview_approval_deploy_and_rollback(pctx):
+    appmod, c, vendors, excl = pctx
+    pid = "gsa-fy26-pilot"
+    A, P = {"analyst": "Ana"}, {"analyst": "Pat"}
+    assert c.post(f"/api/policies/{pid}/preview", data=A).status_code == 400  # nothing saved to preview
+    live = c.get(f"/api/policies/{pid}").json()
+    rules, n_live = live["live_rules"], live["live"]
+    strict = {**rules, "s1_min": 1e12, "s2_fy25_min": 1e12, "s3_fy25_min": 1e12}
+    c.post(f"/api/policies/{pid}/draft", json={"rules": strict, "reason": "Too many small spikes", **A})
+    assert c.post(f"/api/policies/{pid}/deploy", data={"comment": "ok", **P}).status_code == 400  # no preview yet
+    assert c.post(f"/api/policies/{pid}/submit", data=A).status_code == 400
+
+    # the full preview re-runs the whole screen; under these settings it agrees with the quick estimate
+    pv = c.post(f"/api/policies/{pid}/preview", data=A).json()["preview"]
+    assert pv["state"] == "done", pv
+    res = pv["result"]
+    rid = res["import"]["id"]
+    assert res["live"]["leads"] > res["draft"]["leads"] and res["moves_total"] == len(res["moves"]) > 0
+    assert all(m["because"] for m in res["moves"]) and res["workload"]["hours_per_lead"] == 2.5
+    est = c.post(f"/api/policies/{pid}/estimate", json={"rules": strict}).json()
+    assert est["import"]["id"] == rid and est["draft"]["leads"] == res["draft"]["leads"]
+    assert c.get(f"/api/policies/{pid}/preview").json()["preview"]["fingerprint"] == pv["fingerprint"]
+
+    # guards: a must-catch vendor dropped, decided leads not acknowledged, no comment, the author approving
+    out = next(m for m in res["moves"] if m["kind"] == "out")
+    c.post(f"/api/policies/{pid}/must-catch", data={"uei": out["uei"], "reason": "known", **A})
+    c.post(f"/api/policies/{pid}/preview", data=A)  # must-catch is checked against the preview
+    r = c.post(f"/api/policies/{pid}/deploy", data={"comment": "ok", "ack_conflicts": "true", **P})
+    assert r.status_code == 400 and "must-catch" in r.json()["detail"]
+    c.post(f"/api/policies/{pid}/must-catch/remove", data={"uei": out["uei"], "reason": "closed", **A})
+    c.post(f"/api/runs/{rid}/vendors/{out['uei']}/disposition", json={"value": "Refer", "note": "n", "analyst": "Ana"})
+    c.post(f"/api/policies/{pid}/draft", json={"rules": strict, **A})  # re-saving clears the old preview
+    assert c.get(f"/api/policies/{pid}/preview").json()["preview"]["state"] == "done"  # same rules, same fingerprint
+    res = c.post(f"/api/policies/{pid}/preview", data=A).json()["preview"]["result"]
+    assert any(x["uei"] == out["uei"] for x in res["conflicts"])
+    r = c.post(f"/api/policies/{pid}/deploy", data={"comment": "ok", **P})
+    assert r.status_code == 400 and "decided lead" in r.json()["detail"]
+    assert c.post(f"/api/policies/{pid}/deploy", data={"comment": " ", "ack_conflicts": "true", **P}).status_code == 400
+    r = c.post(f"/api/policies/{pid}/deploy", data={"comment": "mine", "ack_conflicts": "true", **A})
+    assert r.status_code == 403 and "didn't write" in r.json()["detail"]
+    sub = c.post(f"/api/policies/{pid}/submit", data=A).json()
+    assert sub["submitted_by"] == "Ana"
+
+    # an Admin who didn't write it deploys; a follow-up import re-screens under the new version
+    r = c.post(f"/api/policies/{pid}/deploy", data={"comment": "Approved for the pilot", "ack_conflicts": "true",
+                                                   "follow_up": "true", **P})
+    assert r.status_code == 200, r.text
+    v, follow = r.json()["version"], r.json()["follow_up"]
+    assert v["status"] == "live" and v["approved_by"] == "Pat" and v["impact"]["leads"] == [res["live"]["leads"], res["draft"]["leads"]]
+    p = c.get(f"/api/policies/{pid}").json()
+    assert p["live"] == v["n"] and p["draft"] is None
+    assert next(x for x in p["versions"] if x["n"] == n_live)["status"] == "retired"
+    assert appmod.store.run_meta(follow)["policy"]["version"] == v["n"]
+    assert appmod.store.run_meta(rid)["policy"]["version"] != v["n"]  # imports already made never change
+    recent = c.get("/api/policies").json()["recent"]
+    assert recent[0]["pack_name"] == "GSA FY26 pilot" and recent[0]["n"] == v["n"] and recent[0]["impact"]["conflicts"] >= 1
+    assert any(e["action"] == "policy_deployed" and "screening change" in e["detail"] for e in appmod.store.history())
+
+    # a triage-only change: the Admin who wrote it may deploy it
+    c.post(f"/api/policies/{pid}/draft", json={"rules": {**strict, "strong_s2_fy25": 30_000_000}, **P})
+    c.post(f"/api/policies/{pid}/preview", data=P)
+    r = c.post(f"/api/policies/{pid}/deploy", data={"comment": "queue tweak", "ack_conflicts": "true", **P})
+    assert r.status_code == 200, r.text
+    assert r.json()["version"]["impact"]["triage_only"]
+
+    # roll back: a new draft with the old rules, which has to be previewed and approved like any change
+    rb = c.post(f"/api/policies/{pid}/rollback", data={"version": n_live, **A}).json()
+    assert rb["reason"] == f"Roll back to v{n_live}" and rb["rules"] == rules
+    assert c.post(f"/api/policies/{pid}/rollback", data={"version": n_live, **A}).status_code == 400  # a draft exists
+    assert c.get(f"/api/policies/{pid}/preview").json()["preview"] is None
+    assert c.post(f"/api/policies/{pid}/return", data={"comment": "", **P}).status_code == 400
+    back = c.post(f"/api/policies/{pid}/return", data={"comment": "Explain why first", **P}).json()
+    assert back["returned"]["comment"] == "Explain why first" and back["submitted_by"] == ""
+
+
+@pytest.mark.parametrize("change", [{}, {"immaterial_total": 2_000_000}, {"s2_fy25_min": 10_000_000, "immaterial_total": 1_000_000},
+                                    {"major_total": 50_000_000}, {"s3_ratio": 3, "strong_s4_total": 2_000_000}])
+def test_quick_estimate_matches_a_full_rescreen(tmp_path, change):
+    """For the settings it covers, the quick estimate lands every vendor in the same queue as re-running everything."""
+    from datetime import date
+
+    from ledgerhawk.pipeline.estimate import screen
+    from ledgerhawk.pipeline.ingest import load_vendor_file
+    from ledgerhawk.pipeline.run import run_pipeline
+    v, e, sam, _ = make_synthetic(tmp_path, n=1500, seed=5)
+    kw = dict(sam_file=sam, sam_extract_date=date(2026, 9, 6), sam_cache_dir=tmp_path)
+    base = run_pipeline(v, e, date(2026, 10, 2), **kw)
+    base.write(tmp_path / "out")
+    rows = {r["uei"]: r for r in (json.loads(x) for x in open(tmp_path / "out" / "vendors.jsonl"))}
+    rules = RuleSet(**change)
+    est = screen(load_vendor_file(v)[0], rows, rules, set())
+    full = run_pipeline(v, e, date(2026, 10, 2), rules=rules, **kw).vendors
+    assert list(est["queue"]) == list(full["queue"])

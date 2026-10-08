@@ -34,7 +34,7 @@ from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
-from .policies import DEFAULTS_ID, diff, rules_from, validate
+from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
 from ..pipeline.estimate import ESTIMATED, QUEUED, compare, screen
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
@@ -178,7 +178,8 @@ def list_policies():
     for m in store.list_runs():
         k = (m.get("policy") or {}).get("pack_id", DEFAULTS_ID)
         used[k] = used.get(k, 0) + 1
-    return {"packs": [{**p, "imports": used.get(p["id"], 0)} for p in store.policies.packs()]}
+    return {"packs": [{**p, "imports": used.get(p["id"], 0)} for p in store.policies.packs()],
+            "recent": store.policies.recent()}
 
 
 def _pack_or_404(pid: str) -> dict:
@@ -305,12 +306,11 @@ def _estimate_inputs(pid: str, body: EstimateBody):
     if body.import_id:
         _get(store.run_dir, body.import_id)
         rid = body.import_id
-    else:  # the pack's newest import, else the newest import of all
-        runs = store.list_runs()
-        mine = [m for m in runs if (m.get("policy") or {}).get("pack_id", DEFAULTS_ID) == pid]
-        if not (mine or runs):
-            raise HTTPException(400, "There's no import to estimate against yet. Start one first.")
-        rid = (mine or runs)[0]["id"]
+    else:
+        try:
+            rid = store.preview_import(pid)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
     return store.policies.live(pid)[0], draft, rid, store.estimate_base(rid)
 
 
@@ -340,6 +340,119 @@ def estimate_policy(pid: str, body: EstimateBody):
         "changes": changes, "unestimated": sorted({c["key"] for c in changes} - ESTIMATED),
         "workload": _workload(pid),
     }
+
+
+def _preview_out(pid: str) -> dict | None:
+    pv = store.policy_preview(pid)
+    if pv and pv.get("result"):
+        pv["result"]["workload"] = _workload(pid)
+    return pv
+
+
+@app.get("/api/policies/{pid}/preview")
+def get_policy_preview(pid: str):
+    _pack_or_404(pid)
+    return {"preview": _preview_out(pid)}
+
+
+@app.post("/api/policies/{pid}/preview")
+def start_policy_preview(pid: str, analyst: str = Form("")):
+    """Re-run the whole screen on the latest import with the saved draft, in the background."""
+    by = _who_edits(analyst)
+    _pack_or_404(pid)
+    try:
+        store.start_policy_preview(pid, by)
+    except KeyError:
+        raise HTTPException(400, "Save a draft first; the full preview runs on the saved draft.")
+    return {"preview": _preview_out(pid)}
+
+
+def _done_preview(pid: str) -> dict:
+    pv = store.policy_preview(pid)
+    if not pv or pv["state"] != "done":
+        raise HTTPException(400, "Run the full preview of this draft first. It re-runs the whole screen so the approver "
+                                 "sees exactly what changes.")
+    return pv["result"]
+
+
+@app.post("/api/policies/{pid}/submit")
+def submit_policy(pid: str, analyst: str = Form("")):
+    by = _who_edits(analyst)
+    _pack_or_404(pid)
+    if not store.policies.draft(pid):
+        raise HTTPException(400, "There's no draft to submit.")
+    _done_preview(pid)
+    v = store.policies.submit(pid, by)
+    store.audit(by, "policy_draft", None, None, f"Submitted draft v{v['n']} of {store.policies.pack(pid)['name']} for approval")
+    return v
+
+
+@app.post("/api/policies/{pid}/return")
+def return_policy(pid: str, comment: str = Form(""), analyst: str = Form("")):
+    by = _can_manage_policies() or _who_edits(analyst)
+    if not comment.strip():
+        raise HTTPException(400, "Say what needs to change before it can be approved.")
+    try:
+        v = store.policies.return_draft(pid, by, comment.strip())
+    except KeyError:
+        raise HTTPException(404, "There's no draft to return.")
+    store.audit(by, "policy_draft", None, None, f"Returned draft v{v['n']} of {store.policies.pack(pid)['name']}: {comment.strip()}")
+    return v
+
+
+@app.post("/api/policies/{pid}/deploy")
+def deploy_policy(pid: str, comment: str = Form(""), ack_conflicts: bool = Form(False), follow_up: bool = Form(False),
+                  analyst: str = Form("")):
+    """Make the draft live. A screening change needs an Admin who didn't write the draft; a triage-only change
+    (which queue, not whether flagged) an Admin can deploy alone. Imports already made never change."""
+    by = _can_manage_policies() or _who_edits(analyst)
+    _pack_or_404(pid)
+    d = store.policies.draft(pid)
+    if not d:
+        raise HTTPException(400, "There's no draft to deploy.")
+    if not d["changes"]:
+        raise HTTPException(400, "This draft doesn't change anything from the live version.")
+    res = _done_preview(pid)
+    if any(m["status"] == "dropped" for m in res["must_catch"]):
+        raise HTTPException(400, "A must-catch vendor would no longer be flagged. Change the draft, or remove the vendor "
+                                 "from the must-catch list with a reason.")
+    if res["conflicts"] and not ack_conflicts:
+        raise HTTPException(400, f"Confirm you've looked at the {len(res['conflicts'])} decided lead(s) this would drop.")
+    if not comment.strip():
+        raise HTTPException(400, "Add a comment for the record.")
+    triage = is_triage_only(d["changes"])
+    if not triage and by in {d["created_by"], d.get("updated_by") or d["created_by"]}:
+        raise HTTPException(403, "This changes what gets flagged, so an Admin who didn't write the draft has to approve it.")
+    impact = {"import": res["import"], "leads": [res["live"]["leads"], res["draft"]["leads"]],
+              "dollars": [res["live"]["dollars"], res["draft"]["dollars"]], "moves": res["moves_total"],
+              "tier_moves": res["tier_moves_total"], "conflicts": len(res["conflicts"]), "workload": _workload(pid),
+              "triage_only": triage}
+    v = store.policies.deploy(pid, by, comment, impact)
+    name = store.policies.pack(pid)["name"]
+    store.audit(by, "policy_deployed", None, None,
+                f"Deployed {name} v{v['n']} ({'triage change' if triage else 'screening change'}, written by {v['created_by']}): "
+                f"{len(v['changes'])} change(s); leads {impact['leads'][0]} → {impact['leads'][1]}. {comment.strip()}")
+    out = {"version": v, "follow_up": None}
+    if follow_up:
+        try:
+            out["follow_up"] = store.follow_up_run(res["import"]["id"], by, policy_pack=pid)
+        except (ValueError, KeyError) as exc:
+            out["follow_up_error"] = str(exc)
+    return out
+
+
+@app.post("/api/policies/{pid}/rollback")
+def rollback_policy(pid: str, version: int = Form(...), analyst: str = Form("")):
+    by = _who_edits(analyst)
+    _pack_or_404(pid)
+    try:
+        v = store.policies.rollback(pid, version, by)
+    except KeyError:
+        raise HTTPException(404, "No such version.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_draft", None, None, f"Drafted a roll-back of {store.policies.pack(pid)['name']} to v{version}")
+    return v
 
 
 class SensitivityBody(EstimateBody):

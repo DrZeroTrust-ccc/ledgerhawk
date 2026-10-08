@@ -51,6 +51,15 @@ export const SENTENCES: SentenceGroup[] = [
     ],
   },
   {
+    title: 'Data freshness',
+    sentences: [
+      {
+        text: 'When someone starts an import with this pack, warn if the SAM extract is older than {sam_stale_days} or the exclusions extract is older than {exclusions_stale_days}.',
+        note: 'A warning only: it doesn’t change who is flagged.',
+      },
+    ],
+  },
+  {
     title: 'SAM registration checks',
     full: true,
     sentences: [

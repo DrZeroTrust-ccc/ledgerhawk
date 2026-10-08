@@ -1,3 +1,5 @@
+import type { PolicyChange } from './api'
+
 // Plain-English names for the rule-set settings, grouped the way an analyst thinks about them. The sentence editor
 // (next step) builds on these.
 
@@ -72,4 +74,16 @@ export function formatSetting(key: string, v: unknown): string {
     return v.toLocaleString()
   }
   return String(v ?? '')
+}
+
+/** One change, in words: "Leave out vendors with … under: $250,000 → $2M". */
+export function changeText(c: PolicyChange): string {
+  if (c.added || c.removed)
+    return `${settingLabel(c.key)}: ${[
+      c.added?.length ? `added ${c.added.join(', ')}` : '',
+      c.removed?.length ? `removed ${c.removed.join(', ')}` : '',
+    ]
+      .filter(Boolean)
+      .join('; ')}`
+  return `${settingLabel(c.key)}: ${formatSetting(c.key, c.from)} → ${formatSetting(c.key, c.to)}`
 }

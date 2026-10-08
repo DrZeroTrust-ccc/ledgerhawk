@@ -21,6 +21,7 @@ import PeoplePage from './pages/PeoplePage'
 import PoliciesPage from './pages/PoliciesPage'
 import PolicyPage from './pages/PolicyPage'
 import PolicyEditorPage from './pages/PolicyEditorPage'
+import PolicyReviewPage from './pages/PolicyReviewPage'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -208,6 +209,7 @@ export default function App() {
             <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/policies/:id" element={<PolicyPage />} />
             <Route path="/policies/:id/edit" element={<PolicyEditorPage />} />
+            <Route path="/policies/:id/review" element={<PolicyReviewPage />} />
                 {signedIn?.role === 'admin' && <Route path="/people" element={<PeoplePage myEmail={signedIn.email} />} />}
               </Routes>
             )}
