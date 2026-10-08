@@ -35,7 +35,7 @@ from ..exports.voi import build_voi
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
-from ..pipeline.estimate import ESTIMATED, QUEUED, compare, screen
+from ..pipeline.estimate import ESTIMATED, QUEUED, compare, must_catch, screen
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -327,16 +327,13 @@ def estimate_policy(pid: str, body: EstimateBody):
     live, draft = _LIVE_SCREENS[key], screen(base, rows, draft_rules, restore)
     out = compare(live, draft)
     disp = store.dispositions(rid)
-    queued = set(draft.loc[draft["queue"].isin(QUEUED), "uei"])
-    present = set(draft["uei"])
     changes = diff(live_rules.to_dict(), draft_rules.to_dict())
     return {
         "import": store.run_ref(rid), "live": out["live"], "draft": out["draft"],
         "moves": out["moves"][:200], "moves_total": len(out["moves"]),
         "conflicts": [{**m, "decision": disp[m["uei"]]["value"], "decided_by": disp[m["uei"]]["analyst"]}
                       for m in out["moves"] if m["kind"] == "out" and m["uei"] in disp],
-        "must_catch": [{**m, "status": "kept" if m["uei"] in queued else "dropped" if m["uei"] in present else "absent"}
-                       for m in store.policies.settings(pid)["must_catch"]],
+        "must_catch": must_catch(store.policies.settings(pid)["must_catch"], live, draft),
         "changes": changes, "unestimated": sorted({c["key"] for c in changes} - ESTIMATED),
         "workload": _workload(pid),
     }

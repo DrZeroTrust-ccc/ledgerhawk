@@ -69,6 +69,22 @@ def _why(a, b) -> str:
     return "; ".join(parts)
 
 
+def must_catch(items: list[dict], live: pd.DataFrame, draft: pd.DataFrame) -> list[dict]:
+    """Each pinned vendor under the draft compared with the live rules. Only "dropped" (queued today, not under the
+    draft) blocks a deploy; "missed" means the screen doesn't flag it today either, which is worth knowing when
+    tuning but isn't something the draft did."""
+    before = set(live.loc[live["queue"].isin(QUEUED), "uei"])
+    after = set(draft.loc[draft["queue"].isin(QUEUED), "uei"])
+    present = set(draft["uei"])
+
+    def status(u: str) -> str:
+        if u not in present:
+            return "absent"
+        return {(True, True): "kept", (True, False): "dropped", (False, True): "added", (False, False): "missed"}[
+            (u in before, u in after)]
+    return [{**m, "status": status(m["uei"])} for m in items]
+
+
 def compare(live: pd.DataFrame, draft: pd.DataFrame) -> dict:
     """Queue counts under each, and the vendors that enter, leave or change queue."""
     def counts(df):

@@ -180,6 +180,15 @@ export type PolicyPack = {
   imports: number
 }
 export type MustCatch = { uei: string; name: string; reason: string; added_by: string; at: string }
+/** A pinned vendor under a draft vs the live rules. Only "dropped" blocks a deploy. */
+export type MustCatchStatus = 'kept' | 'dropped' | 'added' | 'missed' | 'absent'
+export const MUST_CATCH_LABEL: Record<MustCatchStatus, string> = {
+  kept: 'still flagged',
+  dropped: 'would be dropped',
+  added: 'would now be flagged',
+  missed: 'not flagged by the screen today, nor by this draft',
+  absent: 'not in this import',
+}
 export type Workload = { hours_per_lead: number; analysts: number; set: boolean }
 export type PolicyDetail = Omit<PolicyPack, 'imports'> & {
   live_rules: Record<string, unknown>
@@ -198,7 +207,7 @@ export type PolicyEstimate = {
   moves: PolicyMove[]
   moves_total: number
   conflicts: (PolicyMove & { decision: string; decided_by: string })[]
-  must_catch: (MustCatch & { status: 'kept' | 'dropped' | 'absent' })[]
+  must_catch: (MustCatch & { status: MustCatchStatus })[]
   changes: PolicyChange[]
   unestimated: string[]
   workload: Workload

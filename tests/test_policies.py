@@ -279,3 +279,14 @@ def test_quick_estimate_matches_a_full_rescreen(tmp_path, change):
     est = screen(load_vendor_file(v)[0], rows, rules, set())
     full = run_pipeline(v, e, date(2026, 10, 2), rules=rules, **kw).vendors
     assert list(est["queue"]) == list(full["queue"])
+
+
+def test_must_catch_is_judged_against_the_live_rules():
+    """A pinned vendor the live rules don't flag either is "missed", not "dropped", so it can't block a deploy."""
+    import pandas as pd
+
+    from ledgerhawk.pipeline.estimate import must_catch
+    live = pd.DataFrame({"uei": ["A", "B", "C", "D"], "queue": ["priority", "strong", "", ""]})
+    draft = pd.DataFrame({"uei": ["A", "B", "C", "D"], "queue": ["priority", "", "", "exclusion"]})
+    pins = [{"uei": u} for u in ("A", "B", "C", "D", "E")]
+    assert [m["status"] for m in must_catch(pins, live, draft)] == ["kept", "dropped", "missed", "added", "absent"]
