@@ -81,6 +81,16 @@ def _now() -> str:
 APP_VERSION = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("LEDGERHAWK_VERSION") or "")[:12]
 
 
+COMPARE_KEYS = ("uei", "name", "tot", "queue", "reason", "exclusion_flags", "signals", "tier_default")
+
+
+def slim_rows(path: Path) -> list[dict]:
+    """An import's stored vendors with only what compare_runs needs, read a line at a time: a 120K-vendor import in
+    full (SAM cards, links, evidence) is too big to hold twice."""
+    with open(path) as fh:
+        return [{k: r[k] for k in COMPARE_KEYS if k in r} for r in map(json.loads, fh)]
+
+
 def compare_runs(old_rows: list[dict], new_rows: list[dict]) -> dict:
     """What changed for queued vendors between a run and the run it follows: new to the queue, off the queue, and
     queued in both with new flags, signals, tier or dollars."""
@@ -104,7 +114,8 @@ def compare_runs(old_rows: list[dict], new_rows: list[dict]) -> dict:
             what.append({"kind": "signals", "added": [SIGNAL_LABELS.get(x, x) for x in gained]})
         if lost := sorted(sig(o) - sig(r)):
             what.append({"kind": "signals_gone", "removed": [SIGNAL_LABELS.get(x, x) for x in lost]})
-        if (t0 := default_tier(o)) != (t1 := default_tier(r)):
+        if (t0 := o.get("tier_default", "") if "tier_default" in o else default_tier(o)) != \
+                (t1 := r.get("tier_default", "") if "tier_default" in r else default_tier(r)):
             what.append({"kind": "tier", "from": TIERS.get(t0, "no tier"), "to": TIERS.get(t1, "no tier")})
         if abs(r["tot"] - o["tot"]) >= max(0.1 * abs(o["tot"]), 100_000):
             what.append({"kind": "dollars", "from": o["tot"], "to": r["tot"]})
@@ -377,10 +388,10 @@ class Store:
             "inputs_sha256": {"vendor_file": file_sha256(v), "exclusions_file": file_sha256(e) if e else None},
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
+        del res  # the screened table is on disk now; free it before the comparison reads two imports
+        gc.collect()
         if follows_id:
-            old = [json.loads(line) for line in open(self.run_dir(follows_id) / "vendors.jsonl")]
-            new = [json.loads(line) for line in open(d / "vendors.jsonl")]
-            (d / "changes.json").write_text(json.dumps(compare_runs(old, new), indent=2))
+            self._write_changes(d, follows_id)
         prev = self.run_ref(follows_id) if follows_id else None
         what = f"Follow-up to {prev['label']} of {prev['created_at'][:10]}: " if prev else ""
         self.audit(analyst, "run_created", None, run_id, f"{what}{meta['label']} ({meta['data_class']})")
@@ -694,11 +705,23 @@ class Store:
             raise KeyError(run_id)
         return d
 
+    def _write_changes(self, d: Path, follows_id: str) -> None:
+        old = slim_rows(self.run_dir(follows_id) / "vendors.jsonl")
+        new = slim_rows(d / "vendors.jsonl")
+        tmp = d / "changes.tmp"
+        tmp.write_text(json.dumps(compare_runs(old, new), indent=2))
+        tmp.replace(d / "changes.json")
+
     def summary(self, run_id: str) -> dict:
         d = self.run_dir(run_id)
         s = json.loads((d / "run.json").read_text())
         s["meta"] = json.loads((d / "meta.json").read_text())
         ch = d / "changes.json"
+        if not ch.exists() and s["meta"].get("follows_id"):
+            try:  # a follow-up cut off while saving (the server restarted): work the comparison out now
+                self._write_changes(d, s["meta"]["follows_id"])
+            except (KeyError, FileNotFoundError, ValueError):
+                pass
         s["changes"] = json.loads(ch.read_text()) if ch.exists() else None
         s["follows"] = self.run_ref(s["meta"]["follows_id"]) if s["meta"].get("follows_id") else None
         s["followed_by"] = [self.run_ref(r["id"]) for r in self.list_runs() if r.get("follows_id") == run_id]

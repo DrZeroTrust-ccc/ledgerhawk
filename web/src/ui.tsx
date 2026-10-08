@@ -89,6 +89,22 @@ export const TIER_SHORT: Record<string, string> = {
   explained: 'Explained',
 }
 
+const COLOR_STYLE: Record<string, string> = {
+  red: 'bg-crimson text-white',
+  yellow: 'bg-amber-200 text-amber-950',
+  green: 'bg-emerald-100 text-emerald-900',
+}
+
+/** Red, yellow or green: the same rules as the export for analysis (exports/analysis.py). */
+export function ColorChip({ color, why }: { color?: string; why?: string[] }) {
+  if (!color) return null
+  return (
+    <span title={why?.join('\n')} className={`inline-block rounded px-1.5 py-0.5 text-xs font-semibold capitalize ${COLOR_STYLE[color] ?? ''}`}>
+      {color}
+    </span>
+  )
+}
+
 export function TierChip({ tier, changed }: { tier: string; changed?: boolean }) {
   if (!tier) return null
   const color =

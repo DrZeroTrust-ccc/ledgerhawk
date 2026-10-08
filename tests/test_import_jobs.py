@@ -91,3 +91,17 @@ def test_quick_estimates_pause_while_a_heavy_job_runs(bg):
     finally:
         appmod.store._previews_running.discard(("x", "y"))
     assert not appmod.store.heavy_job_running()
+
+
+def test_a_follow_up_cut_off_while_saving_gets_its_comparison_back(bg):
+    """The server can restart between saving a follow-up's results and its 'what changed' comparison; the comparison
+    is then worked out the next time the import is opened."""
+    appmod, c, vendors, excl, root = bg
+    with open(vendors, "rb") as v:
+        first = _wait(c, c.post("/api/runs", files={"vendors": v}, data={"analyst": "Ana", "synthetic": "true"}).json()["job"]["id"])
+    f = _wait(c, c.post(f"/api/runs/{first['run_id']}/follow-up", data={"analyst": "Ana"}).json()["job"]["id"])
+    d = appmod.store.run_dir(f["run_id"])
+    expected = (d / "changes.json").read_text()
+    (d / "changes.json").unlink()
+    assert c.get(f"/api/runs/{f['run_id']}/record").json()["changes"] is not None
+    assert (d / "changes.json").read_text() == expected

@@ -5,9 +5,13 @@ export type RunRef = { id: string; label: string; created_at: string }
 
 export type Disposition = { value: string; note: string; analyst: string; at: string; run_id?: string; carried_from?: RunRef }
 
+export type VendorColor = 'red' | 'yellow' | 'green' | ''
 export type VendorRow = {
   uei: string
   name: string
+  /** Red, yellow or green, as in the export for analysis; empty when none applies. */
+  color?: VendorColor
+  color_why?: string[]
   queue: string
   bucket: string
   lane: string
