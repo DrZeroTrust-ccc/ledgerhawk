@@ -37,6 +37,7 @@ export default function VendorsPage() {
           Search
         </button>
       </form>
+      {q.trim().length === 1 && <p className="text-sm text-slate-600">Type at least 2 letters of a name, or a UEI.</p>}
       <ErrorNote error={error} />
       {q.trim().length >= 2 && !data && !error && <Loading />}
       {data && q.trim().length >= 2 && (
@@ -61,6 +62,9 @@ export default function VendorsPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {data.rows.length >= 50 && (
+            <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">Showing the first 50 matches. Add more of the name to narrow it down.</p>
           )}
         </Card>
       )}
