@@ -126,6 +126,7 @@ class Store:
             shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
         self._names: dict[str, dict[str, str]] = {}  # run id -> {uei: name}, for vendor lookups across runs
+        self._est: dict[str, tuple] = {}  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self.summary_client = None  # and a fake Claude
@@ -401,6 +402,25 @@ class Store:
                 meta["funnel"] = summ["funnel"]
                 meta["queue_counts"] = summ["queue_counts"]
                 out.append(meta)
+        return out
+
+    def estimate_base(self, run_id: str) -> tuple:
+        """What a quick estimate needs from an import: its vendor file as loaded, its stored rows by UEI, its restores.
+        Loading a large spreadsheet takes a while, so the last two imports used are kept in memory."""
+        from ..pipeline.ingest import load_vendor_file
+        with self._lock:
+            hit = self._est.get(run_id)
+        if hit:
+            return hit
+        d = self.run_dir(run_id)
+        meta = json.loads((d / "meta.json").read_text())
+        base, _ = load_vendor_file(d / "inputs" / meta["vendor_file"])
+        rows = {r["uei"]: r for r in self.vendors(run_id)["rows"] if r["uei"]}
+        out = (base, rows, set(meta.get("restore") or []))
+        with self._lock:
+            self._est[run_id] = out
+            while len(self._est) > 2:
+                self._est.pop(next(iter(self._est)))
         return out
 
     def import_rules(self, run_id: str) -> tuple[RuleSet, dict]:

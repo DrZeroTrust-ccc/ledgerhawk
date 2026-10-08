@@ -33,6 +33,39 @@ def rules_from(d: dict) -> RuleSet:
     return RuleSet(**{**RuleSet().to_dict(), **{k: v for k, v in d.items() if k in known}})
 
 
+def validate(rules: dict) -> dict:
+    """A draft's rules, checked against the shape of the shipped defaults; raises ValueError in plain words."""
+    base = RuleSet().to_dict()
+    out = {}
+    for k, v in rules.items():
+        if k not in base:
+            continue  # a setting this version of LedgerHawk doesn't have
+        d = base[k]
+        if isinstance(d, list):
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise ValueError(f"{k} must be a list of entries.")
+            v = [x.strip() for x in v if x.strip()]
+            if k.endswith("_patterns") or k in ("majors", "foreign_suffixes", "foreign_words"):
+                for x in v:
+                    try:
+                        re.compile(x)
+                    except re.error:
+                        raise ValueError(f"{x!r} isn't a valid name pattern.")
+        elif isinstance(d, (int, float)) and not isinstance(d, bool):
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                raise ValueError(f"{k} must be a number, zero or more.")
+            if k.endswith(("_ratio", "_share")) and v > 1 and k not in ("s3_ratio", "strong_s3_ratio"):
+                raise ValueError(f"{k} is a share, between 0 and 1.")
+            v = int(v) if isinstance(d, int) else float(v)
+        elif k == "r_young_start":
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v)):
+                raise ValueError("The young-registration date must be YYYY-MM-DD.")
+        elif k == "version":
+            v = str(v)
+        out[k] = v
+    return out
+
+
 def diff(old: dict, new: dict) -> list[dict]:
     """What differs between two rule sets: one entry per setting, lists as names added and removed."""
     out = []
@@ -136,6 +169,74 @@ class PolicyBook:
                 "reason": f"Copied from {src['name']} v{src_live['n']}", "changes": [],
             })
         return self.pack(pid)
+
+    # ---- drafts (one per pack), must-catch vendors, workload ----
+    def _pack_file(self, pid: str) -> Path:
+        if pid == DEFAULTS_ID:
+            raise ValueError(f"{DEFAULTS_NAME} can't be changed. Copy it to make your own pack.")
+        self._load(pid)
+        return self.root / pid / "pack.json"
+
+    def draft(self, pid: str) -> dict | None:
+        return next((v for v in self._load(pid)["versions"] if v["status"] == "draft"), None)
+
+    def save_draft(self, pid: str, rules: dict, by: str, reason: str = "") -> dict:
+        """Create or update the pack's draft: the full rule set, and how it differs from the live version."""
+        self._pack_file(pid)
+        clean = validate(rules)
+        with self._lock:
+            p = self._load(pid)
+            live = next(v for v in p["versions"] if v["status"] == "live")
+            old = next((v for v in p["versions"] if v["status"] == "draft"), None)
+            r = rules_from(clean)
+            v = {"n": old["n"] if old else max(x["n"] for x in p["versions"]) + 1, "status": "draft",
+                 "rules": r.to_dict(), "fingerprint": r.fingerprint(),
+                 "created_by": old["created_by"] if old else by, "updated_by": by, "approved_by": "", "at": _now(),
+                 "reason": reason.strip() or (old or {}).get("reason", ""), "changes": diff(live["rules"], r.to_dict())}
+            self._write_version(pid, v)
+        return v
+
+    def discard_draft(self, pid: str) -> dict:
+        self._pack_file(pid)
+        v = self.draft(pid)
+        if not v:
+            raise KeyError("no draft")
+        (self.root / pid / "versions" / f"{v['n']}.json").unlink()
+        return v
+
+    def settings(self, pid: str) -> dict:
+        """Must-catch vendors and workload assumptions (none for the built-in pack)."""
+        p = self._load(pid)
+        return {"must_catch": p.get("must_catch", []), "workload": p.get("workload") or {}}
+
+    def _update_pack(self, pid: str, **kw) -> dict:
+        f = self._pack_file(pid)
+        with self._lock:
+            data = json.loads(f.read_text())
+            data.update(kw)
+            f.write_text(json.dumps(data, indent=2))
+        return self.settings(pid)
+
+    def add_must_catch(self, pid: str, uei: str, name: str, reason: str, by: str) -> dict:
+        uei = uei.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]{12}", uei):
+            raise ValueError("Enter the vendor's 12-character UEI.")
+        if not reason.strip():
+            raise ValueError("Say why this vendor must stay flagged.")
+        items = [m for m in self.settings(pid)["must_catch"] if m["uei"] != uei]
+        items.append({"uei": uei, "name": name.strip(), "reason": reason.strip(), "added_by": by, "at": _now()})
+        return self._update_pack(pid, must_catch=items)
+
+    def remove_must_catch(self, pid: str, uei: str) -> dict:
+        items = self.settings(pid)["must_catch"]
+        if not any(m["uei"] == uei for m in items):
+            raise KeyError(uei)
+        return self._update_pack(pid, must_catch=[m for m in items if m["uei"] != uei])
+
+    def set_workload(self, pid: str, hours_per_lead: float, analysts: int) -> dict:
+        if not (0 < hours_per_lead <= 200) or not (0 < analysts <= 1000):
+            raise ValueError("Hours per lead and number of analysts must be positive.")
+        return self._update_pack(pid, workload={"hours_per_lead": hours_per_lead, "analysts": analysts})
 
     def describe(self, pid: str, name: str, description: str) -> dict:
         if pid == DEFAULTS_ID:

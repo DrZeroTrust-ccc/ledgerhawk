@@ -7,8 +7,17 @@ import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
 
 /** Admins (or anyone, while sign-in is off) create and change packs; everyone can read them. */
 export function useCanManagePolicies() {
+  return usePolicyRights().manage
+}
+
+/** manage: create packs, must-catch, workload (Admins). draft: edit rules into a draft (Analysts and Admins). */
+export function usePolicyRights() {
   const me = useAsync(() => api.me(), [])
-  return me.data ? me.data.auth === 'open' || me.data.role === 'admin' : false
+  const d = me.data
+  return {
+    manage: d ? d.auth === 'open' || d.role === 'admin' : false,
+    draft: d ? d.auth === 'open' || d.role === 'admin' || d.role === 'analyst' : false,
+  }
 }
 
 export default function PoliciesPage() {
@@ -115,8 +124,8 @@ export default function PoliciesPage() {
             </Button>
           </form>
           <p className="mt-2 text-xs text-slate-500">
-            A new pack starts as an exact copy, so it screens the same way until its rules are changed. Editing rules as plain-English sentences, with
-            a preview of the impact, comes next.
+            A new pack starts as an exact copy, so it screens the same way until its rules are changed. Open a pack and choose Edit rules to change
+            them as plain-English sentences, with the impact shown as you go.
           </p>
           <ErrorNote error={err} />
         </Card>

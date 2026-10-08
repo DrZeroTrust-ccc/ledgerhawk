@@ -34,7 +34,8 @@ from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
-from .policies import DEFAULTS_ID
+from .policies import DEFAULTS_ID, diff, rules_from, validate
+from ..pipeline.estimate import ESTIMATED, QUEUED, compare, screen
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -180,13 +181,185 @@ def list_policies():
     return {"packs": [{**p, "imports": used.get(p["id"], 0)} for p in store.policies.packs()]}
 
 
-@app.get("/api/policies/{pid}")
-def get_policy(pid: str):
+def _pack_or_404(pid: str) -> dict:
     try:
-        p = store.policies.pack(pid, with_rules=True)
+        return store.policies.pack(pid, with_rules=True)
     except KeyError:
         raise HTTPException(404, "No such policy pack")
-    return {**p, "imports": _pack_imports(pid)}
+
+
+def _workload(pid: str) -> dict:
+    """Review-time assumptions for a pack: what an Admin set, else 2.5 hours a lead and the people who work leads."""
+    w = store.policies.settings(pid)["workload"]
+    team = sum(1 for p in store.people() if p["role"] in ("analyst", "admin")) if VERIFIER is not None else 0
+    return {"hours_per_lead": w.get("hours_per_lead", 2.5), "analysts": w.get("analysts") or team or 1,
+            "set": bool(w)}
+
+
+@app.get("/api/policies/{pid}")
+def get_policy(pid: str):
+    p = _pack_or_404(pid)
+    d = store.policies.draft(pid)
+    return {**p, **store.policies.settings(pid), "workload": _workload(pid), "draft": d, "imports": _pack_imports(pid)}
+
+
+def _who_edits(analyst: str) -> str:
+    by = who(analyst).strip()
+    if not by:
+        raise HTTPException(400, "Enter your name so the change is attributed.")
+    return by
+
+
+class DraftBody(BaseModel):
+    rules: dict
+    reason: str = ""
+    analyst: str = ""
+
+
+@app.post("/api/policies/{pid}/draft")
+def save_policy_draft(pid: str, body: DraftBody):
+    """Analysts and Admins draft; nothing changes for anyone until a draft is approved and deployed."""
+    by = _who_edits(body.analyst)
+    _pack_or_404(pid)
+    try:
+        v = store.policies.save_draft(pid, body.rules, by, body.reason)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_draft", None, None, f"Saved draft v{v['n']} of {store.policies.pack(pid)['name']}: "
+                                                f"{len(v['changes'])} change(s) from the live version")
+    return v
+
+
+@app.post("/api/policies/{pid}/draft/discard")
+def discard_policy_draft(pid: str, analyst: str = Form("")):
+    by = _who_edits(analyst)
+    d = store.policies.draft(_pack_or_404(pid)["id"])
+    u = CURRENT_USER.get()
+    if d and u is not None and VERIFIER is not None and u.role != "admin" and d["created_by"] != u.name:
+        raise HTTPException(403, "Only the draft's author or an Admin can discard it.")
+    try:
+        v = store.policies.discard_draft(pid)
+    except KeyError:
+        raise HTTPException(404, "This pack has no draft.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_draft", None, None, f"Discarded draft v{v['n']} of {store.policies.pack(pid)['name']}")
+    return {"ok": True}
+
+
+@app.post("/api/policies/{pid}/must-catch")
+def add_must_catch(pid: str, uei: str = Form(""), name: str = Form(""), reason: str = Form(""), analyst: str = Form("")):
+    by = _can_manage_policies() or _who_edits(analyst)
+    _pack_or_404(pid)
+    try:
+        s = store.policies.add_must_catch(pid, uei, name, reason, by)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_pack", uei.strip().upper(), None, f"Must stay flagged in {store.policies.pack(pid)['name']}: {reason}")
+    return s
+
+
+@app.post("/api/policies/{pid}/must-catch/remove")
+def remove_must_catch(pid: str, uei: str = Form(""), reason: str = Form(""), analyst: str = Form("")):
+    by = _can_manage_policies() or _who_edits(analyst)
+    if not reason.strip():
+        raise HTTPException(400, "Say why this vendor no longer needs to stay flagged.")
+    try:
+        s = store.policies.remove_must_catch(pid, uei)
+    except KeyError:
+        raise HTTPException(404, "That vendor isn't on this pack's must-catch list.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_pack", uei, None, f"No longer must stay flagged in {store.policies.pack(pid)['name']}: {reason}")
+    return s
+
+
+@app.post("/api/policies/{pid}/workload")
+def set_workload(pid: str, hours_per_lead: float = Form(...), analysts: int = Form(...), analyst: str = Form("")):
+    by = _can_manage_policies() or _who_edits(analyst)
+    try:
+        store.policies.set_workload(pid, hours_per_lead, analysts)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except KeyError:
+        raise HTTPException(404, "No such policy pack")
+    store.audit(by, "policy_pack", None, None, f"Workload for {store.policies.pack(pid)['name']}: {hours_per_lead:g} hours "
+                                               f"per lead, {analysts} analyst(s)")
+    return _workload(pid)
+
+
+_LIVE_SCREENS: dict[tuple[str, str], object] = {}
+
+
+class EstimateBody(BaseModel):
+    rules: dict
+    import_id: str = ""
+
+
+def _estimate_inputs(pid: str, body: EstimateBody):
+    _pack_or_404(pid)
+    try:
+        draft = rules_from(validate(body.rules))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if body.import_id:
+        _get(store.run_dir, body.import_id)
+        rid = body.import_id
+    else:  # the pack's newest import, else the newest import of all
+        runs = store.list_runs()
+        mine = [m for m in runs if (m.get("policy") or {}).get("pack_id", DEFAULTS_ID) == pid]
+        if not (mine or runs):
+            raise HTTPException(400, "There's no import to estimate against yet. Start one first.")
+        rid = (mine or runs)[0]["id"]
+    return store.policies.live(pid)[0], draft, rid, store.estimate_base(rid)
+
+
+@app.post("/api/policies/{pid}/estimate")
+def estimate_policy(pid: str, body: EstimateBody):
+    """The draft's effect on the latest import's queue: counts, dollars, who comes in or drops out and why,
+    decisions it would undo, must-catch vendors, and review time. Seconds, not a full re-screen."""
+    live_rules, draft_rules, rid, (base, rows, restore) = _estimate_inputs(pid, body)
+    key = (rid, live_rules.fingerprint())
+    if key not in _LIVE_SCREENS:  # the live side doesn't change while someone edits, so it is worked out once
+        _LIVE_SCREENS[key] = screen(base, rows, live_rules, restore)
+        while len(_LIVE_SCREENS) > 2:
+            _LIVE_SCREENS.pop(next(iter(_LIVE_SCREENS)))
+    live, draft = _LIVE_SCREENS[key], screen(base, rows, draft_rules, restore)
+    out = compare(live, draft)
+    disp = store.dispositions(rid)
+    queued = set(draft.loc[draft["queue"].isin(QUEUED), "uei"])
+    present = set(draft["uei"])
+    changes = diff(live_rules.to_dict(), draft_rules.to_dict())
+    return {
+        "import": store.run_ref(rid), "live": out["live"], "draft": out["draft"],
+        "moves": out["moves"][:200], "moves_total": len(out["moves"]),
+        "conflicts": [{**m, "decision": disp[m["uei"]]["value"], "decided_by": disp[m["uei"]]["analyst"]}
+                      for m in out["moves"] if m["kind"] == "out" and m["uei"] in disp],
+        "must_catch": [{**m, "status": "kept" if m["uei"] in queued else "dropped" if m["uei"] in present else "absent"}
+                       for m in store.policies.settings(pid)["must_catch"]],
+        "changes": changes, "unestimated": sorted({c["key"] for c in changes} - ESTIMATED),
+        "workload": _workload(pid),
+    }
+
+
+class SensitivityBody(EstimateBody):
+    key: str
+    values: list[float]
+
+
+@app.post("/api/policies/{pid}/sensitivity")
+def policy_sensitivity(pid: str, body: SensitivityBody):
+    """How many leads the latest import would have at each value of one setting, everything else as drafted."""
+    if body.key not in ESTIMATED or not 1 <= len(body.values) <= 7:
+        raise HTTPException(400, "Pick a threshold the quick estimate covers, and up to 7 values.")
+    _, draft_rules, rid, (base, rows, restore) = _estimate_inputs(pid, body)
+    out = []
+    for v in body.values:
+        r = rules_from({**draft_rules.to_dict(), body.key: v})
+        df = screen(base, rows, r, restore)
+        q = df[df["queue"].isin(QUEUED)]
+        out.append({"value": v, "leads": int(len(q)), "dollars": float(q["tot"].clip(lower=0).sum())})
+    return {"import": store.run_ref(rid), "key": body.key, "points": out}
 
 
 @app.post("/api/policies")
