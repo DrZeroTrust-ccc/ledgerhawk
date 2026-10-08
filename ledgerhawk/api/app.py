@@ -1438,7 +1438,7 @@ def exclusion_check_status(run_id: str):
 
 
 @app.post("/api/runs/{run_id}/exclusion-check")
-def start_exclusion_check(run_id: str, analyst: str = Form("")):
+def start_exclusion_check(run_id: str, analyst: str = Form(""), again: bool = Form(False)):
     """Look up every excluded vendor in USAspending in the background, so the colors know who was paid after
     exclusion. Takes a few seconds per vendor."""
     analyst = who(analyst)
@@ -1446,7 +1446,7 @@ def start_exclusion_check(run_id: str, analyst: str = Form("")):
         raise HTTPException(400, "Enter your name so the check is attributed.")
     meta = _get(store.run_meta, run_id)
     job = store.start_import("check", f"Excluded vendors in {meta['label']}", analyst,
-                             lambda progress: store.check_excluded(run_id, analyst, progress))
+                             lambda progress: store.check_excluded(run_id, analyst, progress, again=again))
     return {"job": job}
 
 
