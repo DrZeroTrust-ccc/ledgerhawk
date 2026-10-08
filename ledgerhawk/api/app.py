@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import secrets
+import shutil
 import tempfile
 import threading
 from datetime import date, datetime, timezone
@@ -429,12 +430,15 @@ def deploy_policy(pid: str, comment: str = Form(""), ack_conflicts: bool = Form(
     store.audit(by, "policy_deployed", None, None,
                 f"Deployed {name} v{v['n']} ({'triage change' if triage else 'screening change'}, written by {v['created_by']}): "
                 f"{len(v['changes'])} change(s); leads {impact['leads'][0]} → {impact['leads'][1]}. {comment.strip()}")
-    out = {"version": v, "follow_up": None}
+    out = {"version": v, "follow_up": None, "follow_up_job": None}
     if follow_up:
-        try:
-            out["follow_up"] = store.follow_up_run(res["import"]["id"], by, policy_pack=pid)
-        except (ValueError, KeyError) as exc:
-            out["follow_up_error"] = str(exc)
+        rid = res["import"]["id"]
+        job = store.start_import("follow_up", f"{res['import']['label']} under {name} v{v['n']}", by,
+                                 lambda progress: store.follow_up_run(rid, by, policy_pack=pid, progress=progress))
+        out["follow_up_job"] = job
+        out["follow_up"] = job["run_id"] or None
+        if job["state"] == "error":
+            out["follow_up_error"] = job["error"]
     return out
 
 
@@ -666,7 +670,11 @@ async def create_run(
             raise HTTPException(400, "That policy pack no longer exists.")
     elif follows:  # a follow-up keeps the pack of the import it follows
         policy_pack = (store.run_meta(follows).get("policy") or {}).get("pack_id", "")
-    with tempfile.TemporaryDirectory() as tmp:
+    # The uploads are kept until the background import has copied them into the import's own folder.
+    up = store.root / "import_jobs" / "uploads"
+    up.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=up)
+    try:
         vp = Path(tmp) / Path(vendors.filename or "vendors.csv").name
         vp.write_bytes(await vendors.read())
         ep = None
@@ -689,13 +697,35 @@ async def create_run(
                 store.source(sam_source)
             except KeyError:
                 raise HTTPException(400, "That SAM source no longer exists.")
-        try:
-            run_id = await run_in_threadpool(store.create_run, vp, ep, ed, synthetic=synthetic, analyst=analyst,
-                                             sam_source=sam_source or None, follows_id=follows or None,
-                                             policy_pack=policy_pack or None)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc))
-    return {"id": run_id}
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+    def work(progress):
+        return store.create_run(vp, ep, ed, synthetic=synthetic, analyst=analyst, sam_source=sam_source or None,
+                                follows_id=follows or None, policy_pack=policy_pack or None, progress=progress)
+    job = await run_in_threadpool(store.start_import, "new", vp.name, analyst, work, Path(tmp))
+    return _job_reply(job)
+
+
+def _job_reply(job: dict) -> dict:
+    """An import job, and the import's id once it's done (at once when jobs run inline, as in tests)."""
+    if job["state"] == "error":
+        raise HTTPException(400, job["error"])
+    return {"id": job["run_id"] or None, "job": job}
+
+
+@app.get("/api/import-jobs")
+def list_import_jobs(active: bool = False):
+    return {"jobs": store.import_jobs(active=active)}
+
+
+@app.get("/api/import-jobs/{jid}")
+def get_import_job(jid: str):
+    try:
+        return store.import_job(jid)
+    except KeyError:
+        raise HTTPException(404, "No such import job")
 
 
 @app.get("/api/subject-screens")
@@ -976,11 +1006,10 @@ def follow_up_run(run_id: str, analyst: str = Form("")):
     analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the import is attributed.")
-    _get(store.run_dir, run_id)
-    try:
-        return {"id": store.follow_up_run(run_id, analyst)}
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
+    meta = _get(store.run_meta, run_id)
+    job = store.start_import("follow_up", meta["label"], analyst,
+                             lambda progress: store.follow_up_run(run_id, analyst, progress=progress))
+    return _job_reply(job)
 
 
 def run_record(run_id: str) -> dict:
@@ -1722,7 +1751,10 @@ def restore(run_id: str, uei: str, body: RestoreIn):
     data = _get(store.vendors, run_id)
     if uei not in data["by_uei"]:
         raise HTTPException(404, "Vendor not in this import")
-    return {"id": store.restore(run_id, uei, body.analyst, body.note)}
+    label = f"{data['by_uei'][uei].get('name') or uei} restored to {store.run_meta(run_id)['label']}"
+    job = store.start_import("restore", label, body.analyst,
+                             lambda progress: store.restore(run_id, uei, body.analyst, body.note, progress=progress))
+    return _job_reply(job)
 
 
 @app.get("/api/audit")

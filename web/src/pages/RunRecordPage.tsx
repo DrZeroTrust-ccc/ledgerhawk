@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs, usePlace } from '../nav'
-import { api, FLAG_LABEL, money, num, type ChangeItem, type ChangeWhat, type RunRecord } from '../api'
+import { api, FLAG_LABEL, money, num, type ChangeItem, type ChangeWhat, type ImportJob, type RunRecord } from '../api'
+import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, Stat, useAsync } from '../ui'
 
@@ -29,6 +30,15 @@ export function FollowUpButton({ runId }: { runId: string }) {
   const nav = useNavigate()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [job, setJob] = useState<ImportJob | null>(null)
+  const watched = useImportJob(job, (j) => {
+    if (j.state === 'done') nav(`/runs/${j.run_id}/record`)
+    else {
+      setError(`The follow-up import didn’t finish: ${j.error}`)
+      setBusy(false)
+      setJob(null)
+    }
+  })
   return (
     <span className="inline-flex flex-wrap items-center gap-2">
       <Button
@@ -41,8 +51,9 @@ export function FollowUpButton({ runId }: { runId: string }) {
           const f = new FormData()
           f.append('analyst', analyst)
           try {
-            const { id } = await api.followUp(runId, f)
-            nav(`/runs/${id}/record`)
+            const { id, job } = await api.followUp(runId, f)
+            if (id) nav(`/runs/${id}/record`)
+            else setJob(job)
           } catch (err) {
             setError((err as Error).message)
             setBusy(false)
@@ -51,6 +62,7 @@ export function FollowUpButton({ runId }: { runId: string }) {
       >
         {busy ? 'Importing…' : 'Start follow-up import'}
       </Button>
+      {watched && <ImportProgress job={watched} />}
       <ErrorNote error={error} />
     </span>
   )

@@ -22,6 +22,7 @@ import PoliciesPage from './pages/PoliciesPage'
 import PolicyPage from './pages/PolicyPage'
 import PolicyEditorPage from './pages/PolicyEditorPage'
 import PolicyReviewPage from './pages/PolicyReviewPage'
+import { ImportsIndicator } from './imports'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
 
@@ -161,22 +162,25 @@ export default function App() {
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-6">
               <Wordmark />
               <Nav admin={signedIn?.role === 'admin'} />
-              {signedIn ? (
-                <span className="ml-auto flex items-center gap-2 text-sm text-white/85" title={signedIn.email}>
-                  {signedIn.name}
-                  <span className="rounded bg-white/15 px-1.5 py-0.5 text-xs font-semibold text-white">{signedIn.role_label}</span>
-                </span>
-              ) : (
-                <label className="ml-auto flex items-center gap-2 text-xs text-white/75">
-                  Analyst
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="w-40 rounded bg-white/10 px-2 py-1 text-sm text-white placeholder:text-white/40 focus:bg-white/20 focus:outline-none"
-                  />
-                </label>
-              )}
+              <div className="ml-auto flex flex-wrap items-center gap-3">
+                <ImportsIndicator />
+                {signedIn ? (
+                  <span className="flex items-center gap-2 text-sm text-white/85" title={signedIn.email}>
+                    {signedIn.name}
+                    <span className="rounded bg-white/15 px-1.5 py-0.5 text-xs font-semibold text-white">{signedIn.role_label}</span>
+                  </span>
+                ) : (
+                  <label className="flex items-center gap-2 text-xs text-white/75">
+                    Analyst
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="Your name"
+                      className="w-40 rounded bg-white/10 px-2 py-1 text-sm text-white placeholder:text-white/40 focus:bg-white/20 focus:outline-none"
+                    />
+                  </label>
+                )}
+              </div>
             </div>
           </header>
           {signedIn?.role === 'executive' && (
@@ -206,10 +210,10 @@ export default function App() {
                 <Route path="/subjects/:id" element={<SubjectScreenPage />} />
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="/my-cases" element={<MyCasesPage />} />
-            <Route path="/policies" element={<PoliciesPage />} />
-            <Route path="/policies/:id" element={<PolicyPage />} />
-            <Route path="/policies/:id/edit" element={<PolicyEditorPage />} />
-            <Route path="/policies/:id/review" element={<PolicyReviewPage />} />
+                <Route path="/policies" element={<PoliciesPage />} />
+                <Route path="/policies/:id" element={<PolicyPage />} />
+                <Route path="/policies/:id/edit" element={<PolicyEditorPage />} />
+                <Route path="/policies/:id/review" element={<PolicyReviewPage />} />
                 {signedIn?.role === 'admin' && <Route path="/people" element={<PeoplePage myEmail={signedIn.email} />} />}
               </Routes>
             )}

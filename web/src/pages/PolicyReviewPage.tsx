@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, money, num, MUST_CATCH_LABEL, type PolicyPreview } from '../api'
+import { api, money, num, MUST_CATCH_LABEL, type ImportJob, type PolicyPreview } from '../api'
+import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
 import { changeText } from '../policyLabels'
@@ -164,7 +165,8 @@ export default function PolicyReviewPage() {
   const [ack, setAck] = useState(false)
   const [follow, setFollow] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState<{ n: number; follow: string | null; followErr?: string } | null>(null)
+  const [done, setDone] = useState<{ n: number; follow: string | null; followJob: ImportJob | null; followErr?: string } | null>(null)
+  const followJob = useImportJob(done?.followJob ?? null)
   usePlace(p ? `${p.name} (review)` : null)
 
   // Load the preview, and keep checking while it runs.
@@ -220,10 +222,16 @@ export default function PolicyReviewPage() {
             New imports in this pack use it from now on. Imports already made keep the rules they used. The change and its impact are on the Policies
             page for everyone, executives included.
           </p>
-          {done.follow && (
+          {followJob && followJob.state !== 'done' && followJob.state !== 'error' && (
+            <div className="mt-2">
+              <ImportProgress job={followJob} />
+            </div>
+          )}
+          {followJob?.state === 'error' && <p className="mt-2 text-sm text-crimson">The follow-up import didn’t finish: {followJob.error}</p>}
+          {(done.follow || (followJob?.state === 'done' && followJob.run_id)) && (
             <p className="mt-2 text-sm">
               A follow-up import re-screened under v{done.n}:{' '}
-              <Link to={`/runs/${done.follow}/record`} className="font-medium text-navy underline">
+              <Link to={`/runs/${done.follow || followJob?.run_id}/record`} className="font-medium text-navy underline">
                 open it
               </Link>
               .
@@ -365,7 +373,7 @@ export default function PolicyReviewPage() {
                   onClick={() =>
                     act(async () => {
                       const out = await api.deployPolicy(id, form({ comment, ack_conflicts: String(ack), follow_up: String(follow) }))
-                      setDone({ n: out.version.n, follow: out.follow_up, followErr: out.follow_up_error })
+                      setDone({ n: out.version.n, follow: out.follow_up, followJob: out.follow_up_job, followErr: out.follow_up_error })
                     })
                   }
                 >

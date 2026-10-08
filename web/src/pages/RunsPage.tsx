@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { lastPlace } from '../nav'
-import { api, money, num, queueTotal, type AutoSources, type RunMeta, type Source } from '../api'
+import { api, money, num, queueTotal, type AutoSources, type ImportJob, type RunMeta, type Source } from '../api'
+import { ImportProgress, RecentImports, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
 
@@ -202,13 +203,24 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
     if (follows) f.append('follows', follows)
     if (pack) f.append('policy_pack', pack)
     try {
-      const { id } = await api.createRun(f)
-      nav(`/runs/${id}`)
+      const { id, job } = await api.createRun(f)
+      if (id) nav(`/runs/${id}`)
+      else setJob(job)
     } catch (err) {
       setError((err as Error).message)
       setBusy(false)
     }
   }
+  // The import runs on the server; open it when it's done, or say why it failed.
+  const [job, setJob] = useState<ImportJob | null>(null)
+  const watched = useImportJob(job, (j) => {
+    if (j.state === 'done') nav(`/runs/${j.run_id}`)
+    else {
+      setError(`The import didn’t finish: ${j.error}`)
+      setBusy(false)
+      setJob(null)
+    }
+  })
 
   const field =
     'block w-full text-sm file:mr-3 file:rounded-md file:border-0 file:bg-navy-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-navy'
@@ -316,6 +328,7 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
           {busy ? 'Importing…' : 'Import and screen'}
         </Button>
       </div>
+      {watched && <ImportProgress job={watched} />}
       {stale.length > 0 && (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
           {stale.join(' ')} The {packRules.data?.name ?? 'selected'} pack expects fresher data; you can still go ahead.
@@ -349,6 +362,7 @@ export default function RunsPage() {
   return (
     <div className="space-y-6">
       <PickUp />
+      <RecentImports />
       <div>
         <h1 className="text-2xl font-semibold text-navy">Imports</h1>
         <p className="mt-1 text-sm text-slate-600">
