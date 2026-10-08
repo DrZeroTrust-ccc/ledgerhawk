@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { api, type MustCatch, type PolicyChange, type Workload } from '../api'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { api, num, type MustCatch, type PolicyChange, type Workload } from '../api'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
-import { formatSetting, SETTINGS, settingLabel } from '../policyLabels'
+import { changeText, formatSetting, SETTINGS, settingLabel } from '../policyLabels'
 import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
 import { usePolicyRights } from './PoliciesPage'
+
 
 function Change({ c }: { c: PolicyChange }) {
   if (c.added || c.removed)
@@ -174,8 +175,21 @@ export default function PolicyPage() {
   } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
+  const nav = useNavigate()
   if (error) return <ErrorNote error={error} />
   if (!p) return <Loading />
+  const rollback = async (n: number) => {
+    if (!window.confirm(`Start a draft that puts v${n}'s rules back? It goes through the full preview and approval like any change.`)) return
+    const f = new FormData()
+    f.append('version', String(n))
+    f.append('analyst', analyst)
+    try {
+      await api.rollbackPolicy(p.id, f)
+      nav(`/policies/${p.id}/review`)
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
 
   const groups: Record<string, [string, unknown][]> = {}
   for (const [k, v] of Object.entries(p.live_rules)) (groups[SETTINGS[k]?.group ?? 'Other'] ??= []).push([k, v])
@@ -253,6 +267,11 @@ export default function PolicyPage() {
           Draft v{p.draft.n} by {p.draft.created_by}
           {p.draft.updated_by && p.draft.updated_by !== p.draft.created_by ? `, last changed by ${p.draft.updated_by}` : ''}: {p.draft.changes.length}{' '}
           {p.draft.changes.length === 1 ? 'change' : 'changes'} from v{p.live}. Imports keep using v{p.live} until it’s approved and deployed.
+          {p.draft.submitted_by ? ` Submitted for approval by ${p.draft.submitted_by}.` : ''}
+          {p.draft.returned ? ` Returned by ${p.draft.returned.by}: “${p.draft.returned.comment}”` : ''}{' '}
+          <Link to={`/policies/${p.id}/review`} className="font-medium text-navy underline">
+            Review and deploy
+          </Link>
         </p>
       )}
 
@@ -320,11 +339,24 @@ export default function PolicyPage() {
                     </span>
                   </div>
                   <div className="text-slate-700">{v.reason}</div>
+                  {v.changes.length > 0 && <div className="text-xs text-slate-600">{v.changes.map(changeText).join('; ')}</div>}
                   <div className="text-xs text-slate-500">
                     {v.created_by}
                     {v.approved_by ? `, approved by ${v.approved_by}` : ''}
-                    {v.at ? ` · ${v.at.slice(0, 10)}` : ''}
+                    {(v.approved_at ?? v.at) ? ` · ${(v.approved_at ?? v.at).slice(0, 10)}` : ''}
                   </div>
+                  {v.approval_comment && <div className="text-xs text-slate-600">“{v.approval_comment}”</div>}
+                  {v.impact && (
+                    <div className="text-xs text-slate-600">
+                      On {v.impact.import.label}: leads {num(v.impact.leads[0])} → {num(v.impact.leads[1])}, {num(v.impact.moves)} vendors moved
+                      {v.impact.conflicts ? `, ${v.impact.conflicts} decided leads dropped` : ''}
+                    </div>
+                  )}
+                  {v.status === 'retired' && rights.draft && !p.draft && (
+                    <button type="button" onClick={() => rollback(v.n)} className="text-xs text-navy underline">
+                      Roll back to this
+                    </button>
+                  )}
                 </li>
               ))}
             </ol>

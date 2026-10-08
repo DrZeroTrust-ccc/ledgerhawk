@@ -112,15 +112,60 @@ export type Me =
 /** The policy pack version an import was screened under. */
 export type PolicyRef = { pack_id: string; pack_name: string; version: number; fingerprint: string }
 export type PolicyChange = { key: string; from?: unknown; to?: unknown; added?: string[]; removed?: string[] }
+export type PolicyImpact = {
+  import: RunRef
+  leads: [number, number]
+  dollars: [number, number]
+  moves: number
+  tier_moves: number
+  conflicts: number
+  workload: Workload
+  triage_only: boolean
+}
 export type PolicyVersion = {
   n: number
   status: 'live' | 'retired' | 'draft'
   fingerprint: string
   created_by: string
+  updated_by?: string
   approved_by: string
+  approved_at?: string
+  approval_comment?: string
+  impact?: PolicyImpact
+  submitted_by?: string
+  submitted_at?: string
+  returned?: { by: string; at: string; comment: string } | null
   at: string
   reason: string
   changes: PolicyChange[]
+}
+export type PolicyRecent = {
+  pack_id: string
+  pack_name: string
+  n: number
+  approved_by: string
+  approved_at: string
+  created_by: string
+  reason: string
+  approval_comment: string
+  changes: PolicyChange[]
+  impact: PolicyImpact
+}
+export type PolicyPreview = {
+  fingerprint: string
+  state: 'running' | 'done' | 'error'
+  step: string
+  by: string
+  started_at: string
+  finished_at: string
+  error: string
+  result:
+    | (Omit<PolicyEstimate, 'unestimated'> & {
+        at: string
+        tier_moves: { uei: string; name: string; tot: number; queue: string; from: string; to: string }[]
+        tier_moves_total: number
+      })
+    | null
 }
 export type PolicyPack = {
   id: string
@@ -719,7 +764,19 @@ export const api = {
   people: () => req<People>('/api/people'),
   savePerson: (form: FormData) => req<Person>('/api/people', { method: 'POST', body: form }),
   removePerson: (form: FormData) => req<{ ok: boolean }>('/api/people/remove', { method: 'POST', body: form }),
-  policies: () => req<{ packs: PolicyPack[] }>('/api/policies'),
+  policies: () => req<{ packs: PolicyPack[]; recent: PolicyRecent[] }>('/api/policies'),
+  policyPreview: (id: string) => req<{ preview: PolicyPreview | null }>(`/api/policies/${encodeURIComponent(id)}/preview`),
+  startPolicyPreview: (id: string, form: FormData) =>
+    req<{ preview: PolicyPreview | null }>(`/api/policies/${encodeURIComponent(id)}/preview`, { method: 'POST', body: form }),
+  submitPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/submit`, { method: 'POST', body: form }),
+  returnPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/return`, { method: 'POST', body: form }),
+  deployPolicy: (id: string, form: FormData) =>
+    req<{ version: PolicyVersion; follow_up: string | null; follow_up_error?: string }>(`/api/policies/${encodeURIComponent(id)}/deploy`, {
+      method: 'POST',
+      body: form,
+    }),
+  rollbackPolicy: (id: string, form: FormData) =>
+    req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/rollback`, { method: 'POST', body: form }),
   policy: (id: string) => req<PolicyDetail>(`/api/policies/${encodeURIComponent(id)}`),
   createPolicy: (form: FormData) => req<PolicyPack>('/api/policies', { method: 'POST', body: form }),
   savePolicyDraft: (id: string, body: { rules: Record<string, unknown>; reason: string; analyst: string }) =>

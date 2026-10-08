@@ -256,7 +256,19 @@ changes for anyone until a draft is approved and deployed. As you edit, a quick 
 in seconds (`pipeline/estimate.py`: it re-runs the cheap stages and reuses the import's SAM and exclusion results)
 and shows leads, dollars, review hours, work per analyst, who comes in or drops out and why, decisions the change
 would undo, and the pack's must-catch vendors. Thresholds show a small chart of how many leads each value gives.
-SAM, link and exclusion-matching settings are marked for the full preview, which re-runs everything (next step).
+SAM, link and exclusion-matching settings are marked for the full preview. For the settings it covers, the estimate
+puts every vendor in the same queue a full re-run would (tested).
+
+**Review and deploy** (`/policies/<pack>/review`): the **full preview** re-runs the whole screen on the latest import
+with the saved draft, in the background, without saving an import, and lists every vendor that drops out, comes in
+or changes tier, with the reason, plus decided leads it would drop and the must-catch check. An Analyst submits it;
+an Admin deploys it or returns it with comments. A change to what gets flagged needs an Admin who didn't write the
+draft; a triage-only change (which queue, not whether flagged: the "strong signal" settings and freshness warnings)
+an Admin can deploy alone. Deploying needs the preview, a comment, no dropped must-catch vendor, and an
+acknowledgement of any decided leads it drops; it can start a follow-up import under the new version. Imports
+already made never change. Every deployment, with its impact, is listed under **Recent policy changes** on the
+Policies page, and any retired version can be rolled back (as a new draft that goes through the same review).
+The pack's freshness limits warn when an import is started with an older SAM or exclusions extract.
 
 ### Sign-in and roles
 

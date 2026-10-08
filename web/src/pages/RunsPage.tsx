@@ -173,6 +173,16 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
   const [follows, setFollows] = useState('')
   const packs = useAsync(() => api.policies(), [])
   const [pack, setPack] = useState('')
+  // The chosen pack's freshness limits, checked against the extracts picked above.
+  const packRules = useAsync(() => api.policy(pack || 'ledgerhawk-defaults'), [pack])
+  const limits = packRules.data?.live_rules as { sam_stale_days?: number; exclusions_stale_days?: number } | undefined
+  const stale: string[] = []
+  const samPicked = samSources.find((s) => s.id === samSource)
+  const exPicked = exclusions ? null : exSources.find((s) => s.id === exSource)
+  if (limits && samPicked && limits.sam_stale_days !== undefined && samPicked.age_days > limits.sam_stale_days)
+    stale.push(`The SAM extract is ${samPicked.age_days} days old (limit ${limits.sam_stale_days}).`)
+  if (limits && exPicked && limits.exclusions_stale_days !== undefined && exPicked.age_days > limits.exclusions_stale_days)
+    stale.push(`The exclusions extract is ${exPicked.age_days} days old (limit ${limits.exclusions_stale_days}).`)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -306,6 +316,11 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
           {busy ? 'Importing…' : 'Import and screen'}
         </Button>
       </div>
+      {stale.length > 0 && (
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          {stale.join(' ')} The {packRules.data?.name ?? 'selected'} pack expects fresher data; you can still go ahead.
+        </p>
+      )}
       {!analyst.trim() && <p className="text-xs text-slate-500">Enter your name in the header so the import is attributed to you.</p>}
       <ErrorNote error={error} />
     </form>

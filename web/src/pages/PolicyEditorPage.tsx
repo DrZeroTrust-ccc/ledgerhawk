@@ -482,7 +482,13 @@ export default function PolicyEditorPage() {
               </p>
             )}
             <ErrorNote error={err} />
-            <p className="text-xs text-slate-500">Full preview, approval and deploy come in the next step.</p>
+            <p className="text-xs text-slate-500">
+              When the draft is saved,{' '}
+              <Link to={`/policies/${id}/review`} className="text-navy underline">
+                run the full preview and send it for approval
+              </Link>
+              .
+            </p>
           </div>
         </aside>
       </div>

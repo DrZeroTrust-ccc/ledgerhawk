@@ -1,7 +1,7 @@
 """Quick estimate: what a draft rule set would do to an import's queue, in seconds.
 
-Re-runs the cheap stages (who is screened, and the summary-data signals) on the import's vendor file, and reuses
-the import's own SAM and exclusion results, which are the slow part. It runs the live rules the same way, so the
+Re-runs the cheap stages (who is screened, the summary-data signals and the small-vendor integrity lane) on the
+import's vendor file, and reuses the import's own SAM and exclusion results, which are the slow part. It runs the live rules the same way, so the
 difference between the two is the draft's effect and the approximation cancels out. Settings that only the SAM or
 exclusion matching use are listed as "needs the full preview" rather than guessed.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .integrity import integrity_screen
 from .links import SAM_SIGNALS, relationship_bucket
 from .rules import RuleSet
 from .run import QUEUE_EXCLUSION_FLAGS
@@ -21,6 +22,7 @@ ESTIMATED = {
     "s1_min", "s1_fade_ratio", "s2_fy25_min", "s3_fy24_min", "s3_fy25_min", "s3_ratio", "s4_total", "s4_total_weapons",
     "s4_psc_prefixes", "s5_total", "s5_naics2", "s5_psc_prefixes", "s6_deob", "s6_share",
     "strong_s2_fy25", "strong_s3_ratio", "strong_s3_fy25", "strong_s4_total", "version",
+    "sam_stale_days", "exclusions_stale_days",  # warnings when starting an import; no effect on the queue
 }
 QUEUED = ("priority", "relationship", "strong", "exclusion", "integrity")
 
@@ -32,18 +34,23 @@ def screen(base: pd.DataFrame, baseline: dict[str, dict], rules: RuleSet, restor
     old = [baseline.get(u, {}) for u in df["uei"]]
     df["exclusion"] = [o.get("exclusion", []) for o in old]
     df["exclusion_flags"] = [o.get("exclusion_flags", []) for o in old]
+    df["sam"] = [o.get("sam") for o in old]
+    df["neighbors"] = [o.get("neighbors") or [] for o in old]
     df = stage1(df, rules, restore)
     df = stage2(df, rules)
     df["signals"] = [s + [x for x in o.get("signals", []) if x["id"] in SAM_SIGNALS] for s, o in zip(df["signals"], old)]
     df["bucket"] = relationship_bucket(df)
 
-    def queue(r, o):
+    def queue(r):
         if r.lane == INTEGRITY:
-            return "integrity" if o.get("queue") == "integrity" else ""
+            return ""
         if set(r.exclusion_flags) & QUEUE_EXCLUSION_FLAGS:
             return "exclusion"
         return r.bucket if r.bucket in ("priority", "relationship", "strong") else ""
-    df["queue"] = [queue(r, o) for r, o in zip(df.itertuples(index=False), old)]
+    df["queue"] = [queue(r) for r in df.itertuples(index=False)]
+    # Small vendors with an exclusion tie are leads in the integrity lane, worked out the way the pipeline does.
+    lead = integrity_screen(df).map(lambda i: bool(i and i["tier"] in ("A", "B", "C")))
+    df.loc[lead, "queue"] = "integrity"
     return df
 
 

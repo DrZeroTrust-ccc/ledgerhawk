@@ -61,8 +61,8 @@ def _same_person(a: str, b: str) -> bool:
 
 
 SOURCE_KINDS = {
-    "sam": {"label": "SAM.gov entity extract (V2)", "stale_days": 35},
-    "exclusions": {"label": "SAM exclusions extract", "stale_days": 2},
+    "sam": {"label": "SAM.gov entity extract (V2)", "stale_days": RuleSet().sam_stale_days},
+    "exclusions": {"label": "SAM exclusions extract", "stale_days": RuleSet().exclusions_stale_days},
 }
 
 
@@ -126,6 +126,7 @@ class Store:
             shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
         self._names: dict[str, dict[str, str]] = {}  # run id -> {uei: name}, for vendor lookups across runs
+        self._previews_running: set[tuple[str, str]] = set()
         self._est: dict[str, tuple] = {}  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
@@ -372,7 +373,8 @@ class Store:
         self.audit(analyst, "run_created", None, run_id, f"{what}{meta['label']} ({meta['data_class']})")
         return run_id
 
-    def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "") -> str:
+    def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "",
+                      policy_pack: str | None = None) -> str:
         """A new run of the same list against the newest SAM and exclusions extracts (or a newer vendor file), linked
         to the run it follows so its changes and carried-forward decisions are clear."""
         d = self.run_dir(run_id)
@@ -391,7 +393,7 @@ class Store:
         return self.create_run(vendor_path or d / "inputs" / meta["vendor_file"], excl, ed,
                                synthetic=meta["data_class"] == "synthetic", analyst=analyst, sam_source=sam,
                                label=label or meta["label"], follows_id=run_id,
-                               policy_pack=(meta.get("policy") or {}).get("pack_id"))
+                               policy_pack=policy_pack or (meta.get("policy") or {}).get("pack_id"))
 
     def list_runs(self) -> list[dict]:
         out = []
@@ -422,6 +424,123 @@ class Store:
             while len(self._est) > 2:
                 self._est.pop(next(iter(self._est)))
         return out
+
+    # ---- full preview of a policy draft: the whole screen re-run, nothing saved as an import ----
+    def preview_import(self, pid: str) -> str:
+        """The import a pack's previews and estimates use: its newest import, else the newest import of all."""
+        runs = self.list_runs()
+        mine = [m for m in runs if (m.get("policy") or {}).get("pack_id", DEFAULTS_ID) == pid]
+        if not (mine or runs):
+            raise ValueError("There's no import to preview against yet. Start one first.")
+        return (mine or runs)[0]["id"]
+
+    def _preview_file(self, pid: str, fp: str) -> Path:
+        d = self.policies.root / pid / "previews"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{fp}.json"
+
+    def policy_preview(self, pid: str) -> dict | None:
+        """The full preview of the pack's current draft, running or done; None if there is no draft or no preview."""
+        d = self.policies.draft(pid)
+        if not d:
+            return None
+        f = self._preview_file(pid, d["fingerprint"])
+        with self._lock:  # Windows refuses to replace a file another thread is reading
+            return json.loads(f.read_text()) if f.exists() else None
+
+    def start_policy_preview(self, pid: str, by: str) -> dict:
+        draft = self.policies.draft(pid)
+        if not draft:
+            raise KeyError("no draft")
+        fp, key = draft["fingerprint"], (pid, draft["fingerprint"])
+        f = self._preview_file(pid, fp)
+        with self._lock:
+            if key in self._previews_running:
+                return json.loads(f.read_text())
+            self._previews_running.add(key)
+            if f.exists():  # a finished or failed preview of this same draft is replaced
+                f.unlink()
+        state = {"fingerprint": fp, "state": "running", "step": "Starting", "by": by, "started_at": _now(),
+                 "finished_at": "", "error": "", "result": None}
+
+        def write(**kw):
+            with self._lock:
+                state.update(kw)
+                tmp = f.with_suffix(".tmp")
+                tmp.write_text(json.dumps(state, indent=2))
+                tmp.replace(f)
+        write()
+
+        def work():
+            try:
+                write(state="done", step="Done", finished_at=_now(),
+                      result=self._run_preview(pid, draft, lambda step: write(step=step)))
+            except (ValueError, KeyError, FileNotFoundError) as exc:
+                write(state="error", finished_at=_now(), error=str(exc).strip("'\""))
+            except Exception as exc:
+                logging.getLogger("ledgerhawk").exception("policy preview %s failed", pid)
+                write(state="error", finished_at=_now(), error=f"Unexpected error ({type(exc).__name__}). Try again.")
+            finally:
+                with self._lock:
+                    self._previews_running.discard(key)
+        if self.jobs_inline:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+        return dict(state)
+
+    def _run_preview(self, pid: str, draft: dict, step) -> dict:
+        import pandas as pd
+
+        from ..pipeline.estimate import QUEUED, compare
+        rid = self.preview_import(pid)
+        d = self.run_dir(rid)
+        meta = json.loads((d / "meta.json").read_text())
+        live_rules = self.policies.live(pid)[0]
+        draft_rules = rules_from(draft["rules"])
+        sam = None
+        if meta.get("sam_source"):
+            try:
+                sam = self.source(meta["sam_source"])
+            except KeyError:
+                raise ValueError("The SAM extract this import used has been removed, so it can't be re-screened.")
+        excl = d / "inputs" / meta["exclusions_file"] if meta.get("exclusions_file") else None
+        ed = date.fromisoformat(meta["exclusions_date"]) if meta.get("exclusions_date") else None
+
+        def full(rules: RuleSet) -> pd.DataFrame:
+            return run_pipeline(d / "inputs" / meta["vendor_file"], excl, ed, restore=set(meta.get("restore") or []),
+                                sam_file=sam["path"] if sam else None,
+                                sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
+                                sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rules).vendors
+
+        step(f"Re-screening {meta['label']} with the draft")
+        new = full(draft_rules).reset_index(drop=True)
+        if self.import_rules(rid)[0].fingerprint() == live_rules.fingerprint():
+            old = pd.DataFrame(self.vendors(rid)["rows"])  # the import already ran under the live version
+        else:
+            step(f"Re-screening {meta['label']} with the live version")
+            old = full(live_rules).reset_index(drop=True)
+        if len(old) != len(new):
+            raise ValueError("The import's vendor file no longer matches its results, so it can't be compared.")
+        step("Comparing")
+        out = compare(old, new)
+        disp = self.dispositions(rid)
+        tiers = [{"uei": a.uei, "name": a.name, "tot": float(a.tot), "queue": b.queue, "from": a.tier_default,
+                  "to": b.tier_default}
+                 for a, b in zip(old.itertuples(index=False), new.itertuples(index=False))
+                 if a.queue and a.queue == b.queue and a.tier_default != b.tier_default]
+        queued = set(new.loc[new["queue"].isin(QUEUED), "uei"])
+        present = set(new["uei"])
+        return {
+            "import": self.run_ref(rid), "fingerprint": draft["fingerprint"], "at": _now(),
+            "live": out["live"], "draft": out["draft"], "moves": out["moves"][:500], "moves_total": len(out["moves"]),
+            "tier_moves": tiers[:500], "tier_moves_total": len(tiers),
+            "conflicts": [{**m, "decision": disp[m["uei"]]["value"], "decided_by": disp[m["uei"]]["analyst"]}
+                          for m in out["moves"] if m["kind"] == "out" and m["uei"] in disp],
+            "must_catch": [{**m, "status": "kept" if m["uei"] in queued else "dropped" if m["uei"] in present else "absent"}
+                           for m in self.policies.settings(pid)["must_catch"]],
+            "changes": draft["changes"],
+        }
 
     def import_rules(self, run_id: str) -> tuple[RuleSet, dict]:
         """The exact rules an import was screened with, and its policy reference. Imports from before policy packs
