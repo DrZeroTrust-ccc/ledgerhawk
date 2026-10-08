@@ -87,8 +87,12 @@ def run_pipeline(
     sam_extract_date: date | None = None,
     sam_file: str | Path | None = None,
     sam_cache_dir: str | Path | None = None,
+    progress=None,
 ) -> RunResult:
+    """`progress(step)`, when given, is told which stage is running, for an import's progress bar."""
     rules = rules or RuleSet()
+    step = progress or (lambda s: None)
+    step("Reading the vendor file")
     df, validation = load_vendor_file(vendor_file)
     if "uei" in validation.missing_columns or {"fy24", "fy25"} <= set(validation.missing_columns):
         found = ", ".join(validation.column_mapping) or "none"
@@ -100,12 +104,14 @@ def run_pipeline(
     if exclusions_file:
         if exclusions_date is None:
             raise ValueError("exclusions_date is required so the active-record filter is reproducible")
+        step("Checking the exclusions extract")
         ex = load_exclusions(exclusions_file, exclusions_date)
         df = exclusion_pass(df, ex, rules)
     else:
         df["exclusion"] = [[] for _ in range(len(df))]
         df["exclusion_flags"] = [[] for _ in range(len(df))]
 
+    step("Screening: who is in scope and the spending signals")
     df = stage1(df, rules, restore)
     df = stage2(df, rules)
 
@@ -113,6 +119,7 @@ def run_pipeline(
     if sam_file:
         if sam_extract_date is None:
             raise ValueError("sam_extract_date is required so registration status is reproducible")
+        step("Matching vendors to the SAM entity extract")
         sam = load_sam(sam_file, sam_extract_date, sam_cache_dir)
         df = sam_screen(df, sam, rules, ex)
         df["bucket"] = relationship_bucket(df)
@@ -120,6 +127,7 @@ def run_pipeline(
         df["sam"] = None
         df["links"] = [[] for _ in range(len(df))]
         df["neighbors"] = [[] for _ in range(len(df))]
+    step("Building the queue and the small-vendor integrity lane")
     df["queue"] = df.apply(_queue, axis=1)
     df["integrity"] = integrity_screen(df)
     lane_lead = df["integrity"].map(lambda i: bool(i and i["tier"] in ("A", "B", "C")))

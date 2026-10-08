@@ -105,6 +105,21 @@ export type GraphNode = {
   in_run?: boolean
   source?: string
 }
+/** An import running on the server in the background (new, follow-up or restore). */
+export type ImportJob = {
+  id: string
+  kind: 'new' | 'follow_up' | 'restore'
+  label: string
+  by: string
+  state: 'queued' | 'running' | 'done' | 'error'
+  step: string
+  started_at: string
+  finished_at: string
+  run_id: string
+  error: string
+}
+export type ImportStart = { id: string | null; job: ImportJob }
+
 /** Who is signed in. auth "open": sign-in is off and analysts type their name. */
 export type Me =
   | { auth: 'open' }
@@ -780,7 +795,7 @@ export const api = {
   submitPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/submit`, { method: 'POST', body: form }),
   returnPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/return`, { method: 'POST', body: form }),
   deployPolicy: (id: string, form: FormData) =>
-    req<{ version: PolicyVersion; follow_up: string | null; follow_up_error?: string }>(`/api/policies/${encodeURIComponent(id)}/deploy`, {
+    req<{ version: PolicyVersion; follow_up: string | null; follow_up_job: ImportJob | null; follow_up_error?: string }>(`/api/policies/${encodeURIComponent(id)}/deploy`, {
       method: 'POST',
       body: form,
     }),
@@ -808,7 +823,9 @@ export const api = {
     req<PolicyPack>(`/api/policies/${encodeURIComponent(id)}/describe`, { method: 'POST', body: form }),
   runs: () => req<RunMeta[]>('/api/runs'),
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
-  createRun: (form: FormData) => req<{ id: string }>('/api/runs', { method: 'POST', body: form }),
+  createRun: (form: FormData) => req<ImportStart>('/api/runs', { method: 'POST', body: form }),
+  importJobs: (active: boolean) => req<{ jobs: ImportJob[] }>(`/api/import-jobs${active ? '?active=true' : ''}`),
+  importJob: (id: string) => req<ImportJob>(`/api/import-jobs/${encodeURIComponent(id)}`),
   vendors: (id: string, params: Record<string, string>) =>
     req<{ total: number; dollars: number; rows: VendorRow[] }>(`/api/runs/${id}/vendors?${new URLSearchParams(params)}`),
   histogram: (id: string) => req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),
@@ -816,7 +833,7 @@ export const api = {
   setDisposition: (id: string, uei: string, body: { value: string; note: string; analyst: string }) =>
     req<Disposition>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/disposition`, json(body)),
   restore: (id: string, uei: string, body: { note: string; analyst: string }) =>
-    req<{ id: string }>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/restore`, json(body)),
+    req<ImportStart>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/restore`, json(body)),
   audit: () => req<HistoryItem[]>('/api/audit'),
   sources: () => req<{ sources: Source[]; auto?: AutoSources }>('/api/sources'),
   refreshSources: (form: FormData) => req<AutoSources>('/api/sources/refresh', { method: 'POST', body: form }),
@@ -880,7 +897,7 @@ export const api = {
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),
   myCases: (analyst: string) => req<{ rows: (VendorRow & { run: RunRef })[] }>(`/api/my-cases?${new URLSearchParams({ analyst })}`),
   record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
-  followUp: (id: string, form: FormData) => req<{ id: string }>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
+  followUp: (id: string, form: FormData) => req<ImportStart>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
   confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>
     req<{ confirmed: number }>(`/api/runs/${id}/confirm-carried`, json(body)),
   assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),

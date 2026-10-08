@@ -127,6 +127,11 @@ class Store:
         self._cache: dict[str, dict] = {}
         self._names: dict[str, dict[str, str]] = {}  # run id -> {uei: name}, for vendor lookups across runs
         self._previews_running: set[tuple[str, str]] = set()
+        # Imports run in the background, one at a time so a small server doesn't run out of memory. Jobs from an
+        # earlier process (the server restarted mid-import) are marked failed when they're next read.
+        self._boot = secrets.token_hex(6)
+        self._import_gate = threading.Lock()
+        (self.root / "import_jobs").mkdir(parents=True, exist_ok=True)
         self._est: dict[str, tuple] = {}  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
@@ -324,7 +329,7 @@ class Store:
                    *, synthetic: bool, analyst: str, restore: set[str] | None = None,
                    parent_id: str | None = None, label: str = "", sam_source: str | None = None,
                    follows_id: str | None = None, policy_pack: str | None = None,
-                   rules: tuple[RuleSet, dict] | None = None) -> str:
+                   rules: tuple[RuleSet, dict] | None = None, progress=None) -> str:
         """Screen a vendor file. It uses the live version of `policy_pack` (LedgerHawk defaults when none), or exactly
         `rules` (a restore re-screens with its parent's rules), and keeps those rules beside the results."""
         sam = self.source(sam_source) if sam_source else None
@@ -345,10 +350,13 @@ class Store:
             res = run_pipeline(v, e, exclusions_date, restore=restore,
                                sam_file=sam["path"] if sam else None,
                                sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
-                               sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rule_set)
+                               sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rule_set,
+                               progress=progress)
         except Exception:
             shutil.rmtree(d, ignore_errors=True)  # no half-made run left behind
             raise
+        if progress:
+            progress("Saving the results")
         res.manifest["data_class"] = "synthetic" if synthetic else "production"
         res.manifest["policy"] = policy
         res.write(d)
@@ -374,7 +382,7 @@ class Store:
         return run_id
 
     def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "",
-                      policy_pack: str | None = None) -> str:
+                      policy_pack: str | None = None, progress=None) -> str:
         """A new run of the same list against the newest SAM and exclusions extracts (or a newer vendor file), linked
         to the run it follows so its changes and carried-forward decisions are clear."""
         d = self.run_dir(run_id)
@@ -393,7 +401,7 @@ class Store:
         return self.create_run(vendor_path or d / "inputs" / meta["vendor_file"], excl, ed,
                                synthetic=meta["data_class"] == "synthetic", analyst=analyst, sam_source=sam,
                                label=label or meta["label"], follows_id=run_id,
-                               policy_pack=policy_pack or (meta.get("policy") or {}).get("pack_id"))
+                               policy_pack=policy_pack or (meta.get("policy") or {}).get("pack_id"), progress=progress)
 
     def list_runs(self) -> list[dict]:
         out = []
@@ -424,6 +432,72 @@ class Store:
             while len(self._est) > 2:
                 self._est.pop(next(iter(self._est)))
         return out
+
+    # ---- imports in the background ----
+    def _import_job_file(self, jid: str) -> Path:
+        if not re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{6}", jid):
+            raise KeyError(jid)
+        return self.root / "import_jobs" / f"{jid}.json"
+
+    def import_job(self, jid: str) -> dict:
+        f = self._import_job_file(jid)
+        with self._lock:
+            if not f.exists():
+                raise KeyError(jid)
+            j = json.loads(f.read_text())
+            if j["state"] in ("queued", "running") and j.get("boot") != self._boot:
+                j.update(state="error", finished_at=j.get("finished_at") or _now(),
+                         error="LedgerHawk restarted while this was running. Start it again.")
+                f.write_text(json.dumps(j, indent=2))
+        return j
+
+    def import_jobs(self, active: bool = False, limit: int = 20) -> list[dict]:
+        names = sorted((p.stem for p in (self.root / "import_jobs").glob("*.json")), reverse=True)[:200]
+        jobs = []
+        for n in names:
+            try:
+                jobs.append(self.import_job(n))
+            except (KeyError, ValueError):
+                continue
+        if active:
+            jobs = [j for j in jobs if j["state"] in ("queued", "running")]
+        return jobs[:limit]
+
+    def start_import(self, kind: str, label: str, by: str, fn, cleanup: Path | None = None) -> dict:
+        """Run fn(progress) -> import id in the background. progress(step) updates the job; returns the job."""
+        jid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+        f = self._import_job_file(jid)
+        job = {"id": jid, "kind": kind, "label": label, "by": by, "state": "queued",
+               "step": "Waiting for another import to finish", "started_at": _now(), "finished_at": "", "run_id": "",
+               "error": "", "boot": self._boot}
+
+        def write(**kw):
+            with self._lock:
+                job.update(kw)
+                tmp = f.with_suffix(".tmp")
+                tmp.write_text(json.dumps(job, indent=2))
+                tmp.replace(f)
+        write()
+
+        def work():
+            try:
+                with self._import_gate:
+                    write(state="running", step="Starting", running_at=_now())
+                    rid = fn(lambda step: write(step=step))
+                    write(state="done", step="Done", run_id=rid, finished_at=_now())
+            except (ValueError, KeyError, FileNotFoundError) as exc:
+                write(state="error", finished_at=_now(), error=str(exc).strip("'\"") or type(exc).__name__)
+            except Exception as exc:
+                logging.getLogger("ledgerhawk").exception("import job %s failed", jid)
+                write(state="error", finished_at=_now(), error=f"Unexpected error ({type(exc).__name__}). Try again.")
+            finally:
+                if cleanup:
+                    shutil.rmtree(cleanup, ignore_errors=True)
+        if self.jobs_inline:
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+        return dict(job)
 
     # ---- full preview of a policy draft: the whole screen re-run, nothing saved as an import ----
     def preview_import(self, pid: str) -> str:
@@ -613,7 +687,7 @@ class Store:
                     self._cache.pop(next(iter(self._cache)))
             return self._cache[run_id]
 
-    def restore(self, run_id: str, uei: str, analyst: str, note: str) -> str:
+    def restore(self, run_id: str, uei: str, analyst: str, note: str, progress=None) -> str:
         d = self.run_dir(run_id)
         meta = json.loads((d / "meta.json").read_text())
         restore = set(meta["restore"]) | {uei}
@@ -621,7 +695,7 @@ class Store:
         ed = date.fromisoformat(meta["exclusions_date"]) if meta["exclusions_date"] else None
         new_id = self.create_run(d / "inputs" / meta["vendor_file"], excl, ed, synthetic=meta["data_class"] == "synthetic",
                                  analyst=analyst, restore=restore, parent_id=run_id, label=meta["label"],
-                                 sam_source=meta.get("sam_source"), rules=self.import_rules(run_id))
+                                 sam_source=meta.get("sam_source"), rules=self.import_rules(run_id), progress=progress)
         self.audit(analyst, "restored", uei, new_id, note)
         return new_id
 

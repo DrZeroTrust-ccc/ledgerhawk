@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs, queueHref, usePlace } from '../nav'
-import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary, type PolicyRef } from '../api'
+import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type ImportJob, type RunSummary, type PolicyRef } from '../api'
+import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
 import { FollowUpButton } from './RunRecordPage'
@@ -15,6 +16,15 @@ function RestoreButton({ runId, uei }: { runId: string; uei: string }) {
   const [note, setNote] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [job, setJob] = useState<ImportJob | null>(null)
+  const watched = useImportJob(job, (j) => {
+    if (j.state === 'done') nav(`/runs/${j.run_id}`)
+    else {
+      setError(`The restore didn’t finish: ${j.error}`)
+      setBusy(false)
+      setJob(null)
+    }
+  })
   if (!open)
     return (
       <Button variant="ghost" onClick={() => setOpen(true)}>
@@ -28,8 +38,9 @@ function RestoreButton({ runId, uei }: { runId: string; uei: string }) {
         e.preventDefault()
         setBusy(true)
         try {
-          const { id } = await api.restore(runId, uei, { note, analyst })
-          nav(`/runs/${id}`)
+          const { id, job } = await api.restore(runId, uei, { note, analyst })
+          if (id) nav(`/runs/${id}`)
+          else setJob(job)
         } catch (err) {
           setError((err as Error).message)
           setBusy(false)
@@ -51,6 +62,7 @@ function RestoreButton({ runId, uei }: { runId: string; uei: string }) {
         Cancel
       </Button>
       {!analyst.trim() && <span className="text-xs text-slate-500">Enter your name in the header first.</span>}
+      {watched && <ImportProgress job={watched} />}
       <ErrorNote error={error} />
     </form>
   )

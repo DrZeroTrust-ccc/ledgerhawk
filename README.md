@@ -76,7 +76,9 @@ With a SAM entity extract (`--sam`, or a data source in the app) the import adds
 
 SAM field positions live in `SAM_LAYOUT` and `POC_BLOCKS` in `pipeline/sam.py`; confirm them against the
 SAM layout document when a new extract version ships. A pilot-sized run (118K vendors, ~700K SAM
-entities) takes about a minute once the extract is cached.
+entities) takes two to three minutes. Imports run in the background, one at a time: the upload returns at once, a
+badge in the top bar shows an import is running, and the Imports page shows its current step. Follow-ups, restores
+and the follow-up after a policy deploy work the same way. An import cut off by a server restart is marked failed.
 
 ## Subject screen (investigations and diligence)
 
