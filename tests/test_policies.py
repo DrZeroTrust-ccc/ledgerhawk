@@ -354,3 +354,16 @@ def test_sam_card_keeps_business_types_and_ownership(tmp_path):
     assert cards and all(isinstance(c["business_types"], list) and isinstance(c["owner"], list) for c in cards)
     assert any(c["business_types"] for c in cards)
     assert all(o in OWNER_CODES.values() for c in cards for o in c["owner"])
+
+
+def test_versions_saved_before_a_setting_existed_show_its_default(tmp_path):
+    """A pack version saved before a setting was added reads as having that setting's default, everywhere."""
+    from ledgerhawk.api.policies import PolicyBook
+    book = PolicyBook(tmp_path)
+    p = book.create("Old pack", "", "ledgerhawk-defaults", "Ana")
+    v = book.version(p["id"], 1)
+    old = {k: x for k, x in v["rules"].items() if k not in ("split_cert_alone", "split_cert_alone_min")}
+    book._write_version(p["id"], {**v, "rules": old})
+    assert book.pack(p["id"], with_rules=True)["live_rules"]["split_cert_alone"] is False
+    d = book.save_draft(p["id"], {**old, "split_cert_alone": True}, "Ana")
+    assert d["changes"] == [{"key": "split_cert_alone", "from": False, "to": True}]

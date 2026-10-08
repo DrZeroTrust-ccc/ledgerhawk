@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import gc
 import logging
 import os
 import re
@@ -59,6 +60,9 @@ EVIDENCE_MAX_BYTES = 25 * 1024 * 1024
 def _same_person(a: str, b: str) -> bool:
     return " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
 
+
+# What a full preview keeps of each vendor to compare the draft with the live rules.
+PREVIEW_COLS = ["uei", "name", "fy24", "fy25", "tot", "lane", "queue", "signals", "tier_default"]
 
 SOURCE_KINDS = {
     "sam": {"label": "SAM.gov entity extract (V2)", "stale_days": RuleSet().sam_stale_days},
@@ -132,7 +136,8 @@ class Store:
         self._boot = secrets.token_hex(6)
         self._import_gate = threading.Lock()
         (self.root / "import_jobs").mkdir(parents=True, exist_ok=True)
-        self._est: dict[str, tuple] = {}  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
+        self._est: dict[str, tuple] = {}
+        self._live_screens: dict[tuple[str, str], object] = {}  # the live side of quick estimates, kept per import  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
         self.summary_client = None  # and a fake Claude
@@ -429,7 +434,7 @@ class Store:
         out = (base, rows, set(meta.get("restore") or []))
         with self._lock:
             self._est[run_id] = out
-            while len(self._est) > 2:
+            while len(self._est) > 1:
                 self._est.pop(next(iter(self._est)))
         return out
 
@@ -483,6 +488,7 @@ class Store:
             try:
                 with self._import_gate:
                     write(state="running", step="Starting", running_at=_now())
+                    self.free_memory()
                     rid = fn(lambda step: write(step=step))
                     write(state="done", step="Done", run_id=rid, finished_at=_now())
             except (ValueError, KeyError, FileNotFoundError) as exc:
@@ -520,7 +526,12 @@ class Store:
             return None
         f = self._preview_file(pid, d["fingerprint"])
         with self._lock:  # Windows refuses to replace a file another thread is reading
-            return json.loads(f.read_text()) if f.exists() else None
+            pv = json.loads(f.read_text()) if f.exists() else None
+            if pv and pv["state"] == "running" and pv.get("boot") != self._boot:
+                pv.update(state="error", finished_at=_now(), error="LedgerHawk restarted while the preview was running "
+                          "(a deploy, or the server ran out of memory). Run it again.")
+                f.write_text(json.dumps(pv, indent=2))
+            return pv
 
     def start_policy_preview(self, pid: str, by: str) -> dict:
         draft = self.policies.draft(pid)
@@ -535,7 +546,7 @@ class Store:
             if f.exists():  # a finished or failed preview of this same draft is replaced
                 f.unlink()
         state = {"fingerprint": fp, "state": "running", "step": "Starting", "by": by, "started_at": _now(),
-                 "finished_at": "", "error": "", "result": None}
+                 "finished_at": "", "error": "", "result": None, "boot": self._boot}
 
         def write(**kw):
             with self._lock:
@@ -547,6 +558,7 @@ class Store:
 
         def work():
             try:
+                self.free_memory()
                 write(state="done", step="Done", finished_at=_now(),
                       result=self._run_preview(pid, draft, lambda step: write(step=step)))
             except (ValueError, KeyError, FileNotFoundError) as exc:
@@ -582,18 +594,24 @@ class Store:
         ed = date.fromisoformat(meta["exclusions_date"]) if meta.get("exclusions_date") else None
 
         def full(rules: RuleSet) -> pd.DataFrame:
-            return run_pipeline(d / "inputs" / meta["vendor_file"], excl, ed, restore=set(meta.get("restore") or []),
-                                sam_file=sam["path"] if sam else None,
-                                sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
-                                sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rules).vendors
+            df = run_pipeline(d / "inputs" / meta["vendor_file"], excl, ed, restore=set(meta.get("restore") or []),
+                              sam_file=sam["path"] if sam else None,
+                              sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
+                              sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rules).vendors
+            out = df[PREVIEW_COLS].reset_index(drop=True)  # drop SAM cards, links and evidence: a large file won't fit twice
+            del df
+            gc.collect()
+            return out
 
         step(f"Re-screening {meta['label']} with the draft")
-        new = full(draft_rules).reset_index(drop=True)
+        new = full(draft_rules)
         if self.import_rules(rid)[0].fingerprint() == live_rules.fingerprint():
-            old = pd.DataFrame(self.vendors(rid)["rows"])  # the import already ran under the live version
+            # the import already ran under the live version: read just the columns compared, a row at a time
+            with open(d / "vendors.jsonl") as fh:
+                old = pd.DataFrame([{k: r.get(k) for k in PREVIEW_COLS} for r in map(json.loads, fh)], columns=PREVIEW_COLS)
         else:
             step(f"Re-screening {meta['label']} with the live version")
-            old = full(live_rules).reset_index(drop=True)
+            old = full(live_rules)
         if len(old) != len(new):
             raise ValueError("The import's vendor file no longer matches its results, so it can't be compared.")
         step("Comparing")
@@ -612,6 +630,19 @@ class Store:
             "must_catch": must_catch(self.policies.settings(pid)["must_catch"], old, new),
             "changes": draft["changes"],
         }
+
+    def heavy_job_running(self) -> bool:
+        """A full preview or an import is running: big enough that nothing else large should load meanwhile."""
+        return bool(self._previews_running) or self._import_gate.locked()
+
+    def free_memory(self) -> None:
+        """Drop cached imports and estimates before a heavy job: a 120K-vendor import with SAM details is hundreds of
+        megabytes, and the server has 2 GB. Pages reload what they need."""
+        with self._lock:
+            self._cache.clear()
+            self._est.clear()
+            self._live_screens.clear()
+        gc.collect()
 
     def import_rules(self, run_id: str) -> tuple[RuleSet, dict]:
         """The exact rules an import was screened with, and its policy reference. Imports from before policy packs
