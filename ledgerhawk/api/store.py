@@ -492,7 +492,7 @@ class Store:
     def _run_preview(self, pid: str, draft: dict, step) -> dict:
         import pandas as pd
 
-        from ..pipeline.estimate import QUEUED, compare
+        from ..pipeline.estimate import compare, must_catch
         rid = self.preview_import(pid)
         d = self.run_dir(rid)
         meta = json.loads((d / "meta.json").read_text())
@@ -529,16 +529,13 @@ class Store:
                   "to": b.tier_default}
                  for a, b in zip(old.itertuples(index=False), new.itertuples(index=False))
                  if a.queue and a.queue == b.queue and a.tier_default != b.tier_default]
-        queued = set(new.loc[new["queue"].isin(QUEUED), "uei"])
-        present = set(new["uei"])
         return {
             "import": self.run_ref(rid), "fingerprint": draft["fingerprint"], "at": _now(),
             "live": out["live"], "draft": out["draft"], "moves": out["moves"][:500], "moves_total": len(out["moves"]),
             "tier_moves": tiers[:500], "tier_moves_total": len(tiers),
             "conflicts": [{**m, "decision": disp[m["uei"]]["value"], "decided_by": disp[m["uei"]]["analyst"]}
                           for m in out["moves"] if m["kind"] == "out" and m["uei"] in disp],
-            "must_catch": [{**m, "status": "kept" if m["uei"] in queued else "dropped" if m["uei"] in present else "absent"}
-                           for m in self.policies.settings(pid)["must_catch"]],
+            "must_catch": must_catch(self.policies.settings(pid)["must_catch"], old, new),
             "changes": draft["changes"],
         }
 

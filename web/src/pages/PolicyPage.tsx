@@ -44,7 +44,7 @@ function MustCatchCard({ id, items, canManage }: { id: string; items: MustCatch[
   }
   return (
     <Card title="Must-catch vendors">
-      <p className="mb-2 text-xs text-slate-500">Known cases this pack has to keep flagging. A draft that drops one can’t be approved.</p>
+      <p className="mb-2 text-xs text-slate-500">Known cases this pack must not stop flagging: a draft that drops one the live rules flag can’t be approved. Cases the screen doesn’t flag today show up as missed, a hint for tuning.</p>
       {list.length === 0 && <p className="text-sm text-slate-500">None yet.</p>}
       <ul className="space-y-2 text-sm">
         {list.map((m) => (

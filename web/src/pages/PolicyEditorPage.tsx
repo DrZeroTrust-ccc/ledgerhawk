@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { api, money, num, type PolicyEstimate } from '../api'
+import { api, money, num, MUST_CATCH_LABEL, type PolicyEstimate } from '../api'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
 import { formatSetting, SETTINGS, settingLabel } from '../policyLabels'
@@ -225,15 +225,19 @@ function Impact({ est, loading }: { est: PolicyEstimate | null; loading: boolean
               <li key={m.uei} className="flex gap-2">
                 <span
                   className={
-                    m.status === 'dropped' ? 'font-bold text-crimson' : m.status === 'kept' ? 'font-bold text-emerald-700' : 'text-slate-400'
+                    m.status === 'dropped'
+                      ? 'font-bold text-crimson'
+                      : m.status === 'kept' || m.status === 'added'
+                        ? 'font-bold text-emerald-700'
+                        : 'text-slate-400'
                   }
                 >
-                  {m.status === 'dropped' ? '✕' : m.status === 'kept' ? '✓' : '–'}
+                  {m.status === 'dropped' ? '✕' : m.status === 'kept' || m.status === 'added' ? '✓' : '–'}
                 </span>
                 <span>
                   <strong>{m.name || m.uei}</strong>{' '}
                   <span className="text-slate-500">
-                    {m.status === 'dropped' ? 'would be dropped' : m.status === 'kept' ? 'still flagged' : 'not in this import'}
+                    {MUST_CATCH_LABEL[m.status]}
                   </span>
                 </span>
               </li>

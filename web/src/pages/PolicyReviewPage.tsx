@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, money, num, type PolicyPreview } from '../api'
+import { api, money, num, MUST_CATCH_LABEL, type PolicyPreview } from '../api'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
 import { changeText } from '../policyLabels'
@@ -87,8 +87,17 @@ function Results({ r }: { r: NonNullable<PolicyPreview['result']> }) {
               ? 'No must-catch vendors set'
               : dropped.length
                 ? `${dropped.length} must-catch ${dropped.length === 1 ? 'vendor' : 'vendors'} dropped`
-                : `All ${r.must_catch.length} must-catch kept`}
+                : `No must-catch vendor dropped`}
           </div>
+          {r.must_catch.length > 0 && (
+            <div className="text-xs text-slate-600">
+              {(['kept', 'added', 'missed', 'absent'] as const)
+                .map((s) => [s, r.must_catch.filter((m) => m.status === s).length] as const)
+                .filter(([, n]) => n > 0)
+                .map(([s, n]) => `${n} ${MUST_CATCH_LABEL[s]}`)
+                .join(' · ')}
+            </div>
+          )}
           <div className="text-xs text-slate-500">{r.tier_moves_total} tier moves</div>
         </div>
       </div>
