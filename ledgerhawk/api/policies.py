@@ -132,8 +132,8 @@ class PolicyBook:
         out = {k: v for k, v in p.items() if k != "versions"}
         out.update(versions=vs, live=live["n"] if live else None)
         if with_rules and live:
-            out["live_rules"] = live["rules"]
-            out["vs_defaults"] = diff(RuleSet().to_dict(), live["rules"])
+            out["live_rules"] = rules_from(live["rules"]).to_dict()  # settings added since it was saved, at their defaults
+            out["vs_defaults"] = diff(RuleSet().to_dict(), rules_from(live["rules"]).to_dict())
         return out
 
     def version(self, pid: str, n: int) -> dict:
@@ -256,7 +256,7 @@ class PolicyBook:
             v = {"n": old["n"] if old else max(x["n"] for x in p["versions"]) + 1, "status": "draft",
                  "rules": r.to_dict(), "fingerprint": r.fingerprint(),
                  "created_by": old["created_by"] if old else by, "updated_by": by, "approved_by": "", "at": _now(),
-                 "reason": reason.strip() or (old or {}).get("reason", ""), "changes": diff(live["rules"], r.to_dict()),
+                 "reason": reason.strip() or (old or {}).get("reason", ""), "changes": diff(rules_from(live["rules"]).to_dict(), r.to_dict()),
                  "submitted_by": "", "submitted_at": "", "returned": (old or {}).get("returned")}
             self._write_version(pid, v)
         return v

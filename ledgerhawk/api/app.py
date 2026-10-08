@@ -290,9 +290,6 @@ def set_workload(pid: str, hours_per_lead: float = Form(...), analysts: int = Fo
     return _workload(pid)
 
 
-_LIVE_SCREENS: dict[tuple[str, str], object] = {}
-
-
 class EstimateBody(BaseModel):
     rules: dict
     import_id: str = ""
@@ -300,6 +297,9 @@ class EstimateBody(BaseModel):
 
 def _estimate_inputs(pid: str, body: EstimateBody):
     _pack_or_404(pid)
+    if store.heavy_job_running():
+        raise HTTPException(503, "A full preview or an import is running, so quick estimates are paused until it "
+                                 "finishes (the server has room for one large job at a time). Try again in a few minutes.")
     try:
         draft = rules_from(validate(body.rules))
     except ValueError as exc:
@@ -321,11 +321,12 @@ def estimate_policy(pid: str, body: EstimateBody):
     decisions it would undo, must-catch vendors, and review time. Seconds, not a full re-screen."""
     live_rules, draft_rules, rid, (base, rows, restore) = _estimate_inputs(pid, body)
     key = (rid, live_rules.fingerprint())
-    if key not in _LIVE_SCREENS:  # the live side doesn't change while someone edits, so it is worked out once
-        _LIVE_SCREENS[key] = screen(base, rows, live_rules, restore)
-        while len(_LIVE_SCREENS) > 2:
-            _LIVE_SCREENS.pop(next(iter(_LIVE_SCREENS)))
-    live, draft = _LIVE_SCREENS[key], screen(base, rows, draft_rules, restore)
+    cache = store._live_screens
+    if key not in cache:  # the live side doesn't change while someone edits, so it is worked out once
+        cache[key] = screen(base, rows, live_rules, restore)
+        while len(cache) > 1:
+            cache.pop(next(iter(cache)))
+    live, draft = cache[key], screen(base, rows, draft_rules, restore)
     out = compare(live, draft)
     disp = store.dispositions(rid)
     changes = diff(live_rules.to_dict(), draft_rules.to_dict())

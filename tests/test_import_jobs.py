@@ -78,3 +78,16 @@ def test_imports_cut_off_by_a_restart_are_marked_failed(bg):
     again = c.get(f"/api/import-jobs/{job['id']}").json()
     assert again["state"] == "error" and "restarted" in again["error"]
     assert c.get("/api/import-jobs/../../etc").status_code == 404
+
+
+def test_quick_estimates_pause_while_a_heavy_job_runs(bg):
+    appmod, c, vendors, excl, root = bg
+    with appmod.store._import_gate:  # as if an import were running
+        r = c.post("/api/policies/ledgerhawk-defaults/estimate", json={"rules": {}})
+        assert r.status_code == 503 and "paused" in r.json()["detail"]
+    appmod.store._previews_running.add(("x", "y"))
+    try:
+        assert appmod.store.heavy_job_running()
+    finally:
+        appmod.store._previews_running.discard(("x", "y"))
+    assert not appmod.store.heavy_job_running()
