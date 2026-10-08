@@ -115,7 +115,7 @@ export type GraphNode = {
 /** An import running on the server in the background (new, follow-up or restore). */
 export type ImportJob = {
   id: string
-  kind: 'new' | 'follow_up' | 'restore'
+  kind: 'new' | 'follow_up' | 'restore' | 'check'
   label: string
   by: string
   state: 'queued' | 'running' | 'done' | 'error'
@@ -833,6 +833,9 @@ export const api = {
   createRun: (form: FormData) => req<ImportStart>('/api/runs', { method: 'POST', body: form }),
   importJobs: (active: boolean) => req<{ jobs: ImportJob[] }>(`/api/import-jobs${active ? '?active=true' : ''}`),
   importJob: (id: string) => req<ImportJob>(`/api/import-jobs/${encodeURIComponent(id)}`),
+  exclusionCheck: (id: string) => req<{ excluded: number; checked: number; paid_after: number }>(`/api/runs/${id}/exclusion-check`),
+  startExclusionCheck: (id: string, form: FormData) =>
+    req<{ job: ImportJob }>(`/api/runs/${id}/exclusion-check`, { method: 'POST', body: form }),
   vendors: (id: string, params: Record<string, string>) =>
     req<{ total: number; dollars: number; rows: VendorRow[] }>(`/api/runs/${id}/vendors?${new URLSearchParams(params)}`),
   histogram: (id: string) => req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),

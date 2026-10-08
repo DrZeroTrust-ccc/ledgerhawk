@@ -4,6 +4,7 @@ import { Breadcrumbs, usePlace } from '../nav'
 import { api, LANE_LABEL, money, num, REASON_LABEL, type DecisionImport, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
 import { KEYS, Progress, TriagePane } from '../Triage'
+import { ExclusionCheck } from '../imports'
 import { Button, Card, ColorChip, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
@@ -565,6 +566,7 @@ export default function QueuePage() {
             {run.data.meta.label} · import dashboard
           </Link>
         )}
+        <ExclusionCheck runId={id} onDone={() => setVersion((n) => n + 1)} />
       </div>
 
       {importing && (

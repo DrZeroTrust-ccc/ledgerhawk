@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { api, type ImportJob } from './api'
+import { useAnalystName } from './App'
 
 // Imports run in the background on the server. These show that one is being handled: a badge in the top bar while
 // any import runs, a card on the Imports page, and a progress line where an import was started.
 
-const KIND: Record<ImportJob['kind'], string> = { new: 'Import', follow_up: 'Follow-up import', restore: 'Restore' }
+const KIND: Record<ImportJob['kind'], string> = { new: 'Import', follow_up: 'Follow-up import', restore: 'Restore', check: 'USAspending check' }
 
 function elapsed(from: string, to?: string) {
   const s = Math.max(0, Math.round(((to ? Date.parse(to) : Date.now()) - Date.parse(from)) / 1000))
@@ -65,6 +66,56 @@ export function ImportProgress({ job }: { job: ImportJob }) {
           This keeps going if you leave the page; the badge at the top shows it’s still running. Large files take a few minutes.
         </span>
       )}
+    </div>
+  )
+}
+
+/** Look up every excluded vendor in USAspending, so red means paid after exclusion (or not yet checked). */
+export function ExclusionCheck({ runId, onDone }: { runId: string; onDone?: () => void }) {
+  const [analyst] = useAnalystName()
+  const [status, setStatus] = useState<{ excluded: number; checked: number; paid_after: number } | null>(null)
+  const [job, setJob] = useState<ImportJob | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const load = () => api.exclusionCheck(runId).then(setStatus, () => {})
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId])
+  const watched = useImportJob(job, (j) => {
+    if (j.state === 'error') setErr(j.error)
+    setJob(null)
+    load()
+    onDone?.()
+  })
+  if (!status || !status.excluded) return null
+  const left = status.excluded - status.checked
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-slate-600">
+        {status.excluded} on the exclusions list · {status.checked} checked in USAspending
+        {status.checked ? ` · ${status.paid_after} paid after exclusion` : ''}
+      </span>
+      {!watched && (
+        <button
+          type="button"
+          className="rounded-md bg-white px-3 py-1.5 text-sm font-medium text-navy ring-1 ring-slate-300 hover:bg-slate-50"
+          title="Looks up contract actions after each exclusion date. A few seconds per vendor; runs in the background."
+          onClick={async () => {
+            setErr(null)
+            const f = new FormData()
+            f.append('analyst', analyst)
+            try {
+              setJob((await api.startExclusionCheck(runId, f)).job)
+            } catch (e) {
+              setErr((e as Error).message)
+            }
+          }}
+        >
+          {left ? `Check ${left === status.excluded ? 'all ' : ''}${left} in USAspending` : 'Check again in USAspending'}
+        </button>
+      )}
+      {watched && <ImportProgress job={watched} />}
+      {err && <span className="text-crimson">{err}</span>}
     </div>
   )
 }

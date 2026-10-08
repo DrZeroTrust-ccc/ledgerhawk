@@ -12,14 +12,16 @@ def _v(**kw):
 
 def test_color_rules():
     assert color(_v(queue="priority"), {"tier": "5"}, None)[0] == "red"
-    assert color(_v(exclusion_flags=["EXCLUDED"]), {}, None)[0] == "red"
+    assert color(_v(exclusion_flags=["EXCLUDED"]), {}, None)[0] == "red"  # not checked yet
     assert color(_v(integrity={"tier": "A"}), {}, None)[0] == "red"
-    assert color(_v(queue="strong"), {"tier": "1"}, None) == ("red", ["Analyst set Tier 1"])
+    assert color(_v(queue="strong"), {"tier": "1", "tier_change": {"tier": "1"}}, None) == ("red", ["Analyst set Tier 1"])
+    assert color(_v(queue="strong"), {"tier": "1"}, None)[0] == "yellow"  # a pipeline default tier doesn't count
     assert color(_v(queue="relationship"), {}, {"value": "Refer"})[0] == "red"
     assert color(_v(queue="strong"), {"tier": "5"}, None) == ("yellow", ["One strong signal"])
     assert color(_v(queue="exclusion"), {}, None)[0] == "yellow"
     assert color(_v(integrity={"tier": "C"}), {}, None)[0] == "yellow"
-    assert color(_v(), {"tier": "2"}, None)[0] == "yellow"
+    assert color(_v(), {"tier": "2", "tier_change": {"tier": "2"}}, None)[0] == "yellow"
+    assert color(_v(), {"tier": "3"}, None) == ("", [])
     assert color(_v(bucket="watch"), {}, None)[0] == "green"
     # a clearing decision or "explained" outranks everything
     assert color(_v(queue="priority", exclusion_flags=["EXCLUDED"]), {"tier": "1"},
@@ -80,3 +82,80 @@ def sam_ctx_export(tmp_path_factory):
                                                                   "exclusions_source": ids["exclusions"]})
     yield client, r.json()["id"]
     mp.undo()
+
+
+def test_exclusion_timing_decides_red():
+    from ledgerhawk.exports.analysis import exclusion_timing
+    hit = [{"kind": "direct", "active_date": "06/01/2025", "scope": ""}]
+    v = _v(exclusion_flags=["EXCLUDED"], exclusion=hit, fy24=5e6, fy25=2e6)
+    # excluded mid-FY25: nothing in a fiscal year that began after it, so USAspending decides
+    assert exclusion_timing(v)[0] == "unchecked" and color(v, {}, None)[0] == "red"
+    after = {"fetched_at": "2026-10-08", "actions_flagged": 3, "actions_dollars": 2.5e6, "after_exclusion": 0}
+    t, why = exclusion_timing(v, after)
+    assert t == "after" and "3 contract actions ($2.5M)" in why and color(v, {}, None, after)[0] == "red"
+    clean = {"fetched_at": "2026-10-08", "actions_flagged": 0, "actions_dollars": 0, "after_exclusion": 0}
+    assert color(v, {}, None, clean) == ("yellow", ["Excluded Jun 01, 2025; USAspending shows no contract actions after it"])
+    # excluded before FY25 began, with FY25 money: paid after exclusion, no lookup needed
+    early = _v(exclusion_flags=["EXCLUDED"], exclusion=[{"kind": "direct", "active_date": "03/15/2024"}], fy24=1e6, fy25=4e6)
+    assert exclusion_timing(early)[0] == "after" and "FY25" in exclusion_timing(early)[1]
+    assert exclusion_timing(_v())[0] == ""
+
+
+def test_bulk_usaspending_check_settles_excluded_vendors(sam_ctx_export):
+    """The background check looks up every excluded vendor; those paid after exclusion stay red, the rest turn yellow."""
+    import json as _json
+
+    import ledgerhawk.api.app as appmod
+    client, run_id = sam_ctx_export
+    st = client.get(f"/api/runs/{run_id}/exclusion-check").json()
+    assert st["excluded"] > 1 and st["checked"] == 0
+    excluded = [r["uei"] for r in appmod.store.vendors(run_id)["rows"] if "EXCLUDED" in r["exclusion_flags"]]
+    paid = excluded[0]
+
+    def fake_lookup(rid, uei, analyst):  # stands in for USAspending
+        d = appmod.store._case_dir(rid, uei)
+        d.mkdir(parents=True, exist_ok=True)
+        n = 2 if uei == paid else 0
+        (d / "awards.json").write_text(_json.dumps({"fetched_at": "2026-10-08T00:00:00+00:00", "entities": [
+            {"actions_flagged": n, "actions_dollars": 1e6 * n, "after_exclusion": 0}]}))
+    orig = appmod.store.fetch_case_awards
+    appmod.store.fetch_case_awards = fake_lookup
+    try:
+        job = client.post(f"/api/runs/{run_id}/exclusion-check", data={"analyst": "A"}).json()["job"]
+    finally:
+        appmod.store.fetch_case_awards = orig
+    assert job["state"] == "done" and job["kind"] == "check"
+    st = client.get(f"/api/runs/{run_id}/exclusion-check").json()
+    assert st["checked"] == st["excluded"] and st["paid_after"] == 1
+    v = client.get(f"/api/runs/{run_id}/vendors/{paid}").json()
+    assert v["color"] == "red" and any("USAspending: 2 contract actions" in w for w in v["color_why"])
+    others = [client.get(f"/api/runs/{run_id}/vendors/{u}").json() for u in excluded[1:]]
+    assert all(o["color"] != "red" or "Two or more independent signals" in o["color_why"]
+               or any("began after" in w or "Excluded, with obligations" in w for w in o["color_why"]) for o in others)
+    z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/runs/{run_id}/exports/analysis.zip").content))
+    rows = {r["uei"]: r for r in csv.DictReader(io.StringIO(z.read("vendors.csv").decode("utf-8-sig")))}
+    assert rows[paid]["exclusion_timing"] == "after" and rows[paid]["actions_after_exclusion"] == "2"
+
+
+def test_decisions_round_trip_through_the_workbook(sam_ctx_export, tmp_path):
+    """Decisions exported in the Vendors of Interest workbook import into another import of the same list, with the
+    analyst's note, and a tier that equals the pipeline's default still counts as the analyst's."""
+    client, run_id = sam_ctx_export
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()["rows"]
+    a, b = rows[0], rows[1]
+    client.post(f"/api/runs/{run_id}/vendors/{a['uei']}/disposition", json={"value": "Refer", "note": "Route to OIG.", "analyst": "A"})
+    client.post(f"/api/runs/{run_id}/vendors/{b['uei']}/tier", json={"tier": b["tier_default"] or "3", "reason": "Agreed", "analyst": "A"})
+    wb = client.get(f"/api/runs/{run_id}/exports/vendors-of-interest.xlsx").content
+    vendors, *_ = make_synthetic(tmp_path, n=800, seed=3)
+    with open(vendors, "rb") as v:
+        other = client.post("/api/runs", files={"vendors": v}, data={"synthetic": "true", "analyst": "A"}).json()["id"]
+    url = f"/api/runs/{other}/import-decisions"
+    prev = client.post(url, files={"file": ("voi.xlsx", wb)}, data={"analyst": "A"}).json()
+    assert not [p for p in prev["problems"] if "disposition" in p], prev["problems"]
+    ch = {c["uei"]: c for c in prev["changes"]}
+    assert ch[a["uei"]]["disposition_to"] == "Refer" and ch[a["uei"]]["detail"].startswith("Route to OIG.")
+    assert ch[b["uei"]]["tier_to"] == (b["tier_default"] or "3")  # equal to the default, still recorded
+    client.post(url, files={"file": ("voi.xlsx", wb)}, data={"analyst": "A", "apply": "true"})
+    got = client.get(f"/api/runs/{other}/vendors/{b['uei']}").json()
+    assert got["tier_change"] and got["tier"] == (b["tier_default"] or "3")
+    assert client.get(f"/api/runs/{other}/vendors/{a['uei']}").json()["color"] == "red"  # a referral is red
