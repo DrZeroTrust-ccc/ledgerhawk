@@ -157,6 +157,10 @@ class RuleSet:
     r_young_start: str = "2023-01-01"
     r_young_min: float = 1_000_000
     r_split_cert_min: float = 1_000_000
+    # A certified firm split across UEIs is usually a lead only with a second signal. A pack can let it stand on its
+    # own (relationship queue) above a family total. Off by default, so existing packs screen exactly as before.
+    split_cert_alone: bool = False
+    split_cert_alone_min: float = 10_000_000
     sam_stale_days: int = 35
     exclusions_stale_days: int = 2
     # Stage 4 (relationships)

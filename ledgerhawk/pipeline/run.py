@@ -122,7 +122,7 @@ def run_pipeline(
         step("Matching vendors to the SAM entity extract")
         sam = load_sam(sam_file, sam_extract_date, sam_cache_dir)
         df = sam_screen(df, sam, rules, ex)
-        df["bucket"] = relationship_bucket(df)
+        df["bucket"] = relationship_bucket(df, rules)
     else:
         df["sam"] = None
         df["links"] = [[] for _ in range(len(df))]

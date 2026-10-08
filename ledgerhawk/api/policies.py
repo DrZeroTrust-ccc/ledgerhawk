@@ -24,7 +24,7 @@ DEFAULTS_ID = "ledgerhawk-defaults"
 # nothing else is a triage change: an Admin can deploy it without a second person. Any other change is a screening
 # change and needs an Admin who didn't write the draft.
 TRIAGE_KEYS = {"strong_s2_fy25", "strong_s3_ratio", "strong_s3_fy25", "strong_s4_total",
-               "sam_stale_days", "exclusions_stale_days"}
+               "split_cert_alone", "split_cert_alone_min", "sam_stale_days", "exclusions_stale_days"}
 
 
 def is_triage_only(changes: list[dict]) -> bool:
@@ -66,6 +66,9 @@ def validate(rules: dict) -> dict:
             if k.endswith(("_ratio", "_share")) and v > 1 and k not in ("s3_ratio", "strong_s3_ratio"):
                 raise ValueError(f"{k} is a share, between 0 and 1.")
             v = int(v) if isinstance(d, int) else float(v)
+        elif isinstance(d, bool):
+            if not isinstance(v, bool):
+                raise ValueError(f"{k} must be on or off.")
         elif k == "r_young_start":
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v)):
                 raise ValueError("The young-registration date must be YYYY-MM-DD.")

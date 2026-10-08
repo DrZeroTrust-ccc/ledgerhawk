@@ -3,7 +3,7 @@ import type { PolicyChange } from './api'
 // Plain-English names for the rule-set settings, grouped the way an analyst thinks about them. The sentence editor
 // (next step) builds on these.
 
-export type SettingKind = 'money' | 'ratio' | 'count' | 'days' | 'date' | 'list' | 'text'
+export type SettingKind = 'money' | 'ratio' | 'count' | 'days' | 'date' | 'list' | 'text' | 'bool'
 export type Setting = { label: string; kind: SettingKind; group: string }
 
 const g1 = 'Who is screened'
@@ -34,6 +34,8 @@ export const SETTINGS: Record<string, Setting> = {
   strong_s3_ratio: { label: 'Hypergrowth alone is strong at this many times FY24', kind: 'count', group: g3 },
   strong_s3_fy25: { label: '…with FY25 at least', kind: 'money', group: g3 },
   strong_s4_total: { label: 'A sole proprietor alone is strong at a total of', kind: 'money', group: g3 },
+  split_cert_alone: { label: 'A certified firm split across UEIs is enough on its own', kind: 'bool', group: g3 },
+  split_cert_alone_min: { label: '…when the family’s total is at least', kind: 'money', group: g3 },
   r_young_start: { label: 'Young registration: started on or after', kind: 'date', group: g4 },
   r_young_min: { label: 'Young registration: total at least', kind: 'money', group: g4 },
   r_split_cert_min: { label: 'Certified firm split across UEIs: family total at least', kind: 'money', group: g4 },
@@ -66,6 +68,7 @@ export function settingLabel(key: string): string {
 export function formatSetting(key: string, v: unknown): string {
   const kind = SETTINGS[key]?.kind
   if (Array.isArray(v)) return `${v.length} ${v.length === 1 ? 'entry' : 'entries'}`
+  if (typeof v === 'boolean') return v ? 'on' : 'off'
   if (typeof v === 'number') {
     if (kind === 'money') return v >= 1e6 ? `$${(v / 1e6).toLocaleString()}M` : `$${v.toLocaleString()}`
     if (kind === 'ratio') return `${Math.round(v * 100)}%`

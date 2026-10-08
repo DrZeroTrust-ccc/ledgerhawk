@@ -262,7 +262,8 @@ def test_full_preview_approval_deploy_and_rollback(pctx):
 
 
 @pytest.mark.parametrize("change", [{}, {"immaterial_total": 2_000_000}, {"s2_fy25_min": 10_000_000, "immaterial_total": 1_000_000},
-                                    {"major_total": 50_000_000}, {"s3_ratio": 3, "strong_s4_total": 2_000_000}])
+                                    {"major_total": 50_000_000}, {"s3_ratio": 3, "strong_s4_total": 2_000_000},
+                                    {"split_cert_alone": True, "split_cert_alone_min": 1_000_000}])
 def test_quick_estimate_matches_a_full_rescreen(tmp_path, change):
     """For the settings it covers, the quick estimate lands every vendor in the same queue as re-running everything."""
     from datetime import date
@@ -290,3 +291,34 @@ def test_must_catch_is_judged_against_the_live_rules():
     draft = pd.DataFrame({"uei": ["A", "B", "C", "D"], "queue": ["priority", "", "", "exclusion"]})
     pins = [{"uei": u} for u in ("A", "B", "C", "D", "E")]
     assert [m["status"] for m in must_catch(pins, live, draft)] == ["kept", "dropped", "missed", "added", "absent"]
+
+
+def test_a_certified_split_can_stand_on_its_own(tmp_path):
+    """Off by default (packs screen as before); switched on, a certified firm split across UEIs with a large enough
+    family total reaches the relationship queue without a second signal."""
+    from datetime import date
+
+    from ledgerhawk.pipeline.links import _family_total
+    from ledgerhawk.pipeline.run import run_pipeline
+    v, e, sam, _ = make_synthetic(tmp_path, n=1500, seed=5)
+    kw = dict(sam_file=sam, sam_extract_date=date(2026, 9, 6), sam_cache_dir=tmp_path)
+    off = run_pipeline(v, e, date(2026, 10, 2), **kw).vendors
+    on = run_pipeline(v, e, date(2026, 10, 2), rules=RuleSet(split_cert_alone=True, split_cert_alone_min=1_000_000), **kw).vendors
+    assert RuleSet().split_cert_alone is False
+    split = off["signals"].map(lambda s: any(x["id"] == "R_split_cert" for x in s))
+    only = split & (off["queue"] == "")
+    assert only.any(), "the synthetic data should have a certified split with no second signal"
+    assert (on.loc[only, "queue"] == "relationship").all()
+    assert (on.loc[~only, "queue"] == off.loc[~only, "queue"]).all()  # nothing else moves
+    fam = next(x for s in off.loc[split, "signals"] for x in s if x["id"] == "R_split_cert")
+    assert fam["family_total"] > 0
+    assert _family_total({"detail": "3 UEIs share start date; family total $47.9M; certified 8(a)"}) == 47.9e6
+    high = run_pipeline(v, e, date(2026, 10, 2), rules=RuleSet(split_cert_alone=True, split_cert_alone_min=1e12), **kw).vendors
+    assert list(high["queue"]) == list(off["queue"])
+
+
+def test_on_off_settings_are_validated():
+    from ledgerhawk.api.policies import validate
+    assert validate({"split_cert_alone": True})["split_cert_alone"] is True
+    with pytest.raises(ValueError):
+        validate({"split_cert_alone": "yes"})
