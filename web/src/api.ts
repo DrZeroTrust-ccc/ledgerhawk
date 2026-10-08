@@ -105,6 +105,13 @@ export type GraphNode = {
   in_run?: boolean
   source?: string
 }
+/** Who is signed in. auth "open": sign-in is off and analysts type their name. */
+export type Me =
+  | { auth: 'open' }
+  | { auth: 'access'; email: string; name: string; role: 'admin' | 'analyst' | 'executive' | null; role_label: string; bootstrap: boolean }
+export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 'executive'; added_by: string; at: string }
+export type People = { people: Person[]; roles: Record<string, string>; bootstrap: { email: string; name: string }[] }
+
 export type GraphEdge = { source: string; target: string; kind: string; label: string }
 export type Graph = {
   nodes: GraphNode[]
@@ -656,6 +663,10 @@ export type HawkReasons = {
 
 export const api = {
   meta: () => req<Meta>('/api/meta'),
+  me: () => req<Me>('/api/me'),
+  people: () => req<People>('/api/people'),
+  savePerson: (form: FormData) => req<Person>('/api/people', { method: 'POST', body: form }),
+  removePerson: (form: FormData) => req<{ ok: boolean }>('/api/people/remove', { method: 'POST', body: form }),
   runs: () => req<RunMeta[]>('/api/runs'),
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
   createRun: (form: FormData) => req<{ id: string }>('/api/runs', { method: 'POST', body: form }),

@@ -234,8 +234,31 @@ modifications; Tier A uses fiscal-year timing until then), OSINT, and the briefi
 The `Dockerfile` builds the web app and serves it with the API from one container. `render.yaml` is the matching
 Blueprint: a Docker web service with a 1 GB disk mounted at `/var/data`, where runs, sources and the analyst database live.
 
-- `LEDGERHAWK_ACCESS_PASSWORD`: when set, every page and API call asks for this shared password (any username).
-  This is a stopgap until real sign-in exists. `/api/healthz` stays open for Render's health check.
+- `LEDGERHAWK_ACCESS_PASSWORD`: a shared password (any username) for every page and API call. A stopgap from before
+  sign-in; it's ignored once Cloudflare Access is on. `/api/healthz` stays open for Render's health check.
+- `LEDGERHAWK_CF_TEAM_DOMAIN`, `LEDGERHAWK_CF_AUD`, `LEDGERHAWK_ADMINS`: sign-in and roles (below).
+
+### Sign-in and roles
+
+People sign in with their work email through Cloudflare Access, which sits in front of ledgerhawk.tech. The app checks
+the token Access attaches to every request (the `Cf-Access-Jwt-Assertion` header or `CF_Authorization` cookie) against
+your team's public keys and the application's audience tag. A request without a valid token is refused, including one
+sent straight to the Render URL. Every action is recorded under the signed-in person's name, not a typed one.
+
+Roles: **Admin** (everything, plus the People page), **Analyst** (imports, queue, cases, subject screens) and
+**Executive** (sees everything, changes nothing). Someone who signs in without a role sees a "not set up yet" page.
+
+To turn it on:
+
+1. In Cloudflare Zero Trust, add a self-hosted Access application for `ledgerhawk.tech` and `www.ledgerhawk.tech`,
+   with a policy that allows your people's emails (or your email domain). Copy its **Application Audience (AUD) tag**,
+   and note your team domain (`<team>.cloudflareaccess.com`).
+2. In Render, set `LEDGERHAWK_CF_TEAM_DOMAIN` to the team domain, `LEDGERHAWK_CF_AUD` to the AUD tag, and
+   `LEDGERHAWK_ADMINS` to the permanent Admins, comma-separated, each `email` or `email=Name`
+   (e.g. `you@agency.gov=Your Name`). Use the name analysts have been typing so earlier work lines up.
+3. After the deploy, sign in, open **People**, and give everyone else a role. Then remove `LEDGERHAWK_ACCESS_PASSWORD`.
+
+With the two Cloudflare settings unset, sign-in is off and the app works as before: analysts type their name.
 - `LEDGERHAWK_SEED_SYNTHETIC=1`: on an empty data directory, creates one synthetic import so a fresh deploy has
   something to show.
 - Without a disk, everything under `/var/data` is lost on each deploy.

@@ -18,3 +18,10 @@ services:
         value: "1"
       - key: LEDGERHAWK_ACCESS_PASSWORD
         sync: false
+      # Sign-in through Cloudflare Access (see README). Set all three together; then the password above can go.
+      - key: LEDGERHAWK_CF_TEAM_DOMAIN
+        sync: false
+      - key: LEDGERHAWK_CF_AUD
+        sync: false
+      - key: LEDGERHAWK_ADMINS
+        sync: false

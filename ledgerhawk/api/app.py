@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import secrets
 import tempfile
@@ -31,6 +32,7 @@ from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
+from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
@@ -45,10 +47,48 @@ store = Store(DATA_DIR)
 app = FastAPI(title="LedgerHawk", version="0.2.0")
 
 
+# Sign-in: Cloudflare Access when configured (see auth.py), else the old shared password, else open.
+VERIFIER = verifier_from_env()
+ADMINS = bootstrap_admins()
+READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _resolve(email: str) -> User:
+    p = store.person(email)
+    if email in ADMINS:
+        return User(email, (p or {}).get("name") or ADMINS[email] or default_name(email), "admin", bootstrap=True)
+    return User(email, p["name"], p["role"]) if p else User(email, default_name(email), None)
+
+
+def _refuse(status: int, detail: str) -> Response:
+    return Response(json.dumps({"detail": detail}), status_code=status, media_type="application/json")
+
+
 @app.middleware("http")
 async def access_gate(request: Request, call_next):
-    """Shared-password gate (HTTP Basic, any username) when LEDGERHAWK_ACCESS_PASSWORD is set. Stopgap until sign-in."""
-    if ACCESS_PASSWORD and request.url.path != "/api/healthz":
+    path = request.url.path
+    if path == "/api/healthz":
+        return await call_next(request)
+    if VERIFIER is not None:
+        tok = token_from(request.headers, request.cookies)
+        try:
+            email = await run_in_threadpool(VERIFIER.email, tok) if tok else ""
+        except Exception:  # bad, expired or forged token, or the key server unreachable: no identity either way
+            email = ""
+        if not email:
+            return _refuse(401, "Sign in through ledgerhawk.tech. This request had no valid Cloudflare Access sign-in.")
+        user = _resolve(email)
+        if path.startswith("/api/") and path != "/api/me":
+            if user.role is None:
+                return _refuse(403, f"{email} isn't set up in LedgerHawk yet. Ask an Admin to add you.")
+            if user.role == "executive" and request.method not in READ_METHODS:
+                return _refuse(403, "Executives have read-only access.")
+        reset = CURRENT_USER.set(user)
+        try:
+            return await call_next(request)
+        finally:
+            CURRENT_USER.reset(reset)
+    if ACCESS_PASSWORD:
         ok = False
         auth = request.headers.get("authorization", "")
         if auth.lower().startswith("basic "):
@@ -60,6 +100,60 @@ async def access_gate(request: Request, call_next):
         if not ok:
             return Response("Sign in to LedgerHawk.", status_code=401, headers={"WWW-Authenticate": 'Basic realm="LedgerHawk"'})
     return await call_next(request)
+
+
+@app.get("/api/me")
+def me():
+    """Who is signed in. auth "open" means sign-in is off and people type their name."""
+    u = CURRENT_USER.get()
+    if VERIFIER is None or u is None:
+        return {"auth": "open"}
+    return {"auth": "access", "email": u.email, "name": u.name, "role": u.role,
+            "role_label": ROLES.get(u.role or "", "No access yet"), "bootstrap": u.bootstrap}
+
+
+def _admin() -> User:
+    u = CURRENT_USER.get()
+    if VERIFIER is None or u is None:
+        raise HTTPException(400, "Roles apply once sign-in is turned on.")
+    if u.role != "admin":
+        raise HTTPException(403, "Only an Admin can manage people and roles.")
+    return u
+
+
+@app.get("/api/people")
+def list_people():
+    _admin()
+    return {"people": store.people(), "roles": ROLES,
+            "bootstrap": [{"email": e, "name": n or default_name(e)} for e, n in ADMINS.items()]}
+
+
+@app.post("/api/people")
+def save_person(email: str = Form(""), name: str = Form(""), role: str = Form("")):
+    u = _admin()
+    email = email.strip().lower()
+    if role not in ROLES:
+        raise HTTPException(400, "Pick a role: Admin, Analyst or Executive.")
+    if email in ADMINS and role != "admin":
+        raise HTTPException(400, f"{email} is a permanent Admin (set in LEDGERHAWK_ADMINS on the server).")
+    if email == u.email and role != "admin":
+        raise HTTPException(400, "You can't take away your own Admin role. Ask another Admin.")
+    try:
+        return store.set_person(email, name, role, u.name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/people/remove")
+def remove_person(email: str = Form("")):
+    u = _admin()
+    if email.strip().lower() == u.email:
+        raise HTTPException(400, "You can't remove yourself. Ask another Admin.")
+    try:
+        store.remove_person(email, u.name)
+    except KeyError:
+        raise HTTPException(404, "No one with that email is set up.")
+    return {"ok": True}
 
 
 @app.get("/api/healthz")
@@ -125,6 +219,7 @@ def list_sources():
 
 @app.post("/api/sources/refresh")
 def refresh_sources(analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the check is attributed.")
     key = samgov.api_key()
@@ -172,6 +267,7 @@ if samgov.api_key():
 
 @app.post("/api/sources")
 async def add_source(kind: str = Form(...), as_of: str = Form(...), analyst: str = Form(""), file: UploadFile = File(...)):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the upload is attributed.")
     try:
@@ -206,6 +302,7 @@ async def create_run(
     exclusions_source: str = Form(""),
     follows: str = Form(""),
 ):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the import is attributed.")
     if follows:
@@ -260,6 +357,7 @@ async def create_subject_screen(
     exclusions_source: str = Form(""),
     dollars_run: str = Form(""),
 ):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the screen is attributed.")
     if not sam_source and not exclusions_source:
@@ -309,6 +407,7 @@ def subject_screen_jobs(sid: str):
 
 @app.post("/api/subject-screens/{sid}/recheck")
 def recheck_subject_screen(sid: str, analyst: str = Form(""), sam_source: str = Form(""), exclusions_source: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the re-check is attributed.")
 
@@ -322,6 +421,7 @@ def recheck_subject_screen(sid: str, analyst: str = Form(""), sam_source: str = 
 
 @app.post("/api/subject-screens/{sid}/rename")
 def rename_subject_screen(sid: str, analyst: str = Form(""), matter: str = Form(""), client: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the change is attributed.")
     try:
@@ -343,6 +443,7 @@ def subject_screen(sid: str):
 @app.post("/api/subject-screens/{sid}/notes")
 async def add_screen_note(sid: str, analyst: str = Form(""), target: str = Form("screen"), text: str = Form(""),
                           source: str = Form(""), lean: str = Form(""), file: UploadFile | None = File(None)):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the note is attributed.")
     body = await file.read() if file is not None and file.filename else None
@@ -357,6 +458,7 @@ async def add_screen_note(sid: str, analyst: str = Form(""), target: str = Form(
 
 @app.post("/api/subject-screens/{sid}/notes/{nid}/delete")
 def delete_screen_note(sid: str, nid: str, analyst: str = Form("")):
+    analyst = who(analyst)
     try:
         store.delete_screen_note(sid, nid, analyst)
     except KeyError:
@@ -377,6 +479,7 @@ def screen_evidence(sid: str, nid: str):
 
 @app.post("/api/subject-screens/{sid}/awards")
 def fetch_screen_awards(sid: str, analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
 
@@ -388,6 +491,7 @@ def fetch_screen_awards(sid: str, analyst: str = Form("")):
 
 @app.post("/api/subject-screens/{sid}/context")
 def screen_context(sid: str, analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
 
@@ -409,6 +513,7 @@ def lookup_context(analyst: str = Form(""), name: str = Form(""), uei: str = For
                    people: str = Form(""), related: str = Form(""), run_id: str = Form("")):
     """Lines in other_names, people and related are details already known about the subject; they tell its hits from
     same-name strangers."""
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
     lines = lambda v: [x for x in v.splitlines() if x.strip()]  # noqa: E731
@@ -429,6 +534,7 @@ def muted_sites():
 
 @app.post("/api/context/muted-sites")
 def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""), mute: bool = Form(True)):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the change is attributed.")
     try:
@@ -441,6 +547,7 @@ def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""
 def context_verdict(analyst: str = Form(""), item: str = Form(""), verdict: str = Form(""), note: str = Form(""),
                     uei: str = Form(""), name: str = Form(""), person: bool = Form(False), run_id: str = Form("")):
     """item is one result id, or several separated by commas for a bulk call."""
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the decision is attributed.")
     ids = [x for x in item.split(",") if x.strip()]
@@ -455,6 +562,7 @@ def context_verdict(analyst: str = Form(""), item: str = Form(""), verdict: str 
 
 @app.post("/api/subject-screens/{sid}/review")
 def review_screen(sid: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the sign-off is attributed.")
     try:
@@ -505,6 +613,7 @@ def run_summary(run_id: str):
 @app.post("/api/runs/{run_id}/follow-up")
 def follow_up_run(run_id: str, analyst: str = Form("")):
     """Re-screen the same vendor file against the newest SAM and exclusions extracts, linked to this run."""
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the import is attributed.")
     _get(store.run_dir, run_id)
@@ -560,6 +669,7 @@ class ConfirmIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/confirm-carried")
 def confirm_carried(run_id: str, body: ConfirmIn):
+    body.analyst = who(body.analyst)
     _get(store.run_dir, run_id)
     try:
         return {"confirmed": store.confirm_carried(run_id, body.ueis, body.analyst)}
@@ -766,6 +876,7 @@ def _case_call(fn, *a, **kw):
 @app.post("/api/runs/{run_id}/vendors/{uei}/notes")
 async def add_case_note(run_id: str, uei: str, analyst: str = Form(""), text: str = Form(""), source: str = Form(""),
                         lean: str = Form(""), file: UploadFile | None = File(None)):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the note is attributed.")
     body = await file.read() if file is not None and file.filename else None
@@ -775,6 +886,7 @@ async def add_case_note(run_id: str, uei: str, analyst: str = Form(""), text: st
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/notes/{nid}/delete")
 def delete_case_note(run_id: str, uei: str, nid: str, analyst: str = Form("")):
+    analyst = who(analyst)
     _case_call(store.delete_case_note, run_id, uei, nid, analyst)
     return {"ok": True}
 
@@ -787,6 +899,7 @@ def case_evidence(run_id: str, uei: str, nid: str):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/review")
 def review_case(run_id: str, uei: str, analyst: str = Form(""), action: str = Form(""), comment: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the sign-off is attributed.")
     return _case_call(store.review_case, run_id, uei, analyst=analyst, action=action, comment=comment)
@@ -794,6 +907,7 @@ def review_case(run_id: str, uei: str, analyst: str = Form(""), action: str = Fo
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/awards")
 def fetch_case_awards(run_id: str, uei: str, analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the lookup is attributed.")
     return _case_call(store.fetch_case_awards, run_id, uei, analyst)
@@ -801,6 +915,7 @@ def fetch_case_awards(run_id: str, uei: str, analyst: str = Form("")):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/summary/draft")
 def draft_case_summary(run_id: str, uei: str, analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the draft is attributed.")
     data = _get(store.vendors, run_id)
@@ -833,6 +948,7 @@ def hawk_reasons_status(run_id: str):
 
 @app.post("/api/runs/{run_id}/hawk-reasons")
 def start_hawk_reasons(run_id: str, analyst: str = Form("")):
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the request is attributed.")
     if not (summary_mod.enabled() or store.summary_client is not None):
@@ -861,6 +977,7 @@ class SummaryIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/summary")
 def save_case_summary(run_id: str, uei: str, body: SummaryIn):
+    body.analyst = who(body.analyst)
     if not body.analyst.strip():
         raise HTTPException(400, "Enter your name so the edit is attributed.")
     return _case_call(store.save_case_summary, run_id, uei, body.analyst, [x.model_dump() for x in body.sentences],
@@ -1020,6 +1137,7 @@ class TierIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/tier")
 def set_tier(run_id: str, uei: str, body: TierIn):
+    body.analyst = who(body.analyst)
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
@@ -1038,6 +1156,7 @@ class RoutingIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/routing")
 def set_routing(run_id: str, uei: str, body: RoutingIn):
+    body.analyst = who(body.analyst)
     try:
         return store.set_routing(uei, body.owner, body.analyst, run_id)
     except ValueError as exc:
@@ -1052,6 +1171,7 @@ class AssignIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/assign")
 def assign(run_id: str, body: AssignIn):
+    body.analyst = who(body.analyst)
     if not body.ueis:
         raise HTTPException(400, "Select at least one vendor.")
     if len(body.ueis) > 1000:
@@ -1070,6 +1190,7 @@ class DispositionIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/disposition")
 def set_disposition(run_id: str, uei: str, body: DispositionIn):
+    body.analyst = who(body.analyst)
     try:
         return store.set_disposition(uei, body.value, body.note, body.analyst, run_id)
     except ValueError as exc:
@@ -1086,6 +1207,7 @@ class BulkDispositionIn(BaseModel):
 @app.post("/api/runs/{run_id}/dispositions")
 def bulk_disposition(run_id: str, body: BulkDispositionIn):
     """The same disposition and note for several leads at once, each logged separately."""
+    body.analyst = who(body.analyst)
     data = _get(store.vendors, run_id)
     if not body.ueis:
         raise HTTPException(400, "Select at least one vendor.")
@@ -1112,6 +1234,7 @@ class BulkTierIn(BaseModel):
 @app.post("/api/runs/{run_id}/tiers")
 def bulk_tier(run_id: str, body: BulkTierIn):
     """The same tier and reason for several vendors at once, each change logged separately."""
+    body.analyst = who(body.analyst)
     data = _get(store.vendors, run_id)
     if not body.ueis:
         raise HTTPException(400, "Select at least one vendor.")
@@ -1134,6 +1257,7 @@ def bulk_tier(run_id: str, body: BulkTierIn):
 async def import_decisions(run_id: str, file: UploadFile = File(...), analyst: str = Form(""), apply: bool = Form(False)):
     """Tiers and dispositions from a Vendors of Interest workbook. Without `apply` it only previews what would change;
     a decision that already matches is left alone, so importing the same workbook twice changes nothing."""
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the import is attributed.")
     data = _get(store.vendors, run_id)
@@ -1179,6 +1303,7 @@ async def import_decisions(run_id: str, file: UploadFile = File(...), analyst: s
 @app.get("/api/runs/{run_id}/progress")
 def progress(run_id: str, analyst: str = ""):
     """How much of the queue is left: open, decided in this run (today and by you), carried from an earlier run."""
+    analyst = who(analyst)
     data = _get(store.vendors, run_id)
     disp = store.dispositions(run_id)
     today = date.today().isoformat()
@@ -1199,6 +1324,7 @@ def progress(run_id: str, analyst: str = ""):
 @app.get("/api/my-cases")
 def my_cases(analyst: str = ""):
     """Every lead assigned to an analyst, across runs, newest run first, each tagged with its run."""
+    analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name to see your cases.")
     runs = store.assigned_runs(analyst)
@@ -1227,6 +1353,7 @@ class RestoreIn(BaseModel):
 
 @app.post("/api/runs/{run_id}/vendors/{uei}/restore")
 def restore(run_id: str, uei: str, body: RestoreIn):
+    body.analyst = who(body.analyst)
     if not body.note.strip() or not body.analyst.strip():
         raise HTTPException(400, "A name and a reason are required to restore a vendor.")
     data = _get(store.vendors, run_id)
