@@ -49,6 +49,13 @@ CERT_CODES = {
     "QF": "SDVOSB", "8W": "WOSB", "A2": "WOSB", "8E": "EDWOSB",
 }
 SBA_ONLY = {"A6", "XX"}
+# Ownership a firm reports in SAM's business types (field 32). SBA lets Alaska Native Corporations, tribes and Native
+# Hawaiian organizations own several certified firms at once, so sister registrations sharing people are expected.
+OWNER_CODES = {
+    "05": "Alaska Native Corporation owned", "1B": "Tribally owned", "8U": "Native Hawaiian Organization owned",
+    "OW": "American Indian owned", "NB": "Native American owned",
+}
+TRIBAL_OWNER = set(OWNER_CODES)
 
 STREET_ABBR = {
     "STREET": "ST", "AVENUE": "AVE", "ROAD": "RD", "DRIVE": "DR", "BOULEVARD": "BLVD", "HIGHWAY": "HWY",

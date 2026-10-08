@@ -16,7 +16,7 @@ import pandas as pd
 from .exclusions import ExclusionsExtract
 from .normalize import money
 from .rules import RuleSet
-from .sam import SamExtract, SamSlice, person_key, suite_key, building_key
+from .sam import OWNER_CODES, TRIBAL_OWNER, SamExtract, SamSlice, _codes, building_key, person_key, suite_key
 from .stages import NONCOMMERCIAL, OUTLIER, SIGNAL_LABELS
 
 SIGNAL_LABELS.update({
@@ -74,6 +74,8 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
             "city": e["city"], "state": e["state"], "akey": e["akey"], "bkey": e["bkey"],
             "addr1": e["addr1"], "addr2": e["addr2"], "zip5": e["zip5"], "url": e.get("url", ""),
             "struct_code": e["struct_code"],
+            "business_types": _codes(e.get("business_types", "")),
+            "owner": [OWNER_CODES[c] for c in _codes(e.get("business_types", "")) if c in OWNER_CODES],
             "suite_count": int(sam.freq_suite.get(e["akey"], 0)) if e["akey"] else 0,
             "bldg_count": int(sam.freq_bldg.get(e["bkey"], 0)) if e["bkey"] else 0,
             "residential": bool(e["residential"]), "virtual": bool(e["virtual"]),
@@ -317,6 +319,13 @@ def _family_total(s: dict) -> float:
     return float(m.group(1)) * {"": 1, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}[m.group(2)] if m else 0.0
 
 
+def _tribal(r) -> bool:
+    """Owned by an Alaska Native Corporation, a tribe or a Native Hawaiian organization, by SAM's business types or,
+    for imports made before those were kept, by the pack's tribal name list."""
+    card = r.sam if isinstance(getattr(r, "sam", None), dict) else {}
+    return bool(set(card.get("business_types") or []) & TRIBAL_OWNER) or bool(getattr(r, "is_tribal", False))
+
+
 def relationship_bucket(df: pd.DataFrame, rules: RuleSet | None = None) -> pd.Series:
     """Two or more independent signals, at least one from SAM data, and not already priority. A pack can also let a
     certified firm split across UEIs stand on its own (rules.split_cert_alone)."""
@@ -332,7 +341,7 @@ def relationship_bucket(df: pd.DataFrame, rules: RuleSet | None = None) -> pd.Se
             core -= {"S2", "S3"}
         if len(core) >= 2 and core & SAM_SIGNALS:
             return "relationship"
-        if alone and r.bucket != "strong" and any(
+        if alone and r.bucket != "strong" and not _tribal(r) and any(
                 s["id"] == "R_split_cert" and _family_total(s) >= rules.split_cert_alone_min for s in r.signals):
             return "relationship"
         if not r.bucket and ids & SAM_SIGNALS:

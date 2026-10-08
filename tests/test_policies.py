@@ -322,3 +322,35 @@ def test_on_off_settings_are_validated():
     assert validate({"split_cert_alone": True})["split_cert_alone"] is True
     with pytest.raises(ValueError):
         validate({"split_cert_alone": "yes"})
+
+
+def test_tribal_and_anc_owned_firms_are_left_out_of_the_split_rule():
+    """SBA lets Alaska Native Corporations, tribes and Native Hawaiian organizations own several certified firms, so
+    a split alone doesn't make them a lead: by SAM ownership, or by the tribal name list on older imports."""
+    import pandas as pd
+
+    from ledgerhawk.pipeline.links import relationship_bucket
+    sig = [{"id": "R_split_cert", "detail": "2 UEIs share contact X; family total $200M; certified 8(a)", "family_total": 2e8}]
+    df = pd.DataFrame([
+        {"uei": "PLAIN", "sam": {"business_types": ["2X", "A2"]}, "is_tribal": False},
+        {"uei": "ANC", "sam": {"business_types": ["2X", "05"]}, "is_tribal": False},
+        {"uei": "TRIBE", "sam": {"business_types": ["1B"]}, "is_tribal": False},
+        {"uei": "NAME", "sam": {}, "is_tribal": True},  # an import from before ownership was kept
+    ]).assign(lane="outlier", bucket="", signals=[sig] * 4, is_qio=False, is_dialysis=False, is_air_charter=False,
+              is_foreign=False)
+    out = relationship_bucket(df, RuleSet(split_cert_alone=True, split_cert_alone_min=1e8))
+    assert list(out) == ["relationship", "watch", "watch", "watch"]
+    assert list(relationship_bucket(df, RuleSet())) == ["watch"] * 4  # rule off: nothing changes
+
+
+def test_sam_card_keeps_business_types_and_ownership(tmp_path):
+    from datetime import date
+
+    from ledgerhawk.pipeline.run import run_pipeline
+    from ledgerhawk.pipeline.sam import OWNER_CODES
+    v, e, sam, _ = make_synthetic(tmp_path, n=400, seed=2)
+    cards = [c for c in run_pipeline(v, e, date(2026, 10, 2), sam_file=sam, sam_extract_date=date(2026, 9, 6),
+                                     sam_cache_dir=tmp_path).vendors["sam"] if c]
+    assert cards and all(isinstance(c["business_types"], list) and isinstance(c["owner"], list) for c in cards)
+    assert any(c["business_types"] for c in cards)
+    assert all(o in OWNER_CODES.values() for c in cards for o in c["owner"])

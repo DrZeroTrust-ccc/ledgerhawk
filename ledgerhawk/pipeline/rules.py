@@ -159,6 +159,8 @@ class RuleSet:
     r_split_cert_min: float = 1_000_000
     # A certified firm split across UEIs is usually a lead only with a second signal. A pack can let it stand on its
     # own (relationship queue) above a family total. Off by default, so existing packs screen exactly as before.
+    # Firms owned by an Alaska Native Corporation, a tribe or a Native Hawaiian organization are left out: SBA lets
+    # them own several certified firms, so sister registrations are expected.
     split_cert_alone: bool = False
     split_cert_alone_min: float = 10_000_000
     sam_stale_days: int = 35
