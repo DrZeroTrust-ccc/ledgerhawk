@@ -121,6 +121,12 @@ S5_NAICS2 = ["11", "44", "45", "71", "72"]
 S5_PSC_PREFIXES = ["D", "A", "1"]
 
 
+def policy_label(manifest: dict) -> str:
+    """How an import's policy reads in a footer: "policy pack GSA FY26 pilot v3 (rule set 2026.10-pilot)"."""
+    p = manifest.get("policy") or {"pack_name": "LedgerHawk defaults", "version": 1}
+    return f"policy pack {p['pack_name']} v{p['version']} (rule set {manifest.get('rule_set_version', '')})"
+
+
 @dataclass
 class RuleSet:
     version: str = "2026.10-pilot"

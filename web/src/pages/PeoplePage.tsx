@@ -1,77 +1,68 @@
-import { useState } from "react";
-import { api, type Person } from "../api";
-import { usePlace } from "../nav";
-import { Button, Card, ErrorNote, Loading, useAsync } from "../ui";
+import { useState } from 'react'
+import { api, type Person } from '../api'
+import { usePlace } from '../nav'
+import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
 
 const ROLE_HELP: Record<string, string> = {
-  admin: "Everything an analyst does, plus people, roles and (soon) policies.",
-  analyst: "Works imports, the queue, cases and subject screens.",
-  executive: "Sees everything; can’t change anything.",
-};
+  admin: 'Everything an analyst does, plus people, roles and (soon) policies.',
+  analyst: 'Works imports, the queue, cases and subject screens.',
+  executive: 'Sees everything; can’t change anything.',
+}
 
 // Admins only: who can sign in, under what name, with which role. Sign-in itself happens at Cloudflare Access.
 export default function PeoplePage({ myEmail }: { myEmail: string }) {
-  usePlace("People");
-  const { data, error, reload } = useAsync(() => api.people(), []);
-  const [form, setForm] = useState({ email: "", name: "", role: "analyst" });
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  usePlace('People')
+  const { data, error, reload } = useAsync(() => api.people(), [])
+  const [form, setForm] = useState({ email: '', name: '', role: 'analyst' })
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
 
-  const save = async (
-    p: { email: string; name: string; role: string },
-    done: string,
-  ) => {
-    setBusy(true);
-    setErr(null);
-    setNote(null);
-    const f = new FormData();
-    f.append("email", p.email);
-    f.append("name", p.name);
-    f.append("role", p.role);
+  const save = async (p: { email: string; name: string; role: string }, done: string) => {
+    setBusy(true)
+    setErr(null)
+    setNote(null)
+    const f = new FormData()
+    f.append('email', p.email)
+    f.append('name', p.name)
+    f.append('role', p.role)
     try {
-      await api.savePerson(f);
-      setNote(done);
-      reload();
-      return true;
+      await api.savePerson(f)
+      setNote(done)
+      reload()
+      return true
     } catch (e) {
-      setErr((e as Error).message);
-      return false;
+      setErr((e as Error).message)
+      return false
     } finally {
-      setBusy(false);
+      setBusy(false)
     }
-  };
+  }
   const remove = async (p: Person) => {
-    if (
-      !window.confirm(
-        `Remove ${p.name} (${p.email})? They won't be able to use LedgerHawk until an Admin adds them again.`,
-      )
-    )
-      return;
-    setErr(null);
-    const f = new FormData();
-    f.append("email", p.email);
+    if (!window.confirm(`Remove ${p.name} (${p.email})? They won't be able to use LedgerHawk until an Admin adds them again.`)) return
+    setErr(null)
+    const f = new FormData()
+    f.append('email', p.email)
     try {
-      await api.removePerson(f);
-      setNote(`Removed ${p.name}.`);
-      reload();
+      await api.removePerson(f)
+      setNote(`Removed ${p.name}.`)
+      reload()
     } catch (e) {
-      setErr((e as Error).message);
+      setErr((e as Error).message)
     }
-  };
+  }
 
   const roles = data?.roles ?? {
-    admin: "Admin",
-    analyst: "Analyst",
-    executive: "Executive",
-  };
+    admin: 'Admin',
+    analyst: 'Analyst',
+    executive: 'Executive',
+  }
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-navy">People</h1>
         <p className="mt-1 max-w-3xl text-sm text-slate-600">
-          People sign in with their work email through Cloudflare Access. Here
-          an Admin decides what each email can do and the name their work is
+          People sign in with their work email through Cloudflare Access. Here an Admin decides what each email can do and the name their work is
           recorded under. Every change goes in the audit log.
         </p>
       </div>
@@ -85,14 +76,8 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
         <form
           className="flex flex-wrap items-end gap-3"
           onSubmit={async (e) => {
-            e.preventDefault();
-            if (
-              await save(
-                form,
-                `Added ${form.name.trim()} as ${roles[form.role]}.`,
-              )
-            )
-              setForm({ email: "", name: "", role: "analyst" });
+            e.preventDefault()
+            if (await save(form, `Added ${form.name.trim()} as ${roles[form.role]}.`)) setForm({ email: '', name: '', role: 'analyst' })
           }}
         >
           <label className="space-y-1 text-sm">
@@ -132,10 +117,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
             Add
           </Button>
         </form>
-        <p className="mt-2 text-xs text-slate-500">
-          {ROLE_HELP[form.role]} Their email also has to be allowed in
-          Cloudflare Access.
-        </p>
+        <p className="mt-2 text-xs text-slate-500">{ROLE_HELP[form.role]} Their email also has to be allowed in Cloudflare Access.</p>
       </Card>
       <Card title="Who can use LedgerHawk">
         {!data && !error && <Loading />}
@@ -159,16 +141,12 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                       <td className="py-2 font-medium">{b.name}</td>
                       <td className="py-2 text-slate-600">{b.email}</td>
                       <td className="py-2">Admin</td>
-                      <td className="py-2 text-xs text-slate-500">
-                        Permanent Admin, set on the server
-                      </td>
+                      <td className="py-2 text-xs text-slate-500">Permanent Admin, set on the server</td>
                       <td />
                     </tr>
                   ))}
                 {data.people.map((p) => {
-                  const permanent = data.bootstrap.some(
-                    (b) => b.email === p.email,
-                  );
+                  const permanent = data.bootstrap.some((b) => b.email === p.email)
                   return (
                     <tr key={p.email}>
                       <td className="py-2 font-medium">{p.name}</td>
@@ -181,12 +159,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                             aria-label={`Role for ${p.name}`}
                             value={p.role}
                             disabled={busy}
-                            onChange={(e) =>
-                              save(
-                                { ...p, role: e.target.value },
-                                `${p.name} is now ${roles[e.target.value]}.`,
-                              )
-                            }
+                            onChange={(e) => save({ ...p, role: e.target.value }, `${p.name} is now ${roles[e.target.value]}.`)}
                             className="rounded-md border border-slate-300 px-2 py-1"
                           >
                             {Object.entries(roles).map(([k, v]) => (
@@ -198,7 +171,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                         )}
                       </td>
                       <td className="py-2 text-xs text-slate-500">
-                        {permanent ? "Permanent Admin · " : ""}
+                        {permanent ? 'Permanent Admin · ' : ''}
                         {p.added_by}, {new Date(p.at).toLocaleDateString()}
                       </td>
                       <td className="py-2 text-right">
@@ -209,7 +182,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                         )}
                       </td>
                     </tr>
-                  );
+                  )
                 })}
               </tbody>
             </table>
@@ -217,5 +190,5 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
         )}
       </Card>
     </div>
-  );
+  )
 }

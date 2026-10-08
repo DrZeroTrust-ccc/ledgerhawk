@@ -109,6 +109,37 @@ export type GraphNode = {
 export type Me =
   | { auth: 'open' }
   | { auth: 'access'; email: string; name: string; role: 'admin' | 'analyst' | 'executive' | null; role_label: string; bootstrap: boolean }
+/** The policy pack version an import was screened under. */
+export type PolicyRef = { pack_id: string; pack_name: string; version: number; fingerprint: string }
+export type PolicyChange = { key: string; from?: unknown; to?: unknown; added?: string[]; removed?: string[] }
+export type PolicyVersion = {
+  n: number
+  status: 'live' | 'retired' | 'draft'
+  fingerprint: string
+  created_by: string
+  approved_by: string
+  at: string
+  reason: string
+  changes: PolicyChange[]
+}
+export type PolicyPack = {
+  id: string
+  name: string
+  description: string
+  locked: boolean
+  created_by: string
+  created_at: string
+  copied_from?: { pack_id: string; pack_name: string; version: number }
+  live: number | null
+  versions: PolicyVersion[]
+  imports: number
+}
+export type PolicyDetail = Omit<PolicyPack, 'imports'> & {
+  live_rules: Record<string, unknown>
+  vs_defaults: PolicyChange[]
+  imports: { id: string; label: string; created_at: string; version: number }[]
+}
+
 export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 'executive'; added_by: string; at: string }
 export type People = { people: Person[]; roles: Record<string, string>; bootstrap: { email: string; name: string }[] }
 
@@ -250,6 +281,7 @@ export type RunMeta = {
   sam_date?: string | null
   follows_id?: string | null
   app_version?: string
+  policy?: PolicyRef
   funnel: FunnelStep[]
   queue_counts: QueueCounts
 }
@@ -303,6 +335,7 @@ export type RunRecord = {
   inputs: { role: string; file: string; sha256: string | null; as_of: string | null }[]
   data_class: string
   rule_set: { version: string; fingerprint: string }
+  policy: PolicyRef
   pipeline_version: string
   app_version: string
   restored: string[]
@@ -667,6 +700,11 @@ export const api = {
   people: () => req<People>('/api/people'),
   savePerson: (form: FormData) => req<Person>('/api/people', { method: 'POST', body: form }),
   removePerson: (form: FormData) => req<{ ok: boolean }>('/api/people/remove', { method: 'POST', body: form }),
+  policies: () => req<{ packs: PolicyPack[] }>('/api/policies'),
+  policy: (id: string) => req<PolicyDetail>(`/api/policies/${encodeURIComponent(id)}`),
+  createPolicy: (form: FormData) => req<PolicyPack>('/api/policies', { method: 'POST', body: form }),
+  describePolicy: (id: string, form: FormData) =>
+    req<PolicyPack>(`/api/policies/${encodeURIComponent(id)}/describe`, { method: 'POST', body: form }),
   runs: () => req<RunMeta[]>('/api/runs'),
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
   createRun: (form: FormData) => req<{ id: string }>('/api/runs', { method: 'POST', body: form }),

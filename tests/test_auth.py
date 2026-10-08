@@ -97,6 +97,11 @@ def test_admin_manages_people_and_roles_are_enforced(signed):
     assert r.json()["sites"]["example.com"]["by"] == "Ana Analyst"
     log = appmod.store.history()
     assert any(e["analyst"] == "Pat Boss" and "Added Eve Exec <eve@agency.gov> as executive" in e["detail"] for e in log)
+    # policy packs: everyone signed in can read them; only an Admin creates one, recorded under their name
+    assert c.get("/api/policies", headers=h("ana@agency.gov")).status_code == 200
+    assert c.post("/api/policies", data={"name": "Ana's pack"}, headers=h("ana@agency.gov")).status_code == 403
+    r = c.post("/api/policies", data={"name": "Boss pack", "analyst": "Not Pat"}, headers=boss)
+    assert r.status_code == 200 and r.json()["created_by"] == "Pat Boss"
     # removal, and an admin can't remove themselves
     assert c.post("/api/people/remove", data={"email": "eve@agency.gov"}, headers=boss).json() == {"ok": True}
     assert c.get("/api/runs", headers=h("eve@agency.gov")).status_code == 403

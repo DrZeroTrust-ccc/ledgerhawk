@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 
 from ..pipeline.explain import why_it_flagged
 from ..pipeline.tiering import TIER_MEANING, category, next_step
+from ..pipeline.rules import policy_label
 
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 XLSX_TIER = {
@@ -197,7 +198,7 @@ def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) 
         src.append(f"SAM.gov public entity extract {man['sam_file']} ({man.get('sam_extract_date', '')})")
     if man.get("exclusions_file"):
         src.append(f"SAM.gov exclusions extract {man['exclusions_file']} ({man.get('exclusions_extract_date', '')})")
-    src.append(f"Rule set {man.get('rule_set_version', '')} (fingerprint {man.get('rule_set_fingerprint', '')}), "
+    src.append(f"Screened under {policy_label(man)}, fingerprint {man.get('rule_set_fingerprint', '')}, "
                f"import {meta.get('id', '')}")
     notes.append("Sources: " + "; ".join(src) + ".")
     notes.append(FOOTER)

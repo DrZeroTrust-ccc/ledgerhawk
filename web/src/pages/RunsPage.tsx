@@ -171,6 +171,8 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
   const [exDate, setExDate] = useState('')
   const [synthetic, setSynthetic] = useState(false)
   const [follows, setFollows] = useState('')
+  const packs = useAsync(() => api.policies(), [])
+  const [pack, setPack] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -188,6 +190,7 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
     f.append('sam_source', samSource)
     if (!exclusions) f.append('exclusions_source', exSource)
     if (follows) f.append('follows', follows)
+    if (pack) f.append('policy_pack', pack)
     try {
       const { id } = await api.createRun(f)
       nav(`/runs/${id}`)
@@ -260,7 +263,16 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
         )}
         <label className="space-y-1.5">
           <span className="block text-sm font-medium">Follow-up to an earlier import?</span>
-          <select value={follows} onChange={(e) => setFollows(e.target.value)} className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm">
+          <select
+            value={follows}
+            onChange={(e) => {
+              setFollows(e.target.value)
+              // a follow-up keeps the pack of the import it follows, unless the analyst picks another
+              const prior = runs.find((r) => r.id === e.target.value)?.policy?.pack_id
+              if (prior) setPack(prior === 'ledgerhawk-defaults' ? '' : prior)
+            }}
+            className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm"
+          >
             <option value="">No, this is a new list</option>
             {runs.map((r) => (
               <option key={r.id} value={r.id}>
@@ -269,6 +281,22 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
             ))}
           </select>
           <span className="block text-xs text-slate-500">A follow-up shows what changed and carries the earlier import's decisions, labeled.</span>
+        </label>
+        <label className="space-y-1.5">
+          <span className="block text-sm font-medium">Policy pack</span>
+          <select value={pack} onChange={(e) => setPack(e.target.value)} className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm">
+            {(packs.data?.packs ?? []).map((p) => (
+              <option key={p.id} value={p.locked ? '' : p.id}>
+                {p.name} · v{p.live}
+              </option>
+            ))}
+          </select>
+          <span className="block text-xs text-slate-500">
+            The rules this import is screened with.{' '}
+            <Link to="/policies" className="text-navy underline">
+              See the packs
+            </Link>
+          </span>
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} />

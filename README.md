@@ -238,6 +238,19 @@ Blueprint: a Docker web service with a 1 GB disk mounted at `/var/data`, where r
   sign-in; it's ignored once Cloudflare Access is on. `/api/healthz` stays open for Render's health check.
 - `LEDGERHAWK_CF_TEAM_DOMAIN`, `LEDGERHAWK_CF_AUD`, `LEDGERHAWK_ADMINS`: sign-in and roles (below).
 
+### Policy packs
+
+A policy pack is the set of rules an import is screened with (every threshold and list in `pipeline/rules.py`), one
+pack per use case. **LedgerHawk defaults** is built in and read-only; an Admin makes a new pack as a copy of any
+pack's live version on the **Policies** page. Each pack keeps numbered versions, one live at a time, each with who
+made it and why. Packs live under `<data>/policies/`.
+
+Starting an import, you pick a pack; the import uses that pack's live version and keeps a copy of those exact rules
+(`rules.json`) beside its results. A restore re-screens with the import's own rules; a follow-up uses its pack's
+current live version. The import dashboard, the import record, the Word and PDF case files and the Vendors of
+Interest workbook name the pack and version. Editing rules as plain-English sentences, with a preview of the
+impact, is next.
+
 ### Sign-in and roles
 
 People sign in with their work email through Cloudflare Access, which sits in front of ledgerhawk.tech. The app checks

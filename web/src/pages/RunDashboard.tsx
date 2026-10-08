@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Breadcrumbs, queueHref, usePlace } from '../nav'
-import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary } from '../api'
+import { api, queueTotal, money, num, REASON_LABEL, type FunnelStep, type RunSummary, type PolicyRef } from '../api'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
 import { FollowUpButton } from './RunRecordPage'
@@ -350,6 +350,7 @@ function Histogram({ runId }: { runId: string }) {
 function Inputs({ run }: { run: RunSummary }) {
   const v = run.validation
   const m = run.manifest as Record<string, string | null>
+  const pol = run.manifest.policy as PolicyRef | undefined
   const checks: [string, number][] = [
     ['Duplicate UEIs', v.duplicate_ueis],
     ['Missing UEIs', v.missing_ueis],
@@ -383,9 +384,13 @@ function Inputs({ run }: { run: RunSummary }) {
             <span className="text-amber-700">Not provided. SAM cards, the relationship screen and address or contact ties are off.</span>
           )}
         </dd>
-        <dt className="text-slate-500">Rule set</dt>
+        <dt className="text-slate-500">Policy</dt>
         <dd>
-          {m.rule_set_version} <span className="font-mono text-xs text-slate-500">{m.rule_set_fingerprint}</span>
+          <Link to={`/policies/${pol?.pack_id ?? 'ledgerhawk-defaults'}`} className="text-navy hover:underline">
+            {pol?.pack_name ?? 'LedgerHawk defaults'} v{pol?.version ?? 1}
+          </Link>{' '}
+          <span className="text-xs text-slate-500">rule set {m.rule_set_version}</span>{' '}
+          <span className="font-mono text-xs text-slate-500">{m.rule_set_fingerprint}</span>
         </dd>
       </dl>
       <div className="mt-4 flex flex-wrap gap-2">

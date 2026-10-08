@@ -32,6 +32,7 @@ from ..pipeline.exclusions import load_exclusions
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 from ..pipeline.rules import RuleSet
+from .policies import DEFAULTS_ID, PolicyBook, rules_from
 from ..pipeline.sam import load_sam
 from ..pipeline.stages import SIGNAL_LABELS
 from ..pipeline.subjects import compare_people, compare_screens, people_screen, subject_screen
@@ -120,6 +121,7 @@ class Store:
         (self.root / "sources").mkdir(parents=True, exist_ok=True)
         (self.root / "subjects").mkdir(parents=True, exist_ok=True)
         (self.root / "context").mkdir(parents=True, exist_ok=True)
+        self.policies = PolicyBook(self.root / "policies")
         for d in self.root.glob("tmp*"):  # a SAM.gov download cut off by a restart; it is fetched again
             shutil.rmtree(d, ignore_errors=True)
         self._cache: dict[str, dict] = {}
@@ -319,8 +321,12 @@ class Store:
     def create_run(self, vendor_path: Path, exclusions_path: Path | None, exclusions_date: date | None,
                    *, synthetic: bool, analyst: str, restore: set[str] | None = None,
                    parent_id: str | None = None, label: str = "", sam_source: str | None = None,
-                   follows_id: str | None = None) -> str:
+                   follows_id: str | None = None, policy_pack: str | None = None,
+                   rules: tuple[RuleSet, dict] | None = None) -> str:
+        """Screen a vendor file. It uses the live version of `policy_pack` (LedgerHawk defaults when none), or exactly
+        `rules` (a restore re-screens with its parent's rules), and keeps those rules beside the results."""
         sam = self.source(sam_source) if sam_source else None
+        rule_set, policy = rules or self.policies.live(policy_pack)
         if follows_id:
             self.run_dir(follows_id)
         h = secrets.token_hex(4)
@@ -337,12 +343,14 @@ class Store:
             res = run_pipeline(v, e, exclusions_date, restore=restore,
                                sam_file=sam["path"] if sam else None,
                                sam_extract_date=date.fromisoformat(sam["as_of"]) if sam else None,
-                               sam_cache_dir=Path(sam["path"]).parent if sam else None)
+                               sam_cache_dir=Path(sam["path"]).parent if sam else None, rules=rule_set)
         except Exception:
             shutil.rmtree(d, ignore_errors=True)  # no half-made run left behind
             raise
         res.manifest["data_class"] = "synthetic" if synthetic else "production"
+        res.manifest["policy"] = policy
         res.write(d)
+        (d / "rules.json").write_text(json.dumps(rule_set.to_dict(), indent=2))
         meta = {
             "id": run_id, "created_at": _now(), "created_by": analyst, "parent_id": parent_id,
             "label": label or vendor_path.name, "data_class": res.manifest["data_class"],
@@ -350,7 +358,7 @@ class Store:
             "exclusions_date": exclusions_date.isoformat() if exclusions_date else None,
             "restore": sorted(restore or []),
             "sam_source": sam["id"] if sam else None, "sam_date": sam["as_of"] if sam else None,
-            "follows_id": follows_id, "app_version": APP_VERSION,
+            "follows_id": follows_id, "app_version": APP_VERSION, "policy": policy,
             "inputs_sha256": {"vendor_file": file_sha256(v), "exclusions_file": file_sha256(e) if e else None},
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
@@ -381,7 +389,8 @@ class Store:
         sam = newest.get("sam")["id"] if newest.get("sam") else meta.get("sam_source")
         return self.create_run(vendor_path or d / "inputs" / meta["vendor_file"], excl, ed,
                                synthetic=meta["data_class"] == "synthetic", analyst=analyst, sam_source=sam,
-                               label=label or meta["label"], follows_id=run_id)
+                               label=label or meta["label"], follows_id=run_id,
+                               policy_pack=(meta.get("policy") or {}).get("pack_id"))
 
     def list_runs(self) -> list[dict]:
         out = []
@@ -393,6 +402,17 @@ class Store:
                 meta["queue_counts"] = summ["queue_counts"]
                 out.append(meta)
         return out
+
+    def import_rules(self, run_id: str) -> tuple[RuleSet, dict]:
+        """The exact rules an import was screened with, and its policy reference. Imports from before policy packs
+        used the shipped defaults."""
+        d = self.run_dir(run_id)
+        meta = json.loads((d / "meta.json").read_text())
+        f = d / "rules.json"
+        rules = rules_from(json.loads(f.read_text())) if f.exists() else RuleSet()
+        ref = meta.get("policy") or {"pack_id": DEFAULTS_ID, "pack_name": "LedgerHawk defaults", "version": 1,
+                                     "fingerprint": rules.fingerprint()}
+        return rules, ref
 
     def run_meta(self, run_id: str) -> dict:
         return json.loads((self.run_dir(run_id) / "meta.json").read_text())
@@ -465,7 +485,7 @@ class Store:
         ed = date.fromisoformat(meta["exclusions_date"]) if meta["exclusions_date"] else None
         new_id = self.create_run(d / "inputs" / meta["vendor_file"], excl, ed, synthetic=meta["data_class"] == "synthetic",
                                  analyst=analyst, restore=restore, parent_id=run_id, label=meta["label"],
-                                 sam_source=meta.get("sam_source"))
+                                 sam_source=meta.get("sam_source"), rules=self.import_rules(run_id))
         self.audit(analyst, "restored", uei, new_id, note)
         return new_id
 

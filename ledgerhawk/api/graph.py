@@ -5,10 +5,12 @@ entities) are kept but marked suppressed with their universe count, and are not 
 """
 from __future__ import annotations
 
-HUB_CAP = 5
+from ..pipeline.rules import RuleSet
+
+HUB_CAP = RuleSet().hub_cap  # an import passes its own rules' cap
 
 
-def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]]) -> dict:
+def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]], hub_cap: int = HUB_CAP) -> dict:
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
 
@@ -30,19 +32,19 @@ def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]]) -
     card = v.get("sam") or {}
     person_ids: dict[str, str] = {}
     for p in card.get("pocs", []):
-        hub = p["universe"] > HUB_CAP
+        hub = p["universe"] > hub_cap
         pid = node(f"p:{p['pkey']}", "person", f"{p['name']} ({p['state']})", universe=p["universe"], hub=hub,
                    note=f"shared by {p['universe']} SAM entities, suppressed" if hub else "")
         person_ids[p["pkey"]] = pid
         edge(center, pid, "has_poc", p["role"].replace("_", " "))
     suite = bldg = None
     if card.get("akey"):
-        hub = card["suite_count"] > HUB_CAP
+        hub = card["suite_count"] > hub_cap
         suite = node(f"a:{card['akey']}", "suite", card["address"], universe=card["suite_count"], hub=hub,
                      note=f"{card['suite_count']} SAM entities at this suite, suppressed" if hub else "")
         edge(center, suite, "located_at")
     if card.get("bkey"):
-        hub = card["bldg_count"] > HUB_CAP
+        hub = card["bldg_count"] > hub_cap
         street = card["address"].split(",")[0]
         bldg = node(f"b:{card['bkey']}", "building", f"Building at {street.title()}", universe=card["bldg_count"], hub=hub,
                     note=f"{card['bldg_count']} SAM entities in this building, suppressed" if hub else "")

@@ -275,9 +275,13 @@ export default function RunRecordPage() {
                 </tr>
               ))}
               <tr>
-                <td className="py-2 pr-3 text-slate-500">Rules</td>
+                <td className="py-2 pr-3 text-slate-500">Policy</td>
                 <td className="py-2">
-                  {rec.rule_set.version} <span className="font-mono text-xs text-slate-500">{rec.rule_set.fingerprint}</span>
+                  <Link to={`/policies/${rec.policy.pack_id}`} className="text-navy hover:underline">
+                    {rec.policy.pack_name} v{rec.policy.version}
+                  </Link>{' '}
+                  <span className="text-xs text-slate-500">rule set {rec.rule_set.version}</span>{' '}
+                  <span className="font-mono text-xs text-slate-500">{rec.rule_set.fingerprint}</span>
                 </td>
               </tr>
               <tr>
