@@ -33,6 +33,7 @@ from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
+from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
@@ -1101,9 +1102,11 @@ def _workflow(v: dict, st: dict) -> dict:
 
 
 def _slim(v: dict, disp: dict, state: dict | None = None, hawk: dict | None = None) -> dict:
+    wf = _workflow(v, (state or {}).get(v["uei"], {}))
+    c, why = vendor_color(v, wf, disp.get(v["uei"]))
     return {
         "hawk": ((hawk or {}).get(v["uei"]) or {}).get("text", ""),
-        **_workflow(v, (state or {}).get(v["uei"], {})),
+        **wf, "color": c, "color_why": why,
         "uei": v["uei"], "name": v["name"], "queue": v["queue"], "bucket": v["bucket"], "lane": v["lane"],
         "reason_code": v["reason_code"], "reason": v["reason"], "cut_stage": v["cut_stage"], "headline": headline(v),
         "restored_from": v["restored_from"], "suppression": v["suppression"],
@@ -1128,6 +1131,7 @@ def list_vendors(
     tier: str = "",
     owner: str = "",
     assignee: str = "",
+    color: str = "",
     q: str = "",
     sort: str = "-tot",
     offset: int = 0,
@@ -1151,6 +1155,10 @@ def list_vendors(
             rows = [r for r in rows if not wf.get(r["uei"], {}).get("assignee")]
         elif assignee:
             rows = [r for r in rows if wf.get(r["uei"], {}).get("assignee") == assignee]
+    if color:  # red, yellow, green, or several: "red,yellow"
+        want = set(color.split(","))
+        rows = [r for r in rows
+                if vendor_color(r, _workflow(r, state.get(r["uei"], {})), disp.get(r["uei"]))[0] in want]
     if queue == "any":
         rows = [r for r in rows if r["queue"]]
     elif queue:
@@ -1216,6 +1224,7 @@ def vendor(run_id: str, uei: str):
     out["hawk"] = (store.hawk_reasons(run_id)["reasons"].get(uei) or {}).get("text", "")
     out["disposition"] = store.dispositions(run_id).get(uei)
     out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
+    out["color"], out["color_why"] = vendor_color(v, out, out["disposition"])
     out["history"] = _history(run_id, uei)
     out["case"] = store.case(run_id, uei)
     out["ledger"] = _ledger(v, out["case"])
@@ -1415,6 +1424,25 @@ def export_voi(run_id: str):
     name = f"LedgerHawk Vendors of Interest {run_id}.xlsx"
     return Response(body, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/runs/{run_id}/exports/analysis.zip")
+def export_analysis(run_id: str, colors: str = "red,yellow"):
+    """Red and yellow vendors (or the colors asked for) as flat tables for analysis: vendors.csv with one column per
+    signal, evidence.csv, links.csv, the same as an Excel workbook, and a README with definitions and provenance."""
+    want = {c for c in colors.split(",") if c in COLORS}
+    if not want:
+        raise HTTPException(400, "Pick red, yellow or green.")
+    data = _get(store.vendors, run_id)
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
+    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"])} for r in data["rows"]]
+    body, counts = build_analysis_zip(items, store.summary(run_id), want)
+    u = CURRENT_USER.get()
+    store.audit(u.name if u else "", "export", None, run_id,
+                "Export for analysis: " + ", ".join(f"{counts[c]} {c}" for c in COLORS if c in want))
+    name = f"LedgerHawk analysis {run_id} {'-'.join(c for c in COLORS if c in want)}.zip"
+    return Response(body, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.get("/api/runs/{run_id}/vendors/{uei}/case.pdf")

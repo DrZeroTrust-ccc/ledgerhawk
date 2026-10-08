@@ -7,7 +7,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkMap from '../LinkMap'
 import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
-import { Button, Card, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
+import { Button, Card, ColorChip, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const KIND_LABEL: Record<string, string> = {
   direct: 'Excluded under this UEI',
@@ -514,6 +514,7 @@ export default function VendorPage() {
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-navy">{v.name}</h1>
           <QueueChip queue={v.queue || (v.bucket === 'watch' ? 'watch' : '')} />
+          <ColorChip color={v.color} why={v.color_why} />
           <TierChip tier={v.tier} changed={!!v.tier_change} />
           {v.exclusion_flags.map((f) => (
             <FlagChip key={f} flag={f} />

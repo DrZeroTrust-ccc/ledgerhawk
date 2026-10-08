@@ -4,7 +4,7 @@ import { Breadcrumbs, usePlace } from '../nav'
 import { api, LANE_LABEL, money, num, REASON_LABEL, type DecisionImport, type VendorRow } from '../api'
 import { useAnalystName } from '../App'
 import { KEYS, Progress, TriagePane } from '../Triage'
-import { Button, Card, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
+import { Button, Card, ColorChip, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
@@ -362,7 +362,7 @@ function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]
   )
 }
 
-const FILTER_KEYS = ['tier', 'signal', 'disposition', 'owner', 'assignee', 'q'] as const
+const FILTER_KEYS = ['color', 'tier', 'signal', 'disposition', 'owner', 'assignee', 'q'] as const
 
 // An empty list under a tab that says it has vendors: say which filters hid them, and clear them in one click.
 function HiddenByFilters({
@@ -418,6 +418,7 @@ export default function QueuePage() {
   const assignee = sp.get('assignee') ?? ''
   const view = sp.get('view') ?? 'list'
   const q = sp.get('q') ?? ''
+  const colorFilter = sp.get('color') ?? ''
 
   const params: Record<string, string> = { limit: String(view === 'board' ? 500 : limit) }
   if (queue === 'watch') params.bucket = 'watch'
@@ -429,6 +430,7 @@ export default function QueuePage() {
   if (owner) params.owner = owner
   if (assignee) params.assignee = assignee
   if (q) params.q = q
+  if (colorFilter) params.color = colorFilter
 
   const tabOnly: Record<string, string> = {}
   for (const k of ['bucket', 'queue', 'lane']) if (params[k]) tabOnly[k] = params[k]
@@ -513,6 +515,7 @@ export default function QueuePage() {
       return n
     })
   const filterLabel = (k: string, v: string) => {
+    if (k === 'color') return v === 'red,yellow' ? 'Red and yellow' : v.charAt(0).toUpperCase() + v.slice(1)
     if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : meta.data?.tiers[v] ?? `Tier ${v}`
     if (k === 'signal') return `Signal ${meta.data?.signals[v] ? `${v} · ${meta.data.signals[v]}` : v}`
     if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier import' : v
@@ -547,6 +550,11 @@ export default function QueuePage() {
           </Button>
           <DownloadMenu
             items={[
+              {
+                label: 'Export for analysis: red and yellow',
+                href: `/api/runs/${id}/exports/analysis.zip`,
+                hint: 'Zip: vendors, evidence and links as CSV and Excel, with a read-me',
+              },
               { label: 'Vendors of Interest (Excel)', href: `/api/runs/${id}/exports/vendors-of-interest.xlsx`, hint: 'Tiered vendors in the hand-built list layout' },
               { label: 'Small-vendor screen (Excel)', href: `/api/runs/${id}/exports/small-vendor-screen.xlsx`, hint: 'Integrity lane: vendors under $250K' },
             ]}
@@ -633,6 +641,13 @@ export default function QueuePage() {
               </option>
             ))}
           {signal && !meta.data?.signals[signal] && <option value={signal}>{signal}</option>}
+        </select>
+        <select value={colorFilter} onChange={(e) => set('color', e.target.value)} aria-label="Color" className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+          <option value="">Any color</option>
+          <option value="red">Red</option>
+          <option value="yellow">Yellow</option>
+          <option value="red,yellow">Red and yellow</option>
+          <option value="green">Green</option>
         </select>
         <select value={disposition} onChange={(e) => set('disposition', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any disposition</option>
@@ -780,7 +795,8 @@ export default function QueuePage() {
                       </td>
                       <td className="space-y-1 px-3 py-2.5">
                         <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />
-                        <div>
+                        <div className="flex flex-wrap gap-1">
+                          <ColorChip color={r.color} why={r.color_why} />
                           <TierChip tier={r.tier} changed={!!r.tier_change} />
                         </div>
                       </td>
