@@ -65,7 +65,7 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
       </p>
       {noSources ? (
         <p className="text-sm text-slate-500">
-          Add a SAM entity extract or an exclusions extract on the <Link to="/" className="text-navy underline">Runs</Link> page first.
+          Add a SAM entity extract or an exclusions extract on the <Link to="/" className="text-navy underline">Imports</Link> page first.
         </p>
       ) : (
         <form onSubmit={submit} className="grid gap-4 md:grid-cols-2">
@@ -92,7 +92,7 @@ function NewScreen({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
             <input type="file" accept=".csv,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
           </label>
           <label className="space-y-1">
-            <span className="block text-xs font-medium text-slate-600">Dollars from a run (optional)</span>
+            <span className="block text-xs font-medium text-slate-600">Dollars from an import (optional)</span>
             <select value={dollarsRun} onChange={(e) => setDollarsRun(e.target.value)} className={field}>
               <option value="">No dollars</option>
               {runs.map((r) => (

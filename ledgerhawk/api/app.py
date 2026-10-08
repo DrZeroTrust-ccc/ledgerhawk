@@ -87,7 +87,7 @@ def _get(fn, *a):
     try:
         return fn(*a)
     except KeyError:
-        raise HTTPException(404, "Run not found")
+        raise HTTPException(404, "Import not found")
 
 
 def _run_or_none(run_id: str) -> str | None:
@@ -207,7 +207,7 @@ async def create_run(
     follows: str = Form(""),
 ):
     if not analyst.strip():
-        raise HTTPException(400, "Enter your name so the run is attributed.")
+        raise HTTPException(400, "Enter your name so the import is attributed.")
     if follows:
         _get(store.run_dir, follows)
     with tempfile.TemporaryDirectory() as tmp:
@@ -221,7 +221,7 @@ async def create_run(
             try:
                 ed = date.fromisoformat(exclusions_date)
             except ValueError:
-                raise HTTPException(400, "Enter the exclusions extract date (YYYY-MM-DD) so the run is reproducible.")
+                raise HTTPException(400, "Enter the exclusions extract date (YYYY-MM-DD) so the import is reproducible.")
         if exclusions_source and ep is None:
             try:
                 src = store.source(exclusions_source)
@@ -284,7 +284,7 @@ async def create_subject_screen(
             sam_source=sam_source or None, exclusions_source=exclusions_source or None, dollars_run=dollars_run or None,
             people=people)
     except KeyError:
-        raise HTTPException(400, "That source or run no longer exists.")
+        raise HTTPException(400, "That source or import no longer exists.")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"id": sid}
@@ -316,7 +316,7 @@ def recheck_subject_screen(sid: str, analyst: str = Form(""), sam_source: str = 
         try:
             return {"id": store.recheck_subject_screen(sid, analyst, sam_source or None, exclusions_source or None, progress)}
         except KeyError:
-            raise ValueError("A source or run this screen used no longer exists.")
+            raise ValueError("A source or import this screen used no longer exists.")
     return _screen_job(sid, "recheck", analyst, run)
 
 
@@ -506,7 +506,7 @@ def run_summary(run_id: str):
 def follow_up_run(run_id: str, analyst: str = Form("")):
     """Re-screen the same vendor file against the newest SAM and exclusions extracts, linked to this run."""
     if not analyst.strip():
-        raise HTTPException(400, "Enter your name so the run is attributed.")
+        raise HTTPException(400, "Enter your name so the import is attributed.")
     _get(store.run_dir, run_id)
     try:
         return {"id": store.follow_up_run(run_id, analyst)}
@@ -708,7 +708,7 @@ def vendor(run_id: str, uei: str):
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     out = dict(v)
     out["why"] = why_it_flagged(v)
     out["headline"] = headline(v)
@@ -742,7 +742,7 @@ def vendor_where(uei: str):
     runs = store.vendor_runs(uei)
     screens = store.screens_for(uei, limit=20)
     if not runs and not screens:
-        raise HTTPException(404, "No run or subject screen holds this UEI")
+        raise HTTPException(404, "No import or subject screen holds this UEI")
     name = store.run_names(runs[0]["id"]).get(uei, "") if runs else screens[0]["subject"] if screens[0]["role"] == "subject" else ""
     return {"uei": uei, "name": name, "runs": runs, "screens": screens}
 
@@ -756,7 +756,7 @@ def _case_call(fn, *a, **kw):
     try:
         return fn(*a, **kw)
     except KeyError:
-        raise HTTPException(404, "Vendor or note not found in this run")
+        raise HTTPException(404, "Vendor or note not found in this import")
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     except ConnectionError as exc:
@@ -806,7 +806,7 @@ def draft_case_summary(run_id: str, uei: str, analyst: str = Form("")):
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     v = {**v, "why": why_it_flagged(v)}
     ledger = _ledger(v, store.case(run_id, uei))
     try:
@@ -914,7 +914,7 @@ def export_case(run_id: str, uei: str):
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     wf = _workflow(v, store.analyst_state(run_id).get(uei, {}))
     body = build_case(v, wf, store.dispositions(run_id).get(uei), _history(run_id, uei), store.summary(run_id))
     return Response(body, media_type="application/pdf",
@@ -926,7 +926,7 @@ def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool =
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     wf = _workflow(v, store.analyst_state(run_id).get(uei, {}))
     body = build_case_docx(v, wf, store.dispositions(run_id).get(uei), _history(run_id, uei), store.summary(run_id),
                            matter=matter.strip(), privileged=privileged, context=store.context(uei=uei), case=(cs := store.case(run_id, uei)),
@@ -939,7 +939,7 @@ def vendor_graph(run_id: str, uei: str):
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     return add_screens(build_graph(v, data["by_uei"], data["by_nn"]), uei, store.screens_for(uei), data["by_uei"])
 
 
@@ -1023,7 +1023,7 @@ def set_tier(run_id: str, uei: str, body: TierIn):
     data = _get(store.vendors, run_id)
     v = data["by_uei"].get(uei)
     if not v:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     prior = _workflow(v, store.analyst_state(run_id).get(uei, {}))["tier"]
     try:
         return store.set_tier(uei, body.tier, prior, body.reason, body.analyst, run_id)
@@ -1093,7 +1093,7 @@ def bulk_disposition(run_id: str, body: BulkDispositionIn):
         raise HTTPException(400, "Decide at most 1,000 vendors at a time.")
     missing = [u for u in body.ueis if u not in data["by_uei"]]
     if missing:
-        raise HTTPException(404, f"Not in this run: {', '.join(missing[:5])}")
+        raise HTTPException(404, f"Not in this import: {', '.join(missing[:5])}")
     try:
         for u in dict.fromkeys(body.ueis):
             store.set_disposition(u, body.value, body.note, body.analyst, run_id)
@@ -1119,7 +1119,7 @@ def bulk_tier(run_id: str, body: BulkTierIn):
         raise HTTPException(400, "Change at most 1,000 tiers at a time.")
     missing = [u for u in body.ueis if u not in data["by_uei"]]
     if missing:
-        raise HTTPException(404, f"Not in this run: {', '.join(missing[:5])}")
+        raise HTTPException(404, f"Not in this import: {', '.join(missing[:5])}")
     state = store.analyst_state(run_id)
     try:
         for u in dict.fromkeys(body.ueis):
@@ -1231,7 +1231,7 @@ def restore(run_id: str, uei: str, body: RestoreIn):
         raise HTTPException(400, "A name and a reason are required to restore a vendor.")
     data = _get(store.vendors, run_id)
     if uei not in data["by_uei"]:
-        raise HTTPException(404, "Vendor not in this run")
+        raise HTTPException(404, "Vendor not in this import")
     return {"id": store.restore(run_id, uei, body.analyst, body.note)}
 
 

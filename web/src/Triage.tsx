@@ -125,7 +125,7 @@ export function TriagePane({
           {v.disposition && (
             <div className={`rounded-md p-3 ${v.disposition.carried_from ? 'border border-dashed border-amber-300 bg-amber-50/60' : 'bg-slate-50'}`}>
               {v.disposition.carried_from && (
-                <div className="mb-1 text-xs font-medium text-amber-800">Carried from the {v.disposition.carried_from.created_at.slice(0, 10)} run</div>
+                <div className="mb-1 text-xs font-medium text-amber-800">Carried from the {v.disposition.carried_from.created_at.slice(0, 10)} import</div>
               )}
               <div className="font-medium">{v.disposition.value}</div>
               <div className="text-slate-600">{v.disposition.note}</div>
@@ -134,7 +134,7 @@ export function TriagePane({
               </div>
               {v.disposition.carried_from && (
                 <Button variant="secondary" className="mt-2" disabled={busy || !analyst.trim()} onClick={keep}>
-                  Keep it in this run
+                  Keep it in this import
                 </Button>
               )}
             </div>
@@ -202,9 +202,9 @@ export function Progress({ p }: { p: QueueProgress }) {
         <span className="block h-2 rounded bg-navy" style={{ width: `${pct}%` }} />
       </span>
       <span className="text-slate-600">
-        {num(p.decided)} decided in this run · {num(p.decided_today)} today{p.mine_today ? ` (${num(p.mine_today)} by you)` : ''}
+        {num(p.decided)} decided in this import · {num(p.decided_today)} today{p.mine_today ? ` (${num(p.mine_today)} by you)` : ''}
       </span>
-      {p.carried > 0 && <span className="text-amber-800">{num(p.carried)} carried from the earlier run</span>}
+      {p.carried > 0 && <span className="text-amber-800">{num(p.carried)} carried from the earlier import</span>}
       {p.assigned_to_me_open > 0 && <span className="text-slate-600">{num(p.assigned_to_me_open)} assigned to you and open</span>}
     </div>
   )

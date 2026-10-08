@@ -1327,7 +1327,7 @@ class Store:
         for d in todo:
             src = d["carried_from"]
             self.audit(analyst, "disposition_confirmed", d["uei"], run_id,
-                       f"Kept {d['value']} from run {src['label']} ({src['created_at'][:10]}, {d['analyst']}): {d['note']}")
+                       f"Kept {d['value']} from import {src['label']} ({src['created_at'][:10]}, {d['analyst']}): {d['note']}")
         return len(todo)
 
     def set_tier(self, uei: str, tier: str, prior: str, reason: str, analyst: str, run_id: str) -> dict:

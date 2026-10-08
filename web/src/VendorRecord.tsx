@@ -32,7 +32,7 @@ function strongest(screens: VendorScreen[], flags: string[]): { text: string; al
   if (aw?.anomalies[0]) return { text: aw.anomalies[0], alarm: false }
   const f = screens.find((s) => s.role === 'subject')?.findings?.[0]
   if (f) return { text: f, alarm: false }
-  return { text: 'No finding beyond the run’s own signals.', alarm: false }
+  return { text: 'No finding beyond the import’s own signals.', alarm: false }
 }
 
 export function WhyHere({ headline, flags, screens }: { headline: string; flags: string[]; screens: VendorScreen[] }) {

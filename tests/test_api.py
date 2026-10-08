@@ -323,7 +323,7 @@ def test_runs_keep_their_own_decisions_and_follow_ups_carry_them_labeled(sam_ctx
     d = client.get(f"/api/runs/{fid}/vendors/{uei2}").json()["disposition"]
     assert d["value"] == "Refer" and "carried_from" not in d and d["analyst"] == "Ana"
     log = client.get(f"/api/runs/{fid}/record").json()["log"]
-    assert log[0]["action"] == "disposition_confirmed" and "Kept Refer from run" in log[0]["detail"]
+    assert log[0]["action"] == "disposition_confirmed" and "Kept Refer from import" in log[0]["detail"]
     assert all(h["run_id"] == fid for h in log)
 
 

@@ -3,7 +3,7 @@ import { api } from '../api'
 import { Card, ErrorNote, Loading, useAsync } from '../ui'
 
 const ACTION_LABEL: Record<string, string> = {
-  run_created: 'Run started',
+  run_created: 'Import started',
   disposition: 'Disposition',
   restored: 'Restored to queue',
 }
@@ -14,7 +14,7 @@ export default function AuditPage() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold text-navy">Audit log</h1>
-        <p className="mt-1 text-sm text-slate-600">Every run, restore and disposition, with who did it and when.</p>
+        <p className="mt-1 text-sm text-slate-600">Every import, restore and disposition, with who did it and when.</p>
       </div>
       <Card>
         <ErrorNote error={error} />

@@ -20,7 +20,7 @@ export default function VendorLookupPage() {
         <h1 className="text-2xl font-semibold text-navy">{data.name || data.uei}</h1>
         <p className="mt-1 font-mono text-sm text-slate-500">UEI {data.uei}</p>
         <p className="mt-2 text-sm text-slate-600">
-          This vendor is not in any run yet, so it has no tier or decision here. Below is what subject screens found about it.
+          This vendor is not in any import yet, so it has no tier or decision here. Below is what subject screens found about it.
         </p>
       </div>
       <MoneyByYear uei={data.uei} screens={data.screens} />

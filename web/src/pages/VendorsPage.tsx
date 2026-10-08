@@ -15,7 +15,7 @@ export default function VendorsPage() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold text-navy">Vendors</h1>
-        <p className="mt-1 text-sm text-slate-600">Search every run and subject screen by name or UEI. A vendor opens on one record with everything known about it.</p>
+        <p className="mt-1 text-sm text-slate-600">Search every import and subject screen by name or UEI. A vendor opens on one record with everything known about it.</p>
       </div>
       <form
         role="search"
@@ -54,7 +54,7 @@ export default function VendorsPage() {
                     <span className="font-mono text-xs text-slate-500">{r.uei}</span>
                   </span>
                   <span className="text-xs text-slate-500">
-                    {[r.runs ? `${r.runs} ${r.runs === 1 ? 'run' : 'runs'}${r.run ? `, newest ${r.run.label}` : ''}` : '', r.screens ? `${r.screens} subject ${r.screens === 1 ? 'screen' : 'screens'}` : '']
+                    {[r.runs ? `${r.runs} ${r.runs === 1 ? 'import' : 'imports'}${r.run ? `, newest ${r.run.label}` : ''}` : '', r.screens ? `${r.screens} subject ${r.screens === 1 ? 'screen' : 'screens'}` : '']
                       .filter(Boolean)
                       .join(' · ')}
                   </span>

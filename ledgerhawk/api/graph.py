@@ -161,7 +161,7 @@ def add_screens(g: dict, uei: str, screens: list[dict], by_uei: dict[str, dict])
         money.update(n.pop("usaspending", {}))
         n["money"] = money
         years |= set(money)
-        n["source"] = "; ".join((["Run vendor file and SAM entity extract"] if r else [])
+        n["source"] = "; ".join((["Imported vendor file and SAM entity extract"] if r else [])
                                 + n.pop("screen_sources", [])) + ("; USAspending by fiscal year" if any(
                                     k not in ("2024", "2025") for k in money) else "")
     g["nodes"] = list(nodes.values())

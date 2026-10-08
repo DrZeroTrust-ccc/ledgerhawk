@@ -128,7 +128,7 @@ function NoteItem({ n, ctx, locked }: { n: CaseNote; ctx: CaseCtx; locked: boole
           </span>
         )}
         {n.carried_from && <span>· carried from the check of {n.carried_from.created_at.slice(0, 10)}</span>}
-        {n.run && <span>· from run {n.run.label}, {n.run.created_at.slice(0, 10)}</span>}
+        {n.run && <span>· from import {n.run.label}, {n.run.created_at.slice(0, 10)}</span>}
         {!locked && !n.carried_from && !n.run && sameName(n.analyst, analyst) && (
           <button
             className="text-crimson hover:underline"
@@ -203,7 +203,7 @@ export function Notes({ target, ctx, title = 'Investigator notes', earlier = [] 
       )}
       {earlier.length > 0 && (
         <details className="mt-1">
-          <summary className="cursor-pointer text-xs text-slate-500">{earlier.length} note(s) from earlier runs</summary>
+          <summary className="cursor-pointer text-xs text-slate-500">{earlier.length} note(s) from earlier imports</summary>
           <ul className="divide-y divide-slate-100 opacity-80">
             {earlier.map((n) => (
               <NoteItem key={n.id} n={n} ctx={ctx} locked />
@@ -572,7 +572,7 @@ export function WrittenSummary({
       <div className="rounded-md border border-dashed border-slate-300 p-3 text-sm">
         {earlier && (
           <div className="mb-3 text-slate-600">
-            <div className="text-xs font-medium text-amber-800">Summary from the {earlier.run.label || earlier.run.created_at.slice(0, 10)} run, for reference</div>
+            <div className="text-xs font-medium text-amber-800">Summary from the {earlier.run.label || earlier.run.created_at.slice(0, 10)} import, for reference</div>
             <p className="mt-1">{earlier.sentences.map((x) => x.text).join(' ')}</p>
           </div>
         )}

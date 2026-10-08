@@ -198,7 +198,7 @@ function ImportDecisions({ runId, onClose, onApplied }: { runId: string; onClose
             <p role="status" className={preview.applied ? 'font-medium text-emerald-800' : 'text-ink'}>
               {preview.applied ? 'Recorded: ' : 'Would change: '}
               {num(preview.changes.length)} {preview.changes.length === 1 ? 'vendor' : 'vendors'} ({num(tiers)} tiers, {num(disps)} dispositions) ·{' '}
-              {num(preview.unchanged)} already match · {num(preview.unmatched.length)} not in this run
+              {num(preview.unchanged)} already match · {num(preview.unmatched.length)} not in this import
             </p>
             {preview.changes.length > 0 && (
               <div className="max-h-64 overflow-auto rounded-md ring-1 ring-slate-200">
@@ -515,7 +515,7 @@ export default function QueuePage() {
   const filterLabel = (k: string, v: string) => {
     if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : meta.data?.tiers[v] ?? `Tier ${v}`
     if (k === 'signal') return `Signal ${meta.data?.signals[v] ? `${v} · ${meta.data.signals[v]}` : v}`
-    if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier run' : v
+    if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier import' : v
     if (k === 'owner') return `Owner: ${v}`
     if (k === 'assignee') return `Assigned to ${v}`
     return `Search "${v}"`
@@ -537,7 +537,7 @@ export default function QueuePage() {
 
   return (
     <div className="space-y-4">
-      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: run.data?.meta.label ?? id, to: `/runs/${id}` }, { label: 'Queue' }]} />
+      <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: run.data?.meta.label ?? id, to: `/runs/${id}` }, { label: 'Queue' }]} />
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-semibold text-navy">Queue</h1>
         {run.data && <DataClassBadge dataClass={run.data.meta.data_class} />}
@@ -554,7 +554,7 @@ export default function QueuePage() {
         </span>
         {run.data && (
           <Link to={`/runs/${id}`} className="text-sm text-navy hover:underline">
-            {run.data.meta.label} · run dashboard
+            {run.data.meta.label} · import dashboard
           </Link>
         )}
       </div>
@@ -637,7 +637,7 @@ export default function QueuePage() {
         <select value={disposition} onChange={(e) => set('disposition', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any disposition</option>
           <option value="none">Not yet dispositioned</option>
-          <option value="carried">Carried from an earlier run</option>
+          <option value="carried">Carried from an earlier import</option>
           {meta.data?.dispositions.map((d) => (
             <option key={d} value={d}>
               {d}
@@ -813,7 +813,7 @@ export default function QueuePage() {
                           <>
                             <div className={`font-medium ${r.disposition.carried_from ? 'text-amber-800' : ''}`}>{r.disposition.value}</div>
                             <div className="text-slate-500">
-                              {r.disposition.carried_from ? `Carried from ${r.disposition.carried_from.created_at.slice(0, 10)} run · ` : ''}
+                              {r.disposition.carried_from ? `Carried from ${r.disposition.carried_from.created_at.slice(0, 10)} import · ` : ''}
                               {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
                             </div>
                           </>

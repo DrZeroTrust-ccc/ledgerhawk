@@ -16,7 +16,7 @@ export default function LinkMapPage() {
     <div className="space-y-4">
       <Breadcrumbs
         items={[
-          { label: 'Runs', to: '/' },
+          { label: 'Imports', to: '/' },
           { label: runLabel(runs, id), to: `/runs/${id}` },
           { label: 'Queue', to: queueHref(id) },
           { label: name, to: `${record}?tab=map` },

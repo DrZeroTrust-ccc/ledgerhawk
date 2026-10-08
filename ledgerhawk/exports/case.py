@@ -187,7 +187,7 @@ def build_case(v: dict, wf: dict, disposition: dict | None, history: list[dict],
     if man.get("exclusions_extract_date"):
         src.append(f"SAM exclusions extract {man['exclusions_extract_date']}")
     story.append(Spacer(1, 10))
-    story.append(KeepTogether([P(f"Run {meta.get('id', '')} · rule set {man.get('rule_set_version', '')} · sources: "
+    story.append(KeepTogether([P(f"Import {meta.get('id', '')} · rule set {man.get('rule_set_version', '')} · sources: "
                                  + ", ".join(src) + f" · generated {generated_at:%Y-%m-%d %H:%M} UTC", "small")]))
 
     def page(canvas, doc):
