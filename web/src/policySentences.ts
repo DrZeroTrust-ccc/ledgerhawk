@@ -50,7 +50,7 @@ export const SENTENCES: SentenceGroup[] = [
       },
       {
         text: '{split_cert_alone} a certified firm split across UEIs on its own, in the relationship queue, when the family’s total across its registrations is at least {split_cert_alone_min}.',
-        note: 'Off by default: a split usually needs a second signal. This is the pattern behind Addon Services.',
+        note: 'Off by default: a split usually needs a second signal. Firms owned by an Alaska Native Corporation, a tribe or a Native Hawaiian organization are left out, since SBA lets them own several certified firms. This is the pattern behind Addon Services.',
       },
     ],
   },

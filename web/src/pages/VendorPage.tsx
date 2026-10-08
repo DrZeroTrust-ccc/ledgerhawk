@@ -127,6 +127,12 @@ function SamProfile({ c }: { c: SamCard }) {
       <dd>{c.start_date || '—'}</dd>
       <dt className="text-slate-500">Certifications</dt>
       <dd>{c.certs.length ? c.certs.join(', ') : <span className="text-slate-500">None</span>}</dd>
+      {c.owner && c.owner.length > 0 && (
+        <>
+          <dt className="text-slate-500">Ownership</dt>
+          <dd title={c.business_types?.length ? `SAM business types: ${c.business_types.join(', ')}` : undefined}>{c.owner.join(', ')}</dd>
+        </>
+      )}
       {c.dba && (
         <>
           <dt className="text-slate-500">Doing business as</dt>

@@ -67,6 +67,9 @@ export type SamCard = {
   last_update: string
   start_date: string
   certs: string[]
+  /** Ownership from SAM's business types, e.g. "Alaska Native Corporation owned"; imports before Oct 2026 lack it. */
+  owner?: string[]
+  business_types?: string[]
   naics: string
   address: string
   city: string
