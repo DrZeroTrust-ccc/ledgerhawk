@@ -470,7 +470,7 @@ export default function LinkMap({ runId, uei, full = false, onNoted }: { runId: 
               {isBad(selected) && <span className="rounded bg-crimson-50 px-1.5 py-0.5 text-xs text-crimson">excluded</span>}
               {selected.hub && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">hub, not expanded</span>}
               {isNew(selected, year, years) && <span className="rounded bg-crimson-50 px-1.5 py-0.5 text-xs text-crimson">new money in {fy(year)}</span>}
-              {selected.kind === 'vendor' && !selected.in_run && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">not in this run</span>}
+              {selected.kind === 'vendor' && !selected.in_run && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">not in this import</span>}
             </div>
           </div>
           {selected.kind === 'vendor' && selected.money && Object.keys(selected.money).length > 0 && (
@@ -739,7 +739,7 @@ export default function LinkMap({ runId, uei, full = false, onNoted }: { runId: 
       {note && <p className="text-sm text-slate-600">{note}</p>}
       {!full && panel}
       <p className="text-xs text-slate-500">
-        Shared names, contacts and addresses are leads to test, not proof of common control. Money: the run’s FY24 and FY25 file, and USAspending by
+        Shared names, contacts and addresses are leads to test, not proof of common control. Money: the import’s FY24 and FY25 file, and USAspending by
         fiscal year where a subject screen looked it up.
       </p>
     </div>

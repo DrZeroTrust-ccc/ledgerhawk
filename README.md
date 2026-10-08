@@ -51,14 +51,14 @@ signals and exclusion links), and `queue.csv`.
   exclusions extract (daily) or public entity extract (V2, monthly, first Sunday) as a data source. It only calls
   SAM.gov when the newest file it could get is not loaded yet, which keeps well inside the 10 calls a day a key
   without a SAM role allows. It keeps the newest 2 entity files and 14 exclusions files it downloaded. "Check SAM.gov
-  now" on the Runs page runs the same check. Manual uploads still work, and both extracts can be uploaded zipped.
+  now" on the Imports page runs the same check. Manual uploads still work, and both extracts can be uploaded zipped.
 - **Memory:** the entity extract (~800,000 entities) is streamed a line at a time into a SQLite file beside it the
   first time it is used (a few minutes), and screens read only the rows they need. A simulated full-size extract
   peaked at about 165 MB while building, against about 2.8 GB when it was parsed in memory.
 
 ## SAM enrichment and link analysis (milestone 3)
 
-With a SAM entity extract (`--sam`, or a data source in the app) the run adds:
+With a SAM entity extract (`--sam`, or a data source in the app) the import adds:
 
 - **SAM card** per vendor: registration status and dates, business start date, certifications (8(a), HUBZone,
   SDVOSB, WOSB, EDWOSB), physical address with how many SAM entities share the suite and building,
@@ -128,27 +128,29 @@ workbook in `exports/subjects.py`.
 
 A FastAPI backend (`ledgerhawk/api`) and a React app (`web/`) with four screens:
 
-- **Runs:** upload a vendor file, pick the SAM and exclusions extracts, tag synthetic data, see past runs. A data sources panel shows each extract's as-of date and warns when SAM is over 35 days old or exclusions over 2.
-- **Run dashboard:** queue counts, the stage funnel (click a stage to see who was cut, why, and restore them), signal combinations, input validation, hash, extract dates and thresholds.
+- **Imports:** upload a vendor file, pick the SAM and exclusions extracts, tag synthetic data, see past imports. A data sources panel shows each extract's as-of date and warns when SAM is over 35 days old or exclusions over 2.
+- **Import dashboard:** queue counts, the stage funnel (click a stage to see who was cut, why, and restore them), signal combinations, input validation, hash, extract dates and thresholds.
 - **Queue:** one list for priority, strong, exclusion-linked and watch vendors, with signal chips (hover for the triggering values), filters, dollars and disposition.
 - **Vendor page:** a plain-language "Why it flagged" paragraph, signals, the SAM profile, linked vendors, a link graph (hubs greyed with their counts; PNG and CSV export), exclusion records verbatim with scope badges, a disposition that always needs a note, and history.
 - **Exclusion gaps:** vendors that aren't excluded but are tied to an excluded party, grouped by excluding agency.
 
-Every restore, disposition and run goes into the audit log with who and when. Restoring a vendor creates a new run from the same inputs, so earlier runs never change.
+Every restore, disposition and import goes into the audit log with who and when. Restoring a vendor creates a new import from the same inputs, so earlier imports never change.
 
-### Run record and follow-up runs
+### Import record and follow-up imports
 
-Each run is its own record. Dispositions, tiers, owners and assignees belong to the run they were made in, so work on one
-run never changes another. A restore continues the same run's work.
+The app calls each screened vendor file an *import*. The code, URLs (`/runs/...`), API and data folders still say `run`.
 
-- **Run record** (run bar, "Run record"): what was screened (files, extract dates, SHA-256 hashes, rule set, build), how many
-  leads are decided, carried or open, the runs it follows or is followed by, and the run's log. The log also goes out on the
-  Run Log sheet of the Vendors of Interest workbook.
-- **Follow-up run** ("Start follow-up run", or pick "Follow-up to an earlier run" when uploading a new file): re-screens
+Each import is its own record. Dispositions, tiers, owners and assignees belong to the import they were made in, so work on one
+import never changes another. A restore continues the same import's work.
+
+- **Import record** (import bar, "Import record"): what was screened (files, extract dates, SHA-256 hashes, rule set, build), how many
+  leads are decided, carried or open, the imports it follows or is followed by, and the import's log. The log also goes out on the
+  Import Log sheet of the Vendors of Interest workbook.
+- **Follow-up import** ("Start follow-up import", or pick "Follow-up to an earlier import" when uploading a new file): re-screens
   against the newest SAM and exclusions extracts and lists what changed (new to the queue, changed, off the queue). The
-  earlier run's decisions show as carried, labeled with the run and analyst, and don't count as decided until someone keeps
+  earlier import's decisions show as carried, labeled with the import and analyst, and don't count as decided until someone keeps
   them ("Keep") or decides again.
-- Decisions made before this change move to the run they were made in, once, on startup.
+- Decisions made before this change move to the import they were made in, once, on startup.
 
 ### Fast triage
 
@@ -156,12 +158,12 @@ run never changes another. A restore continues the same run's work.
 - **Side pane:** click a row (or press j/k) to see why it flagged, its signals and current decision, and decide it there.
   1–5 picks a disposition, Ctrl+Enter saves and moves to the next lead, Enter opens the full case, Esc closes the pane.
 - **Bulk actions:** select rows to assign them, or decide them all with one disposition and one note (each logged).
-- **Progress** above the queue: open, decided in this run, decided today and by you, carried, and assigned to you.
-- **My cases** (top bar): every lead assigned to you across runs, each shown in the newest run that carries it.
+- **Progress** above the queue: open, decided in this import, decided today and by you, carried, and assigned to you.
+- **My cases** (top bar): every lead assigned to you across imports, each shown in the newest import that carries it.
 
 ### Case page
 
-Every lead in a run opens into one case page (the old vendor page):
+Every lead in an import opens into one case page (the old vendor page):
 
 - **Header:** tier, dollars, decision, owner and sign-off at a glance; Word and PDF case files.
 - **Summary and evidence ledger:** the one-line reason and "why it flagged", then every finding marked as strengthening
@@ -170,7 +172,7 @@ Every lead in a run opens into one case page (the old vendor page):
 - **Written summary:** with `ANTHROPIC_API_KEY` set in the server's environment, "Draft a summary with the Hawk" has Claude write a
   short theory of the case and up to three next checks from the evidence ledger only. Every sentence cites ledger rows
   (E1, E2, ...); a sentence that cites nothing real is dropped. It shows as a Hawk draft (AI) until an analyst edits it,
-  flags itself when the evidence changes, locks on approval, prints in the Word case file, and is in the run log.
+  flags itself when the evidence changes, locks on approval, prints in the Word case file, and is in the import log.
   Model: `claude-opus-5-5` (override with `LEDGERHAWK_SUMMARY_MODEL`). Without the key the button is replaced by a note.
 - **Queue reasons:** on the Queue page, "Have the Hawk write a reason for each lead" has Claude write one plain sentence per
   queued lead (largest dollars first, up to `LEDGERHAWK_HAWK_REASON_CAP`, default 2000) from the screening facts only.
@@ -181,9 +183,9 @@ Every lead in a run opens into one case page (the old vendor page):
   Outside context, Notes and files, History.
 - **Right rail:** decision, two-person sign-off, tier and routing.
 
-Notes, evidence files (with SHA-256), award lookups and sign-off now work on run leads as they do on subject screens; both
-use the same case tools (`web/src/Case.tsx`). They're kept per run beside the frozen results. A follow-up run shows the
-earlier run's notes read-only, and sign-off starts again. The Word case file carries the ledger, notes and sign-off.
+Notes, evidence files (with SHA-256), award lookups and sign-off now work on import leads as they do on subject screens; both
+use the same case tools (`web/src/Case.tsx`). They're kept per import beside the frozen results. A follow-up import shows the
+earlier import's notes read-only, and sign-off starts again. The Word case file carries the ledger, notes and sign-off.
 
 ```bash
 pip install -e '.[dev]'
@@ -221,7 +223,7 @@ There is no sign-in yet. Analysts type their name in the header, and that's what
   Weak signals are kept as second signals and never tier a vendor alone. A–C are queued as "Integrity lane".
 - **Integrity lane page**: lane funnel, tier counts, a control-gap summary by excluding agency, and every flagged vendor.
 - **Small-Vendor Screen workbook**: Summary, Small-Vendor Leads, Excluded Small Vendors, Checked and Cleared, Read Me.
-- **Risk and ROI panel** on the run dashboard (Stage 10): look-back and forward dollars for tiers 1–3, tier 5 separately,
+- **Risk and ROI panel** on the import dashboard (Stage 10): look-back and forward dollars for tiers 1–3, tier 5 separately,
   editable loss-rate scenarios (GAO-24-105833 range) and analyst-time assumptions, always labeled as an estimate.
 
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
@@ -234,6 +236,6 @@ Blueprint: a Docker web service with a 1 GB disk mounted at `/var/data`, where r
 
 - `LEDGERHAWK_ACCESS_PASSWORD`: when set, every page and API call asks for this shared password (any username).
   This is a stopgap until real sign-in exists. `/api/healthz` stays open for Render's health check.
-- `LEDGERHAWK_SEED_SYNTHETIC=1`: on an empty data directory, creates one synthetic run so a fresh deploy has
+- `LEDGERHAWK_SEED_SYNTHETIC=1`: on an empty data directory, creates one synthetic import so a fresh deploy has
   something to show.
 - Without a disk, everything under `/var/data` is lost on each deploy.

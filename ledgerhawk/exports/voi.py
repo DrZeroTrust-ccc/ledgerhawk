@@ -45,7 +45,7 @@ def _place(v: dict) -> str:
 
 def carried_note(d: dict) -> str:
     c = d.get("carried_from")
-    return f"; carried from run {c['label']} of {c['created_at'][:10]}, not yet confirmed in this run" if c else ""
+    return f"; carried from import {c['label']} of {c['created_at'][:10]}, not yet confirmed in this import" if c else ""
 
 
 def _disposition(d: dict | None) -> str:
@@ -85,7 +85,7 @@ def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = 
     if man.get("exclusions_extract_date"):
         sources.append(f"SAM.gov exclusions extract ({man['exclusions_extract_date']})")
     ws["B3"] = (f"{FOOTER} FY24 and FY25 obligations are from GSA's vendor file. Sources: {'; '.join(sources)}. "
-                f"Run {meta.get('id', '')}, exported {generated_at:%Y-%m-%d %H:%M} UTC.")
+                f"Import {meta.get('id', '')}, exported {generated_at:%Y-%m-%d %H:%M} UTC.")
     ws["B3"].font = Font(size=10, color=MUTED)
 
     head_fill = PatternFill("solid", fgColor=NAVY)
@@ -116,7 +116,7 @@ def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = 
 
     _read_me(wb.create_sheet("Read Me"), summary, items, rows, last)
     if log is not None:
-        _run_log(wb.create_sheet("Run Log"), summary, log)
+        _run_log(wb.create_sheet("Import Log"), summary, log)
 
     p = wb.properties
     p.creator = p.lastModifiedBy = "LedgerHawk"
@@ -132,9 +132,9 @@ def _run_log(ws, summary: dict, log: list[dict]) -> None:
     ws.column_dimensions["A"].width = 3
     for col, w in zip("BCDEF", (18, 22, 22, 16, 90)):
         ws.column_dimensions[col].width = w
-    ws["B2"] = f"Run Log: {meta.get('label', '')} (run {meta.get('id', '')})"
+    ws["B2"] = f"Import Log: {meta.get('label', '')} (import {meta.get('id', '')})"
     ws["B2"].font = Font(bold=True, size=16, color=NAVY)
-    ws["B3"] = "Every analyst action taken in this run, oldest first. Decisions carried from an earlier run are logged there."
+    ws["B3"] = "Every analyst action taken in this import, oldest first. Decisions carried from an earlier import are logged there."
     ws["B3"].font = Font(italic=True, color=MUTED)
     for c, h in enumerate(["When (UTC)", "Analyst", "Action", "UEI", "Detail"], start=2):
         cell = ws.cell(5, c, h)
@@ -198,7 +198,7 @@ def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) 
     if man.get("exclusions_file"):
         src.append(f"SAM.gov exclusions extract {man['exclusions_file']} ({man.get('exclusions_extract_date', '')})")
     src.append(f"Rule set {man.get('rule_set_version', '')} (fingerprint {man.get('rule_set_fingerprint', '')}), "
-               f"run {meta.get('id', '')}")
+               f"import {meta.get('id', '')}")
     notes.append("Sources: " + "; ".join(src) + ".")
     notes.append(FOOTER)
     for i, text in enumerate(notes):

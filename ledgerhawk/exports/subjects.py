@@ -179,7 +179,7 @@ def build_subjects(screen: dict, generated_at: datetime | None = None) -> bytes:
         ["Related entities found", screen["counts"]["related"]], ["People screened", screen["counts"].get("people", 0)],
         ["SAM entity extract", f"{src.get('sam_file') or 'not used'}" + (f", as of {src['sam_extract_date']}, SHA-256 {src['sam_sha256']}" if src.get("sam_file") else "")],
         ["SAM exclusions extract", f"{src.get('exclusions_file') or 'not used'}" + (f", as of {src['exclusions_extract_date']}" if src.get("exclusions_file") else "")],
-        ["Dollars joined from run", m.get("dollars_run") or "none"],
+        ["Dollars joined from import", m.get("dollars_run") or "none"],
         ["Rule set", f"{src.get('rule_set_version')} ({src.get('rule_set_fingerprint')})"],
         *[[k, v] for k, v in signoff_lines(screen)],
     ]

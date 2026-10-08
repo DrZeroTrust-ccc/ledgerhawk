@@ -13,7 +13,7 @@ export default function MyCasesPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-navy">My cases</h1>
-        <p className="mt-1 text-sm text-slate-600">Leads assigned to you in any run. Runs stay separate; each lead opens in its own run.</p>
+        <p className="mt-1 text-sm text-slate-600">Leads assigned to you in any import. Imports stay separate; each lead opens in its own import.</p>
       </div>
       {!analyst.trim() && <p className="text-sm text-slate-500">Enter your name in the header to see your cases.</p>}
       <ErrorNote error={error} />
@@ -27,7 +27,7 @@ export default function MyCasesPage() {
             key={run.id}
             title={
               <span>
-                {run.label} <span className="font-normal text-slate-500">· run of {run.created_at.slice(0, 10)}</span>
+                {run.label} <span className="font-normal text-slate-500">· import of {run.created_at.slice(0, 10)}</span>
               </span>
             }
             action={

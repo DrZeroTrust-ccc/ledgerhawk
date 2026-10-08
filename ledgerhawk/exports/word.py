@@ -257,7 +257,7 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
         src.append(f"SAM entity extract {man['sam_extract_date']}")
     if man.get("exclusions_extract_date"):
         src.append(f"SAM exclusions extract {man['exclusions_extract_date']}")
-    _small(doc, f"Run {meta.get('id', '')} · rule set {man.get('rule_set_version', '')} · sources: " + ", ".join(src)
+    _small(doc, f"Import {meta.get('id', '')} · rule set {man.get('rule_set_version', '')} · sources: " + ", ".join(src)
            + f" · generated {generated_at:%Y-%m-%d %H:%M} UTC")
     return _save(doc)
 

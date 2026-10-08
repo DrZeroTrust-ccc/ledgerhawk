@@ -176,7 +176,7 @@ function Subject({ s, withDollars, ctx, awards, context }: { s: SubjectResult; w
                   <div className="tabular mt-1 text-xs text-slate-600">
                     {e.in_dollars_run
                       ? `${e.dollars_from === 'list' ? 'From the list: ' : ''}FY24 ${money(e.fy24)} · FY25 ${money(e.fy25)}`
-                      : 'Not in the selected run'}
+                      : 'Not in the selected import'}
                   </div>
                 )}
               </section>

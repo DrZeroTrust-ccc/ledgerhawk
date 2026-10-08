@@ -167,16 +167,16 @@ function RecordStrip({ run }: { run: RunSummary }) {
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm">
       {rec ? (
         <span>
-          <span className="font-medium">{num(rec.queue.decided)}</span> decided in this run ·{' '}
+          <span className="font-medium">{num(rec.queue.decided)}</span> decided in this import ·{' '}
           {rec.queue.carried > 0 && (
             <>
-              <span className="font-medium">{num(rec.queue.carried)}</span> carried from the earlier run ·{' '}
+              <span className="font-medium">{num(rec.queue.carried)}</span> carried from the earlier import ·{' '}
             </>
           )}
           <span className="font-medium">{num(rec.queue.open)}</span> open · {num(rec.log.length)} actions logged
         </span>
       ) : (
-        <span className="text-slate-500">Loading the run record…</span>
+        <span className="text-slate-500">Loading the import record…</span>
       )}
       {run.follows && (
         <span className="text-slate-600">
@@ -189,7 +189,7 @@ function RecordStrip({ run }: { run: RunSummary }) {
       )}
       {run.followed_by.length > 0 && (
         <span className="text-amber-800">
-          A newer run follows this one:{' '}
+          A newer import follows this one:{' '}
           <Link to={`/runs/${run.followed_by[run.followed_by.length - 1].id}`} className="underline">
             {run.followed_by[run.followed_by.length - 1].created_at.slice(0, 10)}
           </Link>
@@ -197,7 +197,7 @@ function RecordStrip({ run }: { run: RunSummary }) {
       )}
       <span className="ml-auto flex flex-wrap items-center gap-3">
         <Link to={`/runs/${id}/record`} className="font-medium text-navy hover:underline">
-          Run record and log →
+          Import record and log →
         </Link>
         <FollowUpButton runId={id} />
       </span>
@@ -432,13 +432,13 @@ function Inputs({ run }: { run: RunSummary }) {
 export default function RunDashboard() {
   const { id = '' } = useParams()
   const { data: run, error } = useAsync(() => api.run(id), [id])
-  usePlace(run ? `${run.meta.label} (run dashboard)` : null)
+  usePlace(run ? `${run.meta.label} (import dashboard)` : null)
   if (error) return <ErrorNote error={error} />
   if (!run) return <Loading />
   const q = run.queue_counts
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: run.meta.label }]} />
+      <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: run.meta.label }]} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -446,7 +446,7 @@ export default function RunDashboard() {
             <DataClassBadge dataClass={run.meta.data_class} />
           </div>
           <p className="mt-1 text-sm text-slate-600">
-            Run {run.meta.id} · started {new Date(run.meta.created_at).toLocaleString()} by {run.meta.created_by}
+            Import {run.meta.id} · started {new Date(run.meta.created_at).toLocaleString()} by {run.meta.created_by}
             {run.meta.parent_id && (
               <>
                 {' '}

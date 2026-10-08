@@ -302,7 +302,7 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
         <div className={`rounded-md p-3 text-sm ${v.disposition.carried_from ? 'border border-dashed border-amber-300 bg-amber-50/60' : 'bg-slate-50'}`}>
           {v.disposition.carried_from && (
             <div className="mb-1 text-xs font-medium text-amber-800">
-              Carried from run {v.disposition.carried_from.label} of {v.disposition.carried_from.created_at.slice(0, 10)}. Not yet decided in this run.
+              Carried from import {v.disposition.carried_from.label} of {v.disposition.carried_from.created_at.slice(0, 10)}. Not yet decided in this import.
             </div>
           )}
           <div className="font-medium">{v.disposition.value}</div>
@@ -329,7 +329,7 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
                 }
               }}
             >
-              Keep this decision in this run
+              Keep this decision in this import
             </Button>
           )}
         </div>
@@ -504,7 +504,7 @@ export default function VendorPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Queue', to: queueHref(id) }, { label: v.name }]} />
+        <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Queue', to: queueHref(id) }, { label: v.name }]} />
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-navy">{v.name}</h1>
           <QueueChip queue={v.queue || (v.bucket === 'watch' ? 'watch' : '')} />
@@ -617,7 +617,7 @@ export default function VendorPage() {
                       <SamProfile c={v.sam} />
                     ) : (
                       <p className="text-sm text-slate-500">
-                        No SAM registration in this run's extract. Unmatched vendors usually have lapsed registrations, or the run had no SAM extract.
+                        No SAM registration in this import's extract. Unmatched vendors usually have lapsed registrations, or the import had no SAM extract.
                       </p>
                     )}
                   </Card>
@@ -666,7 +666,7 @@ export default function VendorPage() {
               {tab === 'outside' && <OutsideContextCard runId={id} v={v} />}
               {tab === 'notes' && (
                 <Card title="Notes and files">
-                  <Notes target="case" ctx={ctx} title="Notes in this run" earlier={v.case.earlier_notes} />
+                  <Notes target="case" ctx={ctx} title="Notes in this import" earlier={v.case.earlier_notes} />
                 </Card>
               )}
               {tab === 'history' && (
@@ -681,7 +681,7 @@ export default function VendorPage() {
                             <>
                               {' · '}
                               <Link to={`/runs/${h.other_run.id}/vendors/${v.uei}`} className="rounded bg-slate-100 px-1 text-slate-600 hover:underline">
-                                run {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
+                                import {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
                               </Link>
                             </>
                           )}
@@ -706,7 +706,7 @@ export default function VendorPage() {
           <Card title="Tier and routing">
             <TierRouting key={`${v.tier}|${v.owner}`} runId={id} v={v} onSaved={reload} />
           </Card>
-          <Card title="Where it sits in this run">
+          <Card title="Where it sits in this import">
             <dl className="space-y-2 text-sm">
               <div>
                 <dt className="text-xs text-slate-500">Lane</dt>

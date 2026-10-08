@@ -13,7 +13,7 @@ export default function ExclusionGapsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Exclusion gaps' }]} />
+        <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Exclusion gaps' }]} />
         <h1 className="mt-2 text-2xl font-semibold text-navy">Exclusion coverage gaps</h1>
         <p className="mt-1 max-w-3xl text-sm text-slate-600">
           Vendors that are not excluded themselves but are tied to an excluded party by a shared suite, a shared contact, an alias in the
@@ -21,14 +21,14 @@ export default function ExclusionGapsPage() {
           the scope. These are questions for that official, not violations.
         </p>
         {run.data && !run.data.meta.sam_source && (
-          <p className="mt-2 text-sm text-amber-700">This run has no SAM entity extract, so suite and contact ties are not checked.</p>
+          <p className="mt-2 text-sm text-amber-700">This import has no SAM entity extract, so suite and contact ties are not checked.</p>
         )}
       </div>
       <ErrorNote error={error} />
       {!data && !error && <Loading />}
       {data && total === 0 && (
         <Card>
-          <p className="text-sm text-slate-500">No vendors in this run are tied to an excluded party.</p>
+          <p className="text-sm text-slate-500">No vendors in this import are tied to an excluded party.</p>
         </Card>
       )}
       {data?.map((g) => (

@@ -34,7 +34,7 @@ export function FollowUpButton({ runId }: { runId: string }) {
       <Button
         variant="secondary"
         disabled={busy || !analyst.trim()}
-        title={analyst.trim() ? 'Re-screen this file against the newest extracts, linked to this run' : 'Enter your name in the header first'}
+        title={analyst.trim() ? 'Re-screen this file against the newest extracts, linked to this import' : 'Enter your name in the header first'}
         onClick={async () => {
           setBusy(true)
           setError(null)
@@ -49,7 +49,7 @@ export function FollowUpButton({ runId }: { runId: string }) {
           }
         }}
       >
-        {busy ? 'Running…' : 'Start follow-up run'}
+        {busy ? 'Importing…' : 'Start follow-up import'}
       </Button>
       <ErrorNote error={error} />
     </span>
@@ -134,12 +134,12 @@ function Carried({ runId, rec, onDone }: { runId: string; rec: RunRecord; onDone
       title={`Decisions carried from ${rec.follows.label} (${num(data.total)})`}
       action={
         <Button variant="secondary" disabled={busy || !analyst.trim()} onClick={() => keep(data.rows.map((r) => r.uei))}>
-          Keep all {num(data.rows.length)} in this run
+          Keep all {num(data.rows.length)} in this import
         </Button>
       }
     >
       <p className="mb-3 text-sm text-slate-600">
-        These were decided in the earlier run. They show here so nothing is lost, but they don't count as decided in this run until someone keeps them or
+        These were decided in the earlier import. They show here so nothing is lost, but they don't count as decided in this import until someone keeps them or
         decides again. Check the changes above first.
       </p>
       <ErrorNote error={error} />
@@ -168,10 +168,10 @@ function Log({ rec, runId }: { rec: RunRecord; runId: string }) {
   const rows = rec.log.filter((h) => !q || `${h.analyst} ${h.action} ${h.detail} ${h.uei ?? ''}`.toLowerCase().includes(q.toLowerCase()))
   return (
     <Card
-      title={`Run log (${num(rec.log.length)})`}
+      title={`Import log (${num(rec.log.length)})`}
       action={<input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter" className="w-48 rounded border border-slate-300 px-2 py-1 text-sm" />}
     >
-      <p className="mb-3 text-sm text-slate-600">Every action taken in this run. It also goes out with the Vendors of Interest workbook, on its Run Log sheet.</p>
+      <p className="mb-3 text-sm text-slate-600">Every action taken in this import. It also goes out with the Vendors of Interest workbook, on its Import Log sheet.</p>
       <div className="max-h-[32rem] overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-white text-left text-xs text-slate-500">
@@ -207,22 +207,22 @@ function Log({ rec, runId }: { rec: RunRecord; runId: string }) {
 export default function RunRecordPage() {
   const { id = '' } = useParams()
   const { data: rec, error, reload } = useAsync(() => api.record(id), [id])
-  usePlace(rec ? `${rec.meta.label} (run record)` : null)
+  usePlace(rec ? `${rec.meta.label} (import record)` : null)
   if (error) return <ErrorNote error={error} />
   if (!rec) return <Loading />
   const m = rec.meta
   const q = rec.queue
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: m.label, to: `/runs/${id}` }, { label: 'Run record' }]} />
+      <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: m.label, to: `/runs/${id}` }, { label: 'Import record' }]} />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="break-all text-2xl font-semibold text-navy">Run record: {m.label}</h1>
+            <h1 className="break-all text-2xl font-semibold text-navy">Import record: {m.label}</h1>
             <DataClassBadge dataClass={m.data_class} />
           </div>
           <p className="mt-1 text-sm text-slate-600">
-            Run {m.id} · started {when(m.created_at)} by {m.created_by}
+            Import {m.id} · started {when(m.created_at)} by {m.created_by}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 print:hidden">
@@ -233,11 +233,11 @@ export default function RunRecordPage() {
         </div>
       </div>
 
-      <Card title="Where this run stands">
+      <Card title="Where this import stands">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-5">
           <Stat label="Leads in the queue" value={num(q.total)} sub={money(q.dollars)} />
-          <Stat label="Decided in this run" value={num(q.decided)} />
-          <Stat label="Carried from earlier run" value={num(q.carried)} sub={q.carried ? 'not yet kept here' : undefined} />
+          <Stat label="Decided in this import" value={num(q.decided)} />
+          <Stat label="Carried from earlier import" value={num(q.carried)} sub={q.carried ? 'not yet kept here' : undefined} />
           <Stat label="Still open" value={num(q.open)} />
           <Stat label="Actions logged" value={num(rec.log.length)} />
         </div>
@@ -289,9 +289,9 @@ export default function RunRecordPage() {
               </tr>
             </tbody>
           </table>
-          <p className="mt-3 text-xs text-slate-500">A run's files and results never change. Reopening it later shows what the analyst saw at the time.</p>
+          <p className="mt-3 text-xs text-slate-500">An import's files and results never change. Reopening it later shows what the analyst saw at the time.</p>
         </Card>
-        <Card title="Related runs">
+        <Card title="Related imports">
           <ul className="space-y-2 text-sm">
             {rec.follows ? (
               <li>
@@ -302,7 +302,7 @@ export default function RunRecordPage() {
                 of {day(rec.follows.created_at)}. Its decisions show here as carried until kept or redone.
               </li>
             ) : (
-              <li className="text-slate-600">This is the first run of this list.</li>
+              <li className="text-slate-600">This is the first import of this list.</li>
             )}
             {rec.restored_from.map((r) => (
               <li key={r.id}>
@@ -325,7 +325,7 @@ export default function RunRecordPage() {
           </ul>
           {rec.changes && (
             <p className="mt-3 text-sm text-slate-600">
-              Since the earlier run: {num(rec.changes.new)} new leads, {num(rec.changes.changed)} changed, {num(rec.changes.dropped)} off the queue.
+              Since the earlier import: {num(rec.changes.new)} new leads, {num(rec.changes.changed)} changed, {num(rec.changes.dropped)} off the queue.
             </p>
           )}
         </Card>

@@ -59,7 +59,7 @@ def build_small(items: list[dict], summary: dict, run: dict, generated_at: datet
     meta = run.get("meta", {})
     man = run.get("manifest", {})
     synthetic = meta.get("data_class") == "synthetic"
-    sub = (f"{FOOTER} Run {meta.get('id', '')}, exported {generated_at:%Y-%m-%d %H:%M} UTC. Fiscal-year timing only: "
+    sub = (f"{FOOTER} Import {meta.get('id', '')}, exported {generated_at:%Y-%m-%d %H:%M} UTC. Fiscal-year timing only: "
            "award dates have not been checked against USAspending.")
     order = {"A": 0, "B": 1, "C": 2, "D": 3, "": 4}
     items = sorted(items, key=lambda i: (order[i["v"]["integrity"]["tier"]], -i["v"]["tot"]))

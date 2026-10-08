@@ -40,7 +40,7 @@ function Nav() {
   return (
     <nav className="flex flex-wrap items-center gap-1">
       <NavLink to="/" end className={({ isActive }) => tab({ isActive: isActive || onRun })}>
-        Runs
+        Imports
       </NavLink>
       <NavLink to="/vendors" className={tab}>
         Vendors
@@ -77,7 +77,7 @@ function RunBar() {
     <div className="border-b border-slate-200 bg-white">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 px-4 sm:px-6">
         <label className="flex min-w-0 items-center gap-2 py-1.5 text-xs text-slate-500">
-          {here ? 'Run' : 'Last run'}
+          {here ? 'Import' : 'Last import'}
           <select
             value={id}
             onChange={(e) => nav(`/runs/${e.target.value}`)}
@@ -107,7 +107,7 @@ function RunBar() {
             Exclusion gaps
           </NavLink>
           <NavLink to={`/runs/${id}/record`} className={sub}>
-            Run record
+            Import record
           </NavLink>
         </div>
       </div>

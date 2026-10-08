@@ -117,7 +117,7 @@ function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto
       <AutoFetch auto={auto} reload={reload} />
       {!sources && <Loading />}
       {sources && sources.length === 0 && (
-        <p className="mb-4 text-sm text-slate-500">No SAM or exclusions extracts loaded yet. Add them once here and every run can use them.</p>
+        <p className="mb-4 text-sm text-slate-500">No SAM or exclusions extracts loaded yet. Add them once here and every import can use them.</p>
       )}
       {sources && sources.length > 0 && (
         <div className="mb-4 overflow-x-auto">
@@ -259,7 +259,7 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
           </label>
         )}
         <label className="space-y-1.5">
-          <span className="block text-sm font-medium">Follow-up to an earlier run?</span>
+          <span className="block text-sm font-medium">Follow-up to an earlier import?</span>
           <select value={follows} onChange={(e) => setFollows(e.target.value)} className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm">
             <option value="">No, this is a new list</option>
             {runs.map((r) => (
@@ -268,17 +268,17 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
               </option>
             ))}
           </select>
-          <span className="block text-xs text-slate-500">A follow-up shows what changed and carries the earlier run's decisions, labeled.</span>
+          <span className="block text-xs text-slate-500">A follow-up shows what changed and carries the earlier import's decisions, labeled.</span>
         </label>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={synthetic} onChange={(e) => setSynthetic(e.target.checked)} />
           This is synthetic or demo data
         </label>
         <Button type="submit" disabled={!vendors || busy || !analyst.trim()} className="ml-auto">
-          {busy ? 'Running…' : 'Run screen'}
+          {busy ? 'Importing…' : 'Import and screen'}
         </Button>
       </div>
-      {!analyst.trim() && <p className="text-xs text-slate-500">Enter your name in the header so the run is attributed to you.</p>}
+      {!analyst.trim() && <p className="text-xs text-slate-500">Enter your name in the header so the import is attributed to you.</p>}
       <ErrorNote error={error} />
     </form>
   )
@@ -307,17 +307,17 @@ export default function RunsPage() {
     <div className="space-y-6">
       <PickUp />
       <div>
-        <h1 className="text-2xl font-semibold text-navy">Runs</h1>
+        <h1 className="text-2xl font-semibold text-navy">Imports</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Each run screens one vendor file against the SAM and exclusions extracts you pick. Runs never change after they finish, so their numbers stay
+          Each import screens one vendor file against the SAM and exclusions extracts you pick. Imports never change after they finish, so their numbers stay
           reproducible.
         </p>
       </div>
-      <Card title="Start a new run">
+      <Card title="Start a new import">
         <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} runs={runs ?? []} />
       </Card>
       <DataSources sources={sources.data?.sources ?? null} auto={sources.data?.auto} reload={sources.reload} />
-      <Card title="Previous runs">
+      <Card title="Previous imports">
         <ErrorNote error={error} />
         {!runs && !error && <Loading />}
         {runs && runs.length === 0 && <p className="text-sm text-slate-500">No runs yet. Upload a vendor file above.</p>}
@@ -348,7 +348,7 @@ export default function RunsPage() {
                         {r.follows_id && (
                           <div className="text-xs text-slate-500">
                             Follow-up to {runs.find((x) => x.id === r.follows_id)?.label ?? r.follows_id} of{' '}
-                            {runs.find((x) => x.id === r.follows_id)?.created_at.slice(0, 10) ?? 'an earlier run'}
+                            {runs.find((x) => x.id === r.follows_id)?.created_at.slice(0, 10) ?? 'an earlier import'}
                           </div>
                         )}
                       </td>

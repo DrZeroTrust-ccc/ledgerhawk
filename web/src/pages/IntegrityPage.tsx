@@ -28,7 +28,7 @@ export default function IntegrityPage() {
   const rows = data?.rows.filter((r) => (pick === 'excluded' ? r.integrity?.excluded : !pick || r.integrity?.tier === pick)) ?? []
   return (
     <div className="space-y-6">
-      <Breadcrumbs items={[{ label: 'Runs', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Integrity lane' }]} />
+      <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Integrity lane' }]} />
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -40,7 +40,7 @@ export default function IntegrityPage() {
             party. The value here is in control gaps, not dollars. Timing is by fiscal year until award dates are checked.
           </p>
           {run.data && !run.data.meta.exclusions_file && (
-            <p className="mt-2 text-sm text-amber-700">This run has no exclusions extract, so the lane is empty.</p>
+            <p className="mt-2 text-sm text-amber-700">This import has no exclusions extract, so the lane is empty.</p>
           )}
         </div>
         <span className="ml-auto">
