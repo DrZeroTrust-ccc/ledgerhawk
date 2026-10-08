@@ -34,6 +34,7 @@ from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
+from .policies import DEFAULTS_ID
 from .store import DISPOSITIONS, SOURCE_KINDS, Store
 
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -154,6 +155,73 @@ def remove_person(email: str = Form("")):
     except KeyError:
         raise HTTPException(404, "No one with that email is set up.")
     return {"ok": True}
+
+
+def _can_manage_policies() -> str:
+    """Who is changing policies: with sign-in on, only an Admin may; without it, whoever typed their name."""
+    u = CURRENT_USER.get()
+    if VERIFIER is not None and u is not None and u.role != "admin":
+        raise HTTPException(403, "Only an Admin can create or change policy packs.")
+    return u.name if u else ""
+
+
+def _pack_imports(pid: str) -> list[dict]:
+    return [{"id": m["id"], "label": m["label"], "created_at": m["created_at"],
+             "version": (m.get("policy") or {}).get("version", 1)}
+            for m in store.list_runs() if (m.get("policy") or {}).get("pack_id", DEFAULTS_ID) == pid]
+
+
+@app.get("/api/policies")
+def list_policies():
+    used: dict[str, int] = {}
+    for m in store.list_runs():
+        k = (m.get("policy") or {}).get("pack_id", DEFAULTS_ID)
+        used[k] = used.get(k, 0) + 1
+    return {"packs": [{**p, "imports": used.get(p["id"], 0)} for p in store.policies.packs()]}
+
+
+@app.get("/api/policies/{pid}")
+def get_policy(pid: str):
+    try:
+        p = store.policies.pack(pid, with_rules=True)
+    except KeyError:
+        raise HTTPException(404, "No such policy pack")
+    return {**p, "imports": _pack_imports(pid)}
+
+
+@app.post("/api/policies")
+def create_policy(name: str = Form(""), description: str = Form(""), copy_from: str = Form(DEFAULTS_ID),
+                  analyst: str = Form("")):
+    by = _can_manage_policies() or analyst.strip()
+    if not by:
+        raise HTTPException(400, "Enter your name so the pack is attributed.")
+    try:
+        p = store.policies.create(name, description, copy_from or DEFAULTS_ID, by)
+    except KeyError:
+        raise HTTPException(400, "The pack to copy from no longer exists.")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(by, "policy_pack", None, None, f"Created policy pack {p['name']} from {p['copied_from']['pack_name']} "
+                                               f"v{p['copied_from']['version']}")
+    return p
+
+
+@app.post("/api/policies/{pid}/describe")
+def describe_policy(pid: str, name: str = Form(""), description: str = Form(""), analyst: str = Form("")):
+    by = _can_manage_policies() or analyst.strip()
+    if not by:
+        raise HTTPException(400, "Enter your name so the change is attributed.")
+    try:
+        before = store.policies.pack(pid)
+        p = store.policies.describe(pid, name, description)
+    except KeyError:
+        raise HTTPException(404, "No such policy pack")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if (before["name"], before["description"]) != (p["name"], p["description"]):
+        store.audit(by, "policy_pack", None, None, f"Renamed or re-described policy pack {before['name']}"
+                                                   + (f" → {p['name']}" if p["name"] != before["name"] else ""))
+    return p
 
 
 @app.get("/api/healthz")
@@ -301,12 +369,20 @@ async def create_run(
     sam_source: str = Form(""),
     exclusions_source: str = Form(""),
     follows: str = Form(""),
+    policy_pack: str = Form(""),
 ):
     analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the import is attributed.")
     if follows:
         _get(store.run_dir, follows)
+    if policy_pack:
+        try:
+            store.policies.pack(policy_pack)
+        except KeyError:
+            raise HTTPException(400, "That policy pack no longer exists.")
+    elif follows:  # a follow-up keeps the pack of the import it follows
+        policy_pack = (store.run_meta(follows).get("policy") or {}).get("pack_id", "")
     with tempfile.TemporaryDirectory() as tmp:
         vp = Path(tmp) / Path(vendors.filename or "vendors.csv").name
         vp.write_bytes(await vendors.read())
@@ -332,7 +408,8 @@ async def create_run(
                 raise HTTPException(400, "That SAM source no longer exists.")
         try:
             run_id = await run_in_threadpool(store.create_run, vp, ep, ed, synthetic=synthetic, analyst=analyst,
-                                             sam_source=sam_source or None, follows_id=follows or None)
+                                             sam_source=sam_source or None, follows_id=follows or None,
+                                             policy_pack=policy_pack or None)
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     return {"id": run_id}
@@ -648,6 +725,7 @@ def run_record(run_id: str) -> dict:
     return {
         "meta": m, "inputs": inputs, "data_class": m["data_class"],
         "rule_set": {"version": man.get("rule_set_version"), "fingerprint": man.get("rule_set_fingerprint")},
+        "policy": store.import_rules(run_id)[1],
         "pipeline_version": man.get("pipeline_version"), "app_version": m.get("app_version") or "",
         "restored": m.get("restore", []), "restored_from": restored_from,
         "follows": s["follows"], "followed_by": s["followed_by"], "changes": (s["changes"] or {}).get("counts"),
@@ -1057,7 +1135,9 @@ def vendor_graph(run_id: str, uei: str):
     v = data["by_uei"].get(uei)
     if not v:
         raise HTTPException(404, "Vendor not in this import")
-    return add_screens(build_graph(v, data["by_uei"], data["by_nn"]), uei, store.screens_for(uei), data["by_uei"])
+    hub_cap = store.import_rules(run_id)[0].hub_cap
+    return add_screens(build_graph(v, data["by_uei"], data["by_nn"], hub_cap=hub_cap), uei, store.screens_for(uei),
+                       data["by_uei"])
 
 
 GAP_KINDS = {"address": "Shares a suite with an excluded party", "person": "Shares a contact with an excluded party",

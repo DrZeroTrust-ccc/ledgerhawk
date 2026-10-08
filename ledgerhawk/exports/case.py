@@ -21,6 +21,7 @@ from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
 from ..pipeline.normalize import money
 from ..pipeline.tiering import TIERS, category, next_step
 from .voi import carried_note
+from ..pipeline.rules import policy_label
 
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 NAVY = colors.HexColor("#1F2A3A")
@@ -187,7 +188,7 @@ def build_case(v: dict, wf: dict, disposition: dict | None, history: list[dict],
     if man.get("exclusions_extract_date"):
         src.append(f"SAM exclusions extract {man['exclusions_extract_date']}")
     story.append(Spacer(1, 10))
-    story.append(KeepTogether([P(f"Import {meta.get('id', '')} · rule set {man.get('rule_set_version', '')} · sources: "
+    story.append(KeepTogether([P(f"Import {meta.get('id', '')} · {policy_label(man)} · sources: "
                                  + ", ".join(src) + f" · generated {generated_at:%Y-%m-%d %H:%M} UTC", "small")]))
 
     def page(canvas, doc):
