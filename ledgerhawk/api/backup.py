@@ -125,7 +125,7 @@ def stream_archive(root: Path, chunk: int = 1 << 20):
     def build():
         pipe = _Pipe()
         try:
-            with tarfile.open(fileobj=pipe, mode="w|gz", compresslevel=6) as tar:
+            with tarfile.open(fileobj=pipe, mode="w|gz") as tar:
                 _add_all(root, tar)
             if pipe.buf:
                 q.put(bytes(pipe.buf))
