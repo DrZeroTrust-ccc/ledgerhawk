@@ -253,8 +253,22 @@ export type PolicyEstimate = {
   workload: Workload
 }
 
-export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 'executive'; added_by: string; at: string }
-export type People = { people: Person[]; roles: Record<string, string>; bootstrap: { email: string; name: string }[] }
+export type Person = {
+  email: string
+  name: string
+  role: 'admin' | 'analyst' | 'executive'
+  added_by: string
+  at: string
+  last_seen?: string | null
+  access_note?: string
+}
+export type People = {
+  people: Person[]
+  roles: Record<string, string>
+  bootstrap: { email: string; name: string; last_seen?: string | null }[]
+  access_sync: boolean
+  site: string
+}
 export type Alert = { at: string; kind: string; title: string; detail: string; sent: string[]; errors: string[]; repeat: boolean }
 export type Alerts = { channels: string[]; alerts: Alert[] }
 export type WeeklyStatus = {
@@ -345,6 +359,7 @@ export type HistoryItem = {
   uei: string | null
   run_id: string | null
   detail: string
+  email?: string | null
   other_run?: RunRef
 }
 
@@ -916,7 +931,7 @@ export const api = {
   me: () => req<Me>('/api/me'),
   people: () => req<People>('/api/people'),
   savePerson: (form: FormData) => req<Person>('/api/people', { method: 'POST', body: form }),
-  removePerson: (form: FormData) => req<{ ok: boolean }>('/api/people/remove', { method: 'POST', body: form }),
+  removePerson: (form: FormData) => req<{ ok: boolean; access_note?: string }>('/api/people/remove', { method: 'POST', body: form }),
   backups: () => req<BackupStatus>('/api/admin/backups'),
   backupNow: () => req<{ ok: boolean }>('/api/admin/backups', { method: 'POST' }),
   alerts: () => req<Alerts>('/api/admin/alerts'),
@@ -978,7 +993,8 @@ export const api = {
     req<Disposition>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/disposition`, json(body)),
   restore: (id: string, uei: string, body: { note: string; analyst: string }) =>
     req<ImportStart>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/restore`, json(body)),
-  audit: () => req<HistoryItem[]>('/api/audit'),
+  audit: (q = '') => req<HistoryItem[]>(`/api/audit${q ? `?${q}` : ''}`),
+  auditActions: () => req<{ actions: string[] }>('/api/audit/actions'),
   sources: () => req<{ sources: Source[]; auto?: AutoSources }>('/api/sources'),
   refreshSources: (form: FormData) => req<AutoSources>('/api/sources/refresh', { method: 'POST', body: form }),
   addSource: (form: FormData) => req<Source>('/api/sources', { method: 'POST', body: form }),

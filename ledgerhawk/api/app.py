@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -37,6 +39,7 @@ from ..exports.voi import build_voi
 from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
 from .alerts import Alerts, channels_from_env as alert_channels
 from .weekly import Weekly
+from .access_sync import AccessSync
 from .backup import Backups, config_from_env as backup_config, stream_archive
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
@@ -72,6 +75,29 @@ alerts.heartbeat(store._boot)
 def _stopped():
     alerts.stopped(store._boot)
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
+access_sync = AccessSync()
+
+# What goes in the audit log as a view or a download: opening a vendor's record or a subject screen, and any file.
+_VIEW = re.compile(r"^/api/runs/(?P<run>[^/]+)/vendors/(?P<uei>[^/]+)$|^/api/subject-screens/(?P<sid>[^/]+)$")
+_FILE = re.compile(r"\.(pdf|docx|xlsx|zip|csv)$")
+_LOGGED_ELSEWHERE = re.compile(r"/exports/analysis\.zip$|/far-memo\.docx$|^/api/admin/export-all$|^/api/audit\.csv$")
+
+
+def _record_access(user: User, path: str) -> None:
+    try:
+        store.seen(user.email)
+        if m := _VIEW.match(path):
+            if m["sid"]:
+                store.record_access(user.email, user.name, "view", None, None, f"Opened subject screen {m['sid']}")
+            else:
+                store.record_access(user.email, user.name, "view", m["uei"], m["run"], f"Opened vendor {m['uei']} in {m['run']}")
+        elif _FILE.search(path) and not _LOGGED_ELSEWHERE.search(path):
+            parts = path.split("/")
+            run = parts[3] if len(parts) > 3 and parts[2] == "runs" else None
+            uei = parts[5] if len(parts) > 5 and parts[4] == "vendors" else None
+            store.record_access(user.email, user.name, "download", uei, run, f"Downloaded {parts[-1]}" + (f" ({path})" if not run else ""))
+    except Exception:  # the audit trail must never break the page it records
+        logging.getLogger("ledgerhawk").exception("couldn't record access to %s", path)
 
 
 def _resolve(email: str) -> User:
@@ -106,9 +132,12 @@ async def access_gate(request: Request, call_next):
                 return _refuse(403, "Executives have read-only access.")
         reset = CURRENT_USER.set(user)
         try:
-            return await call_next(request)
+            response = await call_next(request)
         finally:
             CURRENT_USER.reset(reset)
+        if user.role and response.status_code == 200 and request.method == "GET" and path.startswith("/api/"):
+            await run_in_threadpool(_record_access, user, path)
+        return response
     if ACCESS_PASSWORD:
         ok = False
         auth = request.headers.get("authorization", "")
@@ -146,7 +175,24 @@ def _admin() -> User:
 def list_people():
     _admin()
     return {"people": store.people(), "roles": ROLES,
-            "bootstrap": [{"email": e, "name": n or default_name(e)} for e, n in ADMINS.items()]}
+            "bootstrap": [{"email": e, "name": n or default_name(e), "last_seen": store.last_seen(e)} for e, n in ADMINS.items()],
+            "access_sync": access_sync.configured, "site": os.environ.get("LEDGERHAWK_SITE_URL", "")}
+
+
+def _sync_access(email: str, allow: bool, by: str) -> str:
+    """Let an email through Cloudflare Access (or stop it); a sentence on what happened, for the person who asked."""
+    if not access_sync.configured:
+        return ("Also allow their email in Cloudflare Access (Zero Trust → Access → the LedgerHawk users policy), or "
+                "they'll be stopped at sign-in.") if allow else "Also take their email out of the Cloudflare Access policy."
+    try:
+        changed = access_sync.allow(email) if allow else access_sync.revoke(email)
+    except Exception as exc:
+        store.audit(by, "person", None, None, f"Cloudflare Access not updated for {email}: {exc}")
+        return f"Cloudflare Access wasn't updated ({exc}); change it there by hand."
+    if changed:
+        store.audit(by, "person", None, None, f"Cloudflare Access: {'allowed' if allow else 'removed'} {email}")
+        return f"Cloudflare Access {'now lets' if allow else 'no longer lets'} {email} sign in."
+    return f"{email} was {'already allowed' if allow else 'not listed by itself'} in Cloudflare Access."
 
 
 @app.post("/api/people")
@@ -159,10 +205,12 @@ def save_person(email: str = Form(""), name: str = Form(""), role: str = Form(""
         raise HTTPException(400, f"{email} is a permanent Admin (set in LEDGERHAWK_ADMINS on the server).")
     if email == u.email and role != "admin":
         raise HTTPException(400, "You can't take away your own Admin role. Ask another Admin.")
+    is_new = store.person(email) is None and email not in ADMINS
     try:
-        return store.set_person(email, name, role, u.name)
+        p = store.set_person(email, name, role, u.name)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    return {**p, "access_note": _sync_access(email, True, u.name) if is_new else ""}
 
 
 @app.get("/api/admin/backups")
@@ -226,7 +274,7 @@ def remove_person(email: str = Form("")):
         store.remove_person(email, u.name)
     except KeyError:
         raise HTTPException(404, "No one with that email is set up.")
-    return {"ok": True}
+    return {"ok": True, "access_note": _sync_access(email.strip().lower(), False, u.name)}
 
 
 def _can_manage_policies() -> str:
@@ -2000,8 +2048,37 @@ def restore(run_id: str, uei: str, body: RestoreIn):
 
 
 @app.get("/api/audit")
-def audit(limit: int = 200):
-    return store.history(None, limit)
+def audit(limit: int = 200, person: str = "", action: str = "", since: str = "", until: str = ""):
+    """The audit log, newest first: decisions, imports, policy changes, people, and who opened or downloaded what."""
+    if not (person or action or since or until):
+        return store.audit_search(limit=min(limit, 5000))
+    return store.audit_search(person, action, since, until, min(limit, 5000))
+
+
+@app.get("/api/audit/actions")
+def audit_actions():
+    return {"actions": store.audit_actions()}
+
+
+@app.get("/api/audit.csv")
+def audit_csv(person: str = "", action: str = "", since: str = "", until: str = ""):
+    """The audit log (filtered the same way) as a spreadsheet, for an Admin or Executive. Up to 100,000 entries."""
+    import csv
+    import io
+    u = CURRENT_USER.get()
+    if VERIFIER is not None and u is not None and u.role not in ("admin", "executive"):
+        raise HTTPException(403, "Only an Admin or Executive can export the audit log.")
+    rows = store.audit_search(person, action, since, until, 100_000)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["when_utc", "who", "email", "action", "uei", "import", "detail"])
+    for r in rows:
+        w.writerow([r["at"], r["analyst"], r["email"] or "", r["action"], r["uei"] or "", r["run_id"] or "", r["detail"] or ""])
+    what = ", ".join(f"{k} {v}" for k, v in (("person", person), ("action", action), ("since", since), ("until", until)) if v)
+    store.audit(u.name if u else "", "export", None, None, f"Exported the audit log ({len(rows)} entries{'; ' + what if what else ''})")
+    name = f"LedgerHawk-audit-log-{datetime.now(timezone.utc):%Y%m%d-%H%M}.csv"
+    return Response("\ufeff" + buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 if WEB_DIST.exists():

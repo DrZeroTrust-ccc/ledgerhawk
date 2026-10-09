@@ -380,3 +380,24 @@ that followed a removed one is re-linked so decisions still carry forward. Remov
 Settings: `LEDGERHAWK_WEEKLY=0` turns it off; `LEDGERHAWK_WEEKLY_DAY` (0 = Monday), `LEDGERHAWK_WEEKLY_HOUR` (UTC) and
 `LEDGERHAWK_WEEKLY_KEEP` change when it runs and how many are kept, and `LEDGERHAWK_WEEKLY_PACKS` (pack ids,
 comma-separated) limits it to some policy packs.
+
+## People, invites and the audit log
+
+**Adding someone.** An Admin adds their work email, name and role on the People page. LedgerHawk shows an invite
+message to copy or open in email: where to go, and that sign-in is a one-time code sent to that email.
+
+**Cloudflare Access.** Someone must also be allowed by the Cloudflare Access policy to get in. To have LedgerHawk do
+that when people are added or removed, set these on the server:
+
+- `LEDGERHAWK_CF_API_TOKEN`: an API token with "Access: Apps and Policies: Edit".
+- `LEDGERHAWK_CF_ACCOUNT_ID`.
+- `LEDGERHAWK_CF_POLICY_ID`: the "LedgerHawk users" policy.
+- `LEDGERHAWK_CF_APP_ID`: only if that policy belongs to one application.
+
+LedgerHawk only adds or removes the person's own email; other rules in the policy are left alone. Without these
+settings, the People page says to change the policy by hand.
+
+**Audit log.** Every import, decision, policy change and people change is logged with the signed-in email. So is
+each time someone opens a vendor or subject screen (once an hour per person and record) and every file downloaded.
+The Audit log page filters by person, action and dates. **Export CSV** (Admins and Executives) downloads the filtered
+log, up to 100,000 entries, and the export itself is logged. The People page shows when each person last signed in.

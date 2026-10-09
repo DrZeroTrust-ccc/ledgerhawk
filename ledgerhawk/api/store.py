@@ -38,6 +38,7 @@ from ..pipeline.far import PROVISIONS as FAR_PROVISIONS, element_label as far_el
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 from ..pipeline.rules import RuleSet
+from .auth import CURRENT_USER
 from .policies import DEFAULTS_ID, PolicyBook, rules_from
 from ..pipeline.sam import load_sam
 from ..pipeline.stages import SIGNAL_LABELS
@@ -205,6 +206,7 @@ class Store:
         self._auto_lock = threading.Lock()
         self._hawk_running: set[str] = set()  # runs the Hawk is writing reasons for in this process
         self.db_path = self.root / "state.db"
+        self._seen_at: dict[str, float] = {}
         with self._db() as db:
             db.executescript(
                 """
@@ -239,8 +241,12 @@ class Store:
                     email TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, added_by TEXT NOT NULL,
                     at TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS audit_run ON audit (run_id);
+                CREATE TABLE IF NOT EXISTS person_seen (email TEXT PRIMARY KEY, at TEXT NOT NULL);
                 """
             )
+            if "email" not in {r[1] for r in db.execute("PRAGMA table_info(audit)")}:
+                db.execute("ALTER TABLE audit ADD COLUMN email TEXT")  # who, by sign-in, beside the name
+            db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit (at)")
             if not db.execute("SELECT 1 FROM migration WHERE name = 'per_run'").fetchone():
                 # Decisions used to be kept per UEI across all runs. Each one moves to the run it was made in.
                 db.execute("INSERT OR IGNORE INTO run_disposition SELECT run_id, uei, value, note, analyst, at "
@@ -2003,8 +2009,14 @@ class Store:
     # ---- people and roles (used when sign-in is on) ----------------------------------------
     def people(self) -> list[dict]:
         with self._db() as db:
-            rows = db.execute("SELECT email, name, role, added_by, at FROM person ORDER BY name COLLATE NOCASE").fetchall()
-        return [dict(zip(("email", "name", "role", "added_by", "at"), r)) for r in rows]
+            rows = db.execute("SELECT p.email, p.name, p.role, p.added_by, p.at, s.at FROM person p "
+                              "LEFT JOIN person_seen s ON s.email = p.email ORDER BY p.name COLLATE NOCASE").fetchall()
+        return [dict(zip(("email", "name", "role", "added_by", "at", "last_seen"), r)) for r in rows]
+
+    def last_seen(self, email: str) -> str | None:
+        with self._db() as db:
+            r = db.execute("SELECT at FROM person_seen WHERE email = ?", (email.strip().lower(),)).fetchone()
+        return r[0] if r else None
 
     def person(self, email: str) -> dict | None:
         return next((p for p in self.people() if p["email"] == email.strip().lower()), None)
@@ -2038,9 +2050,59 @@ class Store:
         self.audit(by, "person", None, None, f"Removed {p['name']} <{p['email']}> ({p['role']})")
 
     def audit(self, analyst: str, action: str, uei: str | None, run_id: str | None, detail: str) -> None:
+        u = CURRENT_USER.get()
         with self._db() as db:
-            db.execute("INSERT INTO audit (at, analyst, action, uei, run_id, detail) VALUES (?,?,?,?,?,?)",
-                       (_now(), analyst or "system", action, uei, run_id, detail))
+            db.execute("INSERT INTO audit (at, analyst, action, uei, run_id, detail, email) VALUES (?,?,?,?,?,?,?)",
+                       (_now(), analyst or "system", action, uei, run_id, detail, u.email if u else None))
+
+    def record_access(self, email: str, name: str, action: str, uei: str | None, run_id: str | None, detail: str,
+                      quiet_minutes: int = 60) -> bool:
+        """A view or download, for the audit log. The same person opening the same record again within the hour is
+        one entry, so the log stays readable; every download is kept."""
+        with self._db() as db:
+            if action == "view":
+                since = (datetime.now(timezone.utc) - timedelta(minutes=quiet_minutes)).isoformat(timespec="seconds")
+                if db.execute("SELECT 1 FROM audit WHERE action = 'view' AND email = ? AND detail = ? AND at >= ? LIMIT 1",
+                              (email, detail, since)).fetchone():
+                    return False
+            db.execute("INSERT INTO audit (at, analyst, action, uei, run_id, detail, email) VALUES (?,?,?,?,?,?,?)",
+                       (_now(), name or email, action, uei, run_id, detail, email))
+        return True
+
+    def seen(self, email: str) -> None:
+        """When someone last used LedgerHawk (at most one write every few minutes per person)."""
+        now = time.time()
+        if now - self._seen_at.get(email, 0) < 300:
+            return
+        self._seen_at[email] = now
+        with self._db() as db:
+            db.execute("INSERT INTO person_seen VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET at = excluded.at",
+                       (email, _now()))
+
+    def audit_search(self, person: str = "", action: str = "", since: str = "", until: str = "",
+                     limit: int = 200) -> list[dict]:
+        """The audit log, newest first, filtered by who (name or email, partial), what, and when (ISO dates)."""
+        q, args = "SELECT at, analyst, email, action, uei, run_id, detail FROM audit WHERE 1=1", []
+        if person.strip():
+            q += " AND (analyst LIKE ? OR email LIKE ?)"
+            args += [f"%{person.strip()}%"] * 2
+        if action.strip():
+            q += " AND action = ?"
+            args.append(action.strip())
+        if since:
+            q += " AND at >= ?"
+            args.append(since)
+        if until:
+            q += " AND at < ?"
+            args.append(until if "T" in until else (date.fromisoformat(until) + timedelta(days=1)).isoformat())
+        q += " ORDER BY id DESC LIMIT ?"
+        with self._db() as db:
+            rows = db.execute(q, args + [limit]).fetchall()
+        return [dict(zip(["at", "analyst", "email", "action", "uei", "run_id", "detail"], r)) for r in rows]
+
+    def audit_actions(self) -> list[str]:
+        with self._db() as db:
+            return [r[0] for r in db.execute("SELECT DISTINCT action FROM audit ORDER BY action")]
 
     def history(self, uei: str | None = None, limit: int = 200) -> list[dict]:
         q = "SELECT at, analyst, action, uei, run_id, detail FROM audit"

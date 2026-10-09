@@ -17,6 +17,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+  const [invite, setInvite] = useState<{ name: string; email: string; role: string } | null>(null)
 
   const save = async (p: { email: string; name: string; role: string }, done: string) => {
     setBusy(true)
@@ -27,8 +28,8 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
     f.append('name', p.name)
     f.append('role', p.role)
     try {
-      await api.savePerson(f)
-      setNote(done)
+      const saved = await api.savePerson(f)
+      setNote(saved.access_note ? `${done} ${saved.access_note}` : done)
       reload()
       return true
     } catch (e) {
@@ -44,8 +45,8 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
     const f = new FormData()
     f.append('email', p.email)
     try {
-      await api.removePerson(f)
-      setNote(`Removed ${p.name}.`)
+      const r = await api.removePerson(f)
+      setNote(`Removed ${p.name}.${r.access_note ? ` ${r.access_note}` : ''}`)
       reload()
     } catch (e) {
       setErr((e as Error).message)
@@ -77,7 +78,10 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
           className="flex flex-wrap items-end gap-3"
           onSubmit={async (e) => {
             e.preventDefault()
-            if (await save(form, `Added ${form.name.trim()} as ${roles[form.role]}.`)) setForm({ email: '', name: '', role: 'analyst' })
+            if (await save(form, `Added ${form.name.trim()} as ${roles[form.role]}.`)) {
+              setInvite({ name: form.name.trim(), email: form.email.trim(), role: roles[form.role] })
+              setForm({ email: '', name: '', role: 'analyst' })
+            }
           }}
         >
           <label className="space-y-1 text-sm">
@@ -117,7 +121,11 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
             Add
           </Button>
         </form>
-        <p className="mt-2 text-xs text-slate-500">{ROLE_HELP[form.role]} Their email also has to be allowed in Cloudflare Access.</p>
+        <p className="mt-2 text-xs text-slate-500">
+          {ROLE_HELP[form.role]}{' '}
+          {data?.access_sync ? 'Cloudflare Access is updated for you.' : 'Their email also has to be allowed in Cloudflare Access.'}
+        </p>
+        {invite && <InviteMessage invite={invite} site={data?.site || window.location.origin} onClose={() => setInvite(null)} />}
       </Card>
       <Card title="Who can use LedgerHawk">
         {!data && !error && <Loading />}
@@ -129,6 +137,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                   <th className="pb-2 font-medium">Name</th>
                   <th className="pb-2 font-medium">Email</th>
                   <th className="pb-2 font-medium">Role</th>
+                  <th className="pb-2 font-medium">Last signed in</th>
                   <th className="pb-2 font-medium">Last changed</th>
                   <th className="pb-2" />
                 </tr>
@@ -141,6 +150,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                       <td className="py-2 font-medium">{b.name}</td>
                       <td className="py-2 text-slate-600">{b.email}</td>
                       <td className="py-2">Admin</td>
+                      <td className="py-2 text-xs text-slate-500">{seen(b.last_seen)}</td>
                       <td className="py-2 text-xs text-slate-500">Permanent Admin, set on the server</td>
                       <td />
                     </tr>
@@ -170,6 +180,7 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
                           </select>
                         )}
                       </td>
+                      <td className="py-2 text-xs text-slate-500">{seen(p.last_seen)}</td>
                       <td className="py-2 text-xs text-slate-500">
                         {permanent ? 'Permanent Admin · ' : ''}
                         {p.added_by}, {new Date(p.at).toLocaleDateString()}
@@ -191,6 +202,53 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
       </Card>
       <AlertsCard />
       <BackupsCard />
+    </div>
+  )
+}
+
+const seen = (at?: string | null) => (at ? new Date(at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Not yet')
+
+// A message to send the person just added: where to go and how signing in works.
+function InviteMessage({ invite, site, onClose }: { invite: { name: string; email: string; role: string }; site: string; onClose: () => void }) {
+  const [copied, setCopied] = useState(false)
+  const text =
+    `Hi ${invite.name.split(' ')[0]},\n\n` +
+    `You've been given ${invite.role} access to LedgerHawk, the vendor screening tool.\n\n` +
+    `1. Go to ${site}\n` +
+    `2. Enter your work email (${invite.email}) and choose "Send login code".\n` +
+    `3. Type in the code that arrives by email. There's no password to remember.\n\n` +
+    `Everything you open, decide or download is recorded in LedgerHawk's audit log.`
+  return (
+    <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-medium">Invite message for {invite.name}</span>
+        <span className="flex gap-3">
+          <button
+            type="button"
+            className="text-navy underline"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(text)
+                setCopied(true)
+              } catch {
+                setCopied(false)
+              }
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          <a
+            className="text-navy underline"
+            href={`mailto:${invite.email}?subject=${encodeURIComponent('Your LedgerHawk access')}&body=${encodeURIComponent(text)}`}
+          >
+            Open in email
+          </a>
+          <button type="button" className="text-slate-500 underline" onClick={onClose}>
+            Close
+          </button>
+        </span>
+      </div>
+      <pre className="whitespace-pre-wrap font-sans text-slate-700">{text}</pre>
     </div>
   )
 }
