@@ -9,7 +9,7 @@ from docx import Document
 from ledgerhawk.exports.word import FAR_NOT_A_FINDING, build_far_memo_docx
 from ledgerhawk.pipeline.far import apply_decisions, evaluate
 from ledgerhawk.pipeline.integrity import _parse_date
-from tests.test_far import EXCL, _act, _v
+from test_far import EXCL, _act, _v
 
 SUMMARY = {"meta": {"id": "run-7", "label": "FY25 pilot", "created_at": "2026-10-03T12:00:00", "data_class": "synthetic"},
            "manifest": {"rule_set_version": "2026.10-pilot", "rule_set_fingerprint": "fp-abc123", "input_file": "vendors.xlsx",
@@ -94,4 +94,4 @@ def test_far_memo_through_the_api(sam_ctx_export):
     assert client.get(f"/api/runs/{run_id}/vendors/{u}/far-memo.docx").status_code == 404
 
 
-from tests.test_analysis_export import sam_ctx_export  # noqa: E402,F401  (the same synthetic import)
+from test_analysis_export import sam_ctx_export  # noqa: E402,F401  (the same synthetic import)
