@@ -74,7 +74,8 @@ def test_imports_cut_off_by_a_restart_are_marked_failed(bg):
     f = appmod.store._import_job_file(job["id"])
     import json
     j = json.loads(f.read_text())
-    f.write_text(json.dumps({**j, "state": "running", "boot": "an-earlier-process", "finished_at": ""}))
+    f.write_text(json.dumps({**j, "state": "running", "boot": "an-earlier-process", "finished_at": "",
+                            "running_at": "2999-01-01T00:00:00+00:00"}))  # nothing saved after it began
     again = c.get(f"/api/import-jobs/{job['id']}").json()
     assert again["state"] == "error" and "restarted" in again["error"]
     assert c.get("/api/import-jobs/../../etc").status_code == 404
