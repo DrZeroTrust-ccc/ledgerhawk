@@ -35,6 +35,7 @@ from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_far_memo_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
+from .alerts import Alerts, channels_from_env as alert_channels
 from .backup import Backups, config_from_env as backup_config, stream_archive
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
@@ -59,6 +60,16 @@ ADMINS = bootstrap_admins()
 backups = Backups(DATA_DIR, backup_config(), busy=store.heavy_job_running)
 if backups.cfg:
     backups.start_nightly()
+alerts = Alerts(DATA_DIR, alert_channels(), site=os.environ.get("LEDGERHAWK_SITE_URL", ""))
+store.alert = alerts.raise_alert
+backups.on_failure = lambda err: alerts.raise_alert("backup", "The backup failed", err, key=f"backup:{err[:60]}")
+alerts.started(store._boot)
+alerts.heartbeat(store._boot)
+
+
+@app.on_event("shutdown")
+def _stopped():
+    alerts.stopped(store._boot)
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -188,6 +199,21 @@ def export_all():
     # streamed as it's built: a large archive would otherwise outlast Cloudflare's 100-second wait for a first byte
     return StreamingResponse(stream_archive(DATA_DIR), media_type="application/gzip",
                              headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.get("/api/admin/alerts")
+def list_alerts():
+    """What went wrong recently, and where alerts are sent."""
+    _admin()
+    return {"channels": alerts.ch.describe(), "alerts": alerts.recent()}
+
+
+@app.post("/api/admin/alerts/test")
+def test_alert():
+    u = _admin()
+    a = alerts.raise_alert("test", "Test alert", f"Sent by {u.name} from the People page.",
+                           key=f"test:{datetime.now(timezone.utc).isoformat()}", wait=True)
+    return {"sent": a["sent"], "errors": a["errors"], "channels": alerts.ch.describe()}
 
 
 @app.post("/api/people/remove")

@@ -255,6 +255,8 @@ export type PolicyEstimate = {
 
 export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 'executive'; added_by: string; at: string }
 export type People = { people: Person[]; roles: Record<string, string>; bootstrap: { email: string; name: string }[] }
+export type Alert = { at: string; kind: string; title: string; detail: string; sent: string[]; errors: string[]; repeat: boolean }
+export type Alerts = { channels: string[]; alerts: Alert[] }
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -909,6 +911,8 @@ export const api = {
   removePerson: (form: FormData) => req<{ ok: boolean }>('/api/people/remove', { method: 'POST', body: form }),
   backups: () => req<BackupStatus>('/api/admin/backups'),
   backupNow: () => req<{ ok: boolean }>('/api/admin/backups', { method: 'POST' }),
+  alerts: () => req<Alerts>('/api/admin/alerts'),
+  testAlert: () => req<{ sent: string[]; errors: string[]; channels: string[] }>('/api/admin/alerts/test', { method: 'POST' }),
   policies: () => req<{ packs: PolicyPack[]; recent: PolicyRecent[] }>('/api/policies'),
   policyPreview: (id: string) => req<{ preview: PolicyPreview | null }>(`/api/policies/${encodeURIComponent(id)}/preview`),
   startPolicyPreview: (id: string, form: FormData) =>
