@@ -1560,9 +1560,25 @@ class Store:
             except (OSError, ValueError):
                 continue
             e = (res.get("entities") or [{}])[0]
-            out[f.parent.name] = {"fetched_at": res.get("fetched_at", ""), "actions_flagged": e.get("actions_flagged", 0),
-                                  "actions_dollars": e.get("actions_dollars", 0), "after_exclusion": e.get("after_exclusion", 0),
-                                  "actions_error": e.get("actions_error", "")}
+            since = e.get("excluded_since") or ""
+            flagged = [a for a in e.get("actions") or [] if a.get("flagged")]
+            # New money strictly after the exclusion date is what counts as paid after exclusion. Orders dated on
+            # the exclusion date itself can be timing, and zero-dollar actions move no money: both are reported,
+            # not counted.
+            paid = [a for a in flagged if (a.get("amount") or 0) > 0 and since and (a.get("date") or "") > since]
+            new_awards = [a for a in e.get("awards") or [] if since and (a.get("start") or "") > since]
+            out[f.parent.name] = {
+                "fetched_at": res.get("fetched_at", ""), "excluded_since": since,
+                "actions_flagged": e.get("actions_flagged", 0), "actions_dollars": e.get("actions_dollars", 0),
+                "after_exclusion": e.get("after_exclusion", 0), "actions_error": e.get("actions_error", ""),
+            }
+            if "actions" in e and since:  # the itemised actions are there to count strictly
+                out[f.parent.name].update({
+                    "paid_actions": len(paid), "paid_dollars": round(sum(a["amount"] for a in paid), 2),
+                    "new_awards_after": len(new_awards),
+                    "same_day": sum(1 for a in flagged if (a.get("date") or "") == since),
+                    "zero_dollar": sum(1 for a in flagged if (a.get("amount") or 0) <= 0 and (a.get("date") or "") > since),
+                })
         return out
 
     def check_excluded(self, run_id: str, analyst: str, progress, again: bool = False, pause: float = 20.0) -> str:

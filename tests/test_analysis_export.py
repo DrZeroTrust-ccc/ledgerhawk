@@ -92,7 +92,7 @@ def test_exclusion_timing_decides_red():
     assert exclusion_timing(v)[0] == "unchecked" and color(v, {}, None)[0] == "red"
     after = {"fetched_at": "2026-10-08", "actions_flagged": 3, "actions_dollars": 2.5e6, "after_exclusion": 0}
     t, why = exclusion_timing(v, after)
-    assert t == "after" and "3 contract actions ($2.5M)" in why and color(v, {}, None, after)[0] == "red"
+    assert t == "after" and "3 paid contract actions ($2.5M)" in why and color(v, {}, None, after)[0] == "red"
     clean = {"fetched_at": "2026-10-08", "actions_flagged": 0, "actions_dollars": 0, "after_exclusion": 0}
     assert color(v, {}, None, clean) == ("yellow", ["Excluded Jun 01, 2025; USAspending shows no contract actions after it"])
     # excluded before FY25 began, with FY25 money: paid after exclusion, no lookup needed
@@ -128,13 +128,13 @@ def test_bulk_usaspending_check_settles_excluded_vendors(sam_ctx_export):
     st = client.get(f"/api/runs/{run_id}/exclusion-check").json()
     assert st["checked"] == st["excluded"] and st["paid_after"] == 1
     v = client.get(f"/api/runs/{run_id}/vendors/{paid}").json()
-    assert v["color"] == "red" and any("USAspending: 2 contract actions" in w for w in v["color_why"])
+    assert v["color"] == "red" and any("USAspending: 2 paid contract actions" in w for w in v["color_why"])
     others = [client.get(f"/api/runs/{run_id}/vendors/{u}").json() for u in excluded[1:]]
     assert all(o["color"] != "red" or "Two or more independent signals" in o["color_why"]
                or any("began after" in w or "Excluded, with obligations" in w for w in o["color_why"]) for o in others)
     z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/runs/{run_id}/exports/analysis.zip").content))
     rows = {r["uei"]: r for r in csv.DictReader(io.StringIO(z.read("vendors.csv").decode("utf-8-sig")))}
-    assert rows[paid]["exclusion_timing"] == "after" and rows[paid]["actions_after_exclusion"] == "2"
+    assert rows[paid]["exclusion_timing"] == "after" and rows[paid]["paid_actions_after_exclusion"] == "2"
 
 
 def test_decisions_round_trip_through_the_workbook(sam_ctx_export, tmp_path):
@@ -196,3 +196,16 @@ def test_exclusion_check_retries_and_skips_vendors_already_looked_up(sam_ctx_exp
         assert set(calls) == set(excluded)
     finally:
         st.fetch_case_awards = orig
+
+
+def test_same_day_and_zero_dollar_actions_are_not_paid_after():
+    """Orders dated on the exclusion date itself, or moving no money, are listed for a check but don't make it red."""
+    from ledgerhawk.exports.analysis import color
+    v = {"uei": "X", "exclusion_flags": ["EXCLUDED"], "exclusion": [{"active_date": "2025-06-01"}], "tot": 1e6}
+    timing = {"fetched_at": "2026-10-08", "actions_flagged": 2, "actions_dollars": 223, "after_exclusion": 0,
+              "paid_actions": 0, "paid_dollars": 0, "new_awards_after": 0, "same_day": 1, "zero_dollar": 1}
+    c, why = color(v, {}, None, timing)
+    assert c == "yellow" and "no new money" in why[0] and "1 on the exclusion date itself, 1 zero-dollar" in why[0]
+    small = {**timing, "paid_actions": 1, "paid_dollars": 223, "same_day": 0, "zero_dollar": 0}
+    c, why = color(v, {}, None, small)
+    assert c == "red" and "1 paid contract action ($223)" in why[0]

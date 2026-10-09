@@ -48,11 +48,21 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
         if paid:
             return "after", f"Excluded {since:%b %d, %Y}; obligations in {' and '.join(x.upper() for x in paid)}, which began after it"
     if awards:
-        n, dollars, new = awards.get("actions_flagged", 0), awards.get("actions_dollars", 0), awards.get("after_exclusion", 0)
+        if "paid_actions" not in awards:  # a summary from before the strict count: fall back to the raw counts
+            awards = {**awards, "paid_actions": awards.get("actions_flagged", 0), "paid_dollars": awards.get("actions_dollars", 0),
+                      "new_awards_after": awards.get("after_exclusion", 0), "same_day": 0, "zero_dollar": 0}
+        n, dollars, new = awards["paid_actions"], awards["paid_dollars"], awards["new_awards_after"]
         if n or new:
-            bits = ([f"{n} contract action{'s' if n != 1 else ''} (${dollars / 1e6:.1f}M)" if n else ""]
+            money = f"${dollars / 1e6:.1f}M" if dollars >= 50_000 else f"${dollars:,.0f}"
+            bits = ([f"{n} paid contract action{'s' if n != 1 else ''} ({money})" if n else ""]
                     + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""])
             return "after", "USAspending: " + " and ".join(b for b in bits if b) + " after the exclusion date"
+        on_day, zero = awards.get("same_day", 0), awards.get("zero_dollar", 0)
+        if on_day or zero:
+            bits = ([f"{on_day} on the exclusion date itself" if on_day else ""]
+                    + [f"{zero} zero-dollar" if zero else ""])
+            return "cleared", ("Excluded; USAspending shows contract activity but no new money after the exclusion date ("
+                               + ", ".join(b for b in bits if b) + "); worth a check")
         return "cleared", f"Excluded{f' {since:%b %d, %Y}' if since else ''}; USAspending shows no contract actions after it"
     return "unchecked", "On the SAM exclusions list; payments after the exclusion date not yet checked"
 
@@ -129,8 +139,10 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "paid_after_exclusion": round(float(integ.get("after_exclusion") or 0), 2) if integ else "",
             "exclusion_timing": exclusion_timing(v, aw)[0],
             "usaspending_checked": (aw or {}).get("fetched_at", "")[:10] if aw else "",
-            "actions_after_exclusion": (aw or {}).get("actions_flagged", "") if aw else "",
-            "action_dollars_after_exclusion": round(float((aw or {}).get("actions_dollars") or 0), 2) if aw else "",
+            "paid_actions_after_exclusion": (aw or {}).get("paid_actions", (aw or {}).get("actions_flagged", "")) if aw else "",
+            "paid_dollars_after_exclusion": round(float((aw or {}).get("paid_dollars", (aw or {}).get("actions_dollars")) or 0), 2) if aw else "",
+            "awards_starting_after_exclusion": (aw or {}).get("new_awards_after", "") if aw else "",
+            "same_day_or_zero_dollar_actions": ((aw or {}).get("same_day", 0) + (aw or {}).get("zero_dollar", 0)) if aw else "",
             "linked_firms": len(v.get("links") or []), "neighbors": len(v.get("neighbors") or []),
             "family_total": _family_total(v) or "",
             "ownership": "; ".join(sam.get("owner") or []), "certifications": "; ".join(sam.get("certs") or []),
@@ -187,10 +199,12 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "Colors",
         "------",
         "RED: two or more independent signals (priority queue); a vendor on the SAM exclusions list that was paid after",
-        "  its exclusion date (obligations in a fiscal year that began after it, or contract actions after it in",
-        "  USAspending), or whose payments after the date have not been checked yet; an analyst's Tier 1; or a",
+        "  its exclusion date (obligations in a fiscal year that began after it, or in USAspending a contract action",
+        "  with new money, or an award starting, strictly after that date), or whose payments after the date have not",
+        "  been checked yet; an analyst's Tier 1; or a",
         "  decision to refer.",
-        "YELLOW: an excluded vendor that USAspending shows was not paid after its exclusion date; one strong signal;",
+        "YELLOW: an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
+        "  exclusion date itself and zero-dollar actions are listed, not counted as payment); one strong signal;",
         "  related firms in SAM (shared contacts, suites, a family of registrations); a tie to an excluded party; a",
         "  small vendor tied to an excluded party or sharing its suite; an analyst's Tier 2 or 3.",
         "Tiers count only when an analyst set them; the pipeline's default tiers do not color a vendor.",
