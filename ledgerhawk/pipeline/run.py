@@ -57,6 +57,8 @@ class RunResult:
         cols = ["uei", "name", "nn", "struct", "naics", "psc", "fy24", "fy25", "tot", "lane", "reason_code", "reason",
                 "cut_stage", "restored_from", "suppression", "bucket", "queue", "signals", "exclusion_flags", "exclusion",
                 "sam", "links", "neighbors", "integrity", "tier_default", "owner_suggested"]
+        if "watchlist" in self.vendors.columns:  # OFAC and HHS-OIG matches, when the import checked them
+            cols.append("watchlist")
         with open(out / "vendors.jsonl", "w") as f:
             for rec in self.vendors[cols].to_dict(orient="records"):
                 f.write(json.dumps(rec, default=str) + "\n")

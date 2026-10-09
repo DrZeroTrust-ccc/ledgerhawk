@@ -401,3 +401,23 @@ settings, the People page says to change the policy by hand.
 each time someone opens a vendor or subject screen (once an hour per person and record) and every file downloaded.
 The Audit log page filters by person, action and dates. **Export CSV** (Admins and Executives) downloads the filtered
 log, up to 100,000 entries, and the export itself is logged. The People page shows when each person last signed in.
+
+## OFAC and HHS-OIG on every import
+
+Treasury's Do Not Pay is open only to enrolled paying agencies. LedgerHawk covers its public sources on every import,
+follow-up and weekly re-screen:
+
+- **SAM exclusions:** screened as before.
+- **OFAC sanctions (SDN) list,** with aliases.
+- **HHS-OIG List of Excluded Individuals/Entities,** without reinstated entries.
+
+Both lists are downloaded fresh each day. Neither carries a UEI, so vendors are matched by name: the file name, SAM
+legal name and DBA. A sole proprietor is also matched as a person, and against HHS-OIG people only when the state
+agrees. One short word ("ACME") is never matched.
+
+- An OFAC match, or an HHS-OIG match on name and state, is **red**.
+- An HHS-OIG match on name alone is **yellow**.
+
+All are labelled for confirmation. The vendor page lists the matches with links. The analysis export has a
+`watchlist_matches` column. The import manifest records the list sizes and any list that couldn't be loaded.
+`LEDGERHAWK_WATCHLISTS=0` turns it off.
