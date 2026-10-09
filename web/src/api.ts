@@ -279,6 +279,17 @@ export type WeeklyStatus = {
   targets: { id: string; label: string; created_at: string }[]
   last: { at: string; followed: string; run_id: string; removed: string[] } | null
 }
+export type Subaward = {
+  id: string
+  date: string
+  amount: number
+  prime_award_id: string
+  prime: string
+  agency: string
+  description: string
+  after_exclusion: boolean
+  url: string
+}
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -731,6 +742,11 @@ export type AwardEntity = {
   actions_summary?: string
   actions_error?: string
   schedule_actions?: number
+  subawards?: Subaward[]
+  subawards_error?: string
+  subawards_total?: number
+  subawards_after?: number
+  subawards_after_dollars?: number
   uei: string
   name: string
   refs: number[]

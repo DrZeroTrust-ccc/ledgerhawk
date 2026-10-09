@@ -1,7 +1,17 @@
 // Case tools shared by subject screens and leads in a run: notes and evidence, two-person sign-off, awards and the
 // evidence ledger. Each page supplies a CaseCtx that says where its notes and sign-off are stored.
 import { useState } from 'react'
-import { api, money, type AwardEntity, type CaseNote, type CaseSummary, type Ledger, type ScreenAwards, type ScreenReview, type SummaryLine } from './api'
+import {
+  api,
+  money,
+  type AwardEntity,
+  type CaseNote,
+  type CaseSummary,
+  type Ledger,
+  type ScreenAwards,
+  type ScreenReview,
+  type SummaryLine,
+} from './api'
 import { useAnalystName } from './App'
 import { Button, Card, ErrorNote } from './ui'
 
@@ -55,7 +65,9 @@ const LEAN_STYLE: Record<string, string> = {
 const LEAN_TEXT: Record<string, string> = { strengthens: 'Strengthens', weakens: 'Weakens', context: 'Context' }
 
 export function LeanPill({ lean }: { lean: string }) {
-  return <span className={`mr-1 inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${LEAN_STYLE[lean] ?? ''}`}>{LEAN_TEXT[lean] ?? lean}</span>
+  return (
+    <span className={`mr-1 inline-block rounded px-1.5 py-0.5 text-[11px] font-medium ${LEAN_STYLE[lean] ?? ''}`}>{LEAN_TEXT[lean] ?? lean}</span>
+  )
 }
 
 /** Every finding that bears on the lead, for or against, with a bar showing which way it leans. */
@@ -63,7 +75,13 @@ export function LedgerCard({ ledger, action }: { ledger: Ledger; action?: React.
   const b = ledger.balance
   const total = b.for + b.against || 1
   const lean =
-    b.lean === 'strengthens' ? 'Leans toward a problem' : b.lean === 'weakens' ? 'Leans toward an explanation' : b.lean === 'mixed' ? 'Mixed' : 'Nothing yet'
+    b.lean === 'strengthens'
+      ? 'Leans toward a problem'
+      : b.lean === 'weakens'
+        ? 'Leans toward an explanation'
+        : b.lean === 'mixed'
+          ? 'Mixed'
+          : 'Nothing yet'
   return (
     <Card title="Evidence ledger" action={action}>
       <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
@@ -101,7 +119,9 @@ export function LedgerCard({ ledger, action }: { ledger: Ledger; action?: React.
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-slate-500">Outside items count only after an analyst confirms they are about this subject. Add your own findings as notes.</p>
+      <p className="mt-2 text-xs text-slate-500">
+        Outside items count only after an analyst confirms they are about this subject. Add your own findings as notes.
+      </p>
     </Card>
   )
 }
@@ -117,7 +137,18 @@ function NoteItem({ n, ctx, locked }: { n: CaseNote; ctx: CaseCtx; locked: boole
         <span>
           {n.analyst} · {n.at.slice(0, 16).replace('T', ' ')} UTC
         </span>
-        {n.source && <span>· Source: {/^https?:\/\//.test(n.source) ? <a href={n.source} target="_blank" rel="noreferrer" className="text-navy underline">{n.source}</a> : n.source}</span>}
+        {n.source && (
+          <span>
+            · Source:{' '}
+            {/^https?:\/\//.test(n.source) ? (
+              <a href={n.source} target="_blank" rel="noreferrer" className="text-navy underline">
+                {n.source}
+              </a>
+            ) : (
+              n.source
+            )}
+          </span>
+        )}
         {n.file && (
           <span title={`SHA-256 ${n.file_sha256}`}>
             ·{' '}
@@ -128,7 +159,11 @@ function NoteItem({ n, ctx, locked }: { n: CaseNote; ctx: CaseCtx; locked: boole
           </span>
         )}
         {n.carried_from && <span>· carried from the check of {n.carried_from.created_at.slice(0, 10)}</span>}
-        {n.run && <span>· from import {n.run.label}, {n.run.created_at.slice(0, 10)}</span>}
+        {n.run && (
+          <span>
+            · from import {n.run.label}, {n.run.created_at.slice(0, 10)}
+          </span>
+        )}
         {!locked && !n.carried_from && !n.run && sameName(n.analyst, analyst) && (
           <button
             className="text-crimson hover:underline"
@@ -152,7 +187,17 @@ function NoteItem({ n, ctx, locked }: { n: CaseNote; ctx: CaseCtx; locked: boole
   )
 }
 
-export function Notes({ target, ctx, title = 'Investigator notes', earlier = [] }: { target: string; ctx: CaseCtx; title?: string; earlier?: CaseNote[] }) {
+export function Notes({
+  target,
+  ctx,
+  title = 'Investigator notes',
+  earlier = [],
+}: {
+  target: string
+  ctx: CaseCtx
+  title?: string
+  earlier?: CaseNote[]
+}) {
   const [analyst] = useAnalystName()
   const [text, setText] = useState('')
   const [source, setSource] = useState('')
@@ -218,12 +263,22 @@ export function Notes({ target, ctx, title = 'Investigator notes', earlier = [] 
           <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} placeholder="What you did or found" className={field} />
           <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="Source (link or citation)" className={field} />
           <div className="flex flex-wrap items-center gap-2">
-            <select value={lean} onChange={(e) => setLean(e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm" title="How this bears on the lead; it goes in the evidence ledger">
+            <select
+              value={lean}
+              onChange={(e) => setLean(e.target.value)}
+              className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              title="How this bears on the lead; it goes in the evidence ledger"
+            >
               <option value="context">Context</option>
               <option value="strengthens">Strengthens the lead</option>
               <option value="weakens">Weakens the lead</option>
             </select>
-            <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="max-w-full text-xs" title="Attach evidence (up to 25 MB)" />
+            <input
+              type="file"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="max-w-full text-xs"
+              title="Attach evidence (up to 25 MB)"
+            />
             <Button
               type="submit"
               variant="secondary"
@@ -372,8 +427,47 @@ function AfterExclusion({ e }: { e: AwardEntity }) {
   )
 }
 
+function Subcontracts({ e }: { e: AwardEntity }) {
+  // Paid as a subcontractor on other firms' contracts: invisible in its own contract history, and the usual way an
+  // excluded firm keeps working. Primes report these late, so a recent exclusion with none isn't a clean answer.
+  if (e.subawards_error) return <div className="mt-1 text-xs text-crimson">{e.subawards_error}</div>
+  const subs = e.subawards ?? []
+  if (!subs.length) return null
+  const after = subs.filter((s) => s.after_exclusion && s.amount > 0)
+  const shown = (after.length ? after : subs).slice(0, 6)
+  return (
+    <div className={`mt-2 rounded-md px-2 py-1.5 text-xs ${after.length ? 'bg-crimson-50' : 'bg-slate-50'}`}>
+      <div className={`font-medium ${after.length ? 'text-crimson' : 'text-slate-700'}`}>
+        {after.length
+          ? `${after.length} subcontract${after.length === 1 ? '' : 's'} under other firms' contracts after the exclusion of ${e.excluded_since} (${money(e.subawards_after_dollars ?? 0)})`
+          : `Subcontractor on ${subs.length} reported subaward${subs.length === 1 ? '' : 's'} (${money(e.subawards_total ?? 0)})${e.excluded_since ? `, none dated after the exclusion of ${e.excluded_since} yet` : ''}`}
+      </div>
+      <ul className="mt-1 divide-y divide-slate-200">
+        {shown.map((s) => (
+          <li key={s.id + s.date} className="flex flex-wrap items-baseline justify-between gap-x-3 py-0.5">
+            <span>
+              <span className="tabular">{s.date}</span> · under {s.prime || 'a prime'}{' '}
+              {s.url ? (
+                <a href={s.url} target="_blank" rel="noreferrer" className="font-mono text-navy underline">
+                  {s.prime_award_id}
+                </a>
+              ) : (
+                <span className="font-mono">{s.prime_award_id}</span>
+              )}
+              {s.agency && <span className="text-slate-500"> · {s.agency}</span>}
+            </span>
+            <span className="tabular">{money(s.amount)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function ByYear({ e }: { e: AwardEntity }) {
-  const years = Object.keys(e.by_fy ?? {}).sort().slice(-6)
+  const years = Object.keys(e.by_fy ?? {})
+    .sort()
+    .slice(-6)
   if (!years.length) return null
   return (
     <>
@@ -421,8 +515,8 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
             ) : (
               <>
                 <div className="tabular text-xs text-slate-600">
-                  {e.count} contracts and IDVs{e.truncated ? ' (largest shown)' : ''} · {money(e.total)} obligated · {e.first.slice(0, 4)}–{e.last.slice(0, 4)} ·{' '}
-                  {e.agencies.slice(0, 3).join(', ')}
+                  {e.count} contracts and IDVs{e.truncated ? ' (largest shown)' : ''} · {money(e.total)} obligated · {e.first.slice(0, 4)}–
+                  {e.last.slice(0, 4)} · {e.agencies.slice(0, 3).join(', ')}
                   {e.agencies.length > 3 && ` +${e.agencies.length - 3}`}
                 </div>
                 {e.after_exclusion > 0 && (
@@ -431,6 +525,7 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
                   </div>
                 )}
                 <AfterExclusion e={e} />
+                <Subcontracts e={e} />
                 <ByYear e={e} />
                 <ul className="mt-1 divide-y divide-slate-100">
                   {e.awards.slice(0, 5).map((a) => (
@@ -460,7 +555,6 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
     </section>
   )
 }
-
 
 function Cites({ ids, cited }: { ids: string[]; cited: Record<string, string> }) {
   return (
@@ -572,7 +666,9 @@ export function WrittenSummary({
       <div className="rounded-md border border-dashed border-slate-300 p-3 text-sm">
         {earlier && (
           <div className="mb-3 text-slate-600">
-            <div className="text-xs font-medium text-amber-800">Summary from the {earlier.run.label || earlier.run.created_at.slice(0, 10)} import, for reference</div>
+            <div className="text-xs font-medium text-amber-800">
+              Summary from the {earlier.run.label || earlier.run.created_at.slice(0, 10)} import, for reference
+            </div>
             <p className="mt-1">{earlier.sentences.map((x) => x.text).join(' ')}</p>
           </div>
         )}
@@ -582,7 +678,9 @@ export function WrittenSummary({
               {busy ? 'The Hawk is writing…' : 'Draft a summary with the Hawk'}
             </Button>
             <span className="text-xs text-slate-500">
-              {ledgerIds.length === 0 ? 'Needs at least one finding in the ledger.' : 'Written only from the evidence ledger below, every sentence sourced. You edit it before it counts.'}
+              {ledgerIds.length === 0
+                ? 'Needs at least one finding in the ledger.'
+                : 'Written only from the evidence ledger below, every sentence sourced. You edit it before it counts.'}
             </span>
           </div>
         ) : (
@@ -604,7 +702,9 @@ export function WrittenSummary({
           Drafted for {summary.requested_by} on {summary.drafted_at.slice(0, 10)}
           {summary.edited_by && `, edited ${summary.edited_at.slice(0, 10)}`}
         </span>
-        {summary.stale && <span className="rounded bg-crimson/10 px-1.5 py-0.5 font-medium text-crimson">The evidence has changed since this was written</span>}
+        {summary.stale && (
+          <span className="rounded bg-crimson/10 px-1.5 py-0.5 font-medium text-crimson">The evidence has changed since this was written</span>
+        )}
       </div>
       <p className="text-[15px] leading-relaxed">
         {summary.sentences.map((x, i) => (

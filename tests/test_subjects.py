@@ -512,7 +512,7 @@ def test_awards_api_and_exports(syn, tmp_path):
         r = client.post(f"{base}/awards", data={"analyst": "Ana"})
         assert r.status_code == 200, r.text
         job = r.json()
-        assert job["state"] == "done" and job["by"] == "Ana" and job["result"]["ueis"] >= 1 and job["total"] == 3 * job["result"]["ueis"]
+        assert job["state"] == "done" and job["by"] == "Ana" and job["result"]["ueis"] >= 1 and job["total"] == 4 * job["result"]["ueis"]
         assert job["done"] == job["total"]  # progress reached the end
         got = client.get(base).json()["awards"]
         assert got["fetched_by"] == "Ana" and got["entities"][0]["after_exclusion"] == 1
@@ -624,7 +624,7 @@ def test_screen_jobs_run_in_the_background_with_progress(syn, tmp_path):
                 break
             time.sleep(0.05)
         assert j["state"] == "done" and j["done"] == j["total"] > 0 and j["step"] == "Done" and j["finished_at"]
-        assert j["result"]["ueis"] * 3 == j["total"] and seen == sorted(seen)  # progress only moves forward
+        assert j["result"]["ueis"] * 4 == j["total"] and seen == sorted(seen)  # progress only moves forward
         assert client.get(base).json()["awards"]["fetched_by"] == "Ana"
         assert client.get("/api/subject-screens/nope/jobs").status_code == 404
         assert client.post("/api/subject-screens/nope/awards", data={"analyst": "A"}).status_code == 404
