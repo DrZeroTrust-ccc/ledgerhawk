@@ -24,8 +24,21 @@ def at(y, m, d, h=12):
     return datetime(y, m, d, h, tzinfo=timezone.utc)
 
 
+def test_turning_it_on_midweek_waits_for_the_next_slot(st):
+    w = Weekly(st, enabled=True, day=0, hour=11)
+    assert not w.due(at(2026, 10, 9))  # never baselined: nothing is overdue
+    assert w.status(at(2026, 10, 9))["next"].startswith("2026-10-12T11:00")
+    w.baseline(at(2026, 10, 9))  # a Friday: this Monday's slot already passed
+    assert not w.due(at(2026, 10, 9)) and w.due(at(2026, 10, 12, 11))
+    w2 = Weekly(st, enabled=True, day=4, hour=20)  # a slot still ahead this week
+    (st.root / "weekly.json").unlink()
+    w2.baseline(at(2026, 10, 9, 12))
+    assert not w2.due(at(2026, 10, 9, 19)) and w2.due(at(2026, 10, 9, 20))
+
+
 def test_due_once_a_week_after_the_slot(st):
     w = Weekly(st, enabled=True, day=0, hour=11, keep=4)
+    w._write(last_week="2026-W41")
     assert not w.due(at(2026, 10, 12, 10))  # Monday before 11:00
     assert w.due(at(2026, 10, 12, 11)) and w.due(at(2026, 10, 14))  # Monday after, or later that week if missed
     w._write(last_week="2026-W42")
@@ -78,6 +91,7 @@ def test_digest_lines(tmp_path, monkeypatch):
         appmod = importlib.reload(appmod)
         vendors, excl, _, _ = make_synthetic(tmp_path / "in", n=300, seed=5)
         first = appmod.store.create_run(vendors, excl, date(2026, 10, 2), synthetic=False, analyst="Ana")
+        time.sleep(1.1)
         second = appmod.store.follow_up_run(first, "Ana", auto=True)
         text = appmod.weekly_digest(second)
         assert "new in the queue" in text and "on the exclusions list" in text and "paid after their exclusion" in text
