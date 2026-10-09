@@ -1679,16 +1679,23 @@ def set_far(run_id: str, uei: str, body: FarDecisionIn):
 
 @app.get("/api/runs/{run_id}/far")
 def far_summary(run_id: str):
-    """For each FAR provision, how many vendors in this import the evidence implicates, how many have every element
-    shown or confirmed, and the dollars they hold. Provisions an analyst marked not applicable are left out."""
+    """For each FAR provision, how many red and yellow vendors in this import the evidence implicates, how many have
+    every element shown or confirmed, and the dollars they hold; green vendors (the watch list and anything cleared) are
+    counted apart. Provisions an analyst marked not applicable are left out."""
     lens = _far_lens(run_id)
+    disp, state, awards = store.dispositions(run_id), store.analyst_state(run_id), store.case_awards_index(run_id)
     out = {pid: {"id": pid, "cite": p["cite"], "title": p["title"], "binds": p["binds"], "vendors": 0, "supported": 0,
-                 "dollars": 0.0} for pid, p in far_mod.PROVISIONS.items()}
+                 "dollars": 0.0, "green": 0} for pid, p in far_mod.PROVISIONS.items()}
     for r in _get(store.vendors, run_id)["rows"]:
-        for p in lens(r):
-            if p["status"] == far_mod.NOT_APPLICABLE:
-                continue
+        provs = [p for p in lens(r) if p["status"] != far_mod.NOT_APPLICABLE]
+        if not provs:
+            continue
+        c = vendor_color(r, _workflow(r, state.get(r["uei"], {})), disp.get(r["uei"]), awards.get(r["uei"]))[0]
+        for p in provs:
             o = out[p["id"]]
+            if c not in ("red", "yellow"):
+                o["green"] += 1
+                continue
             o["vendors"] += 1
             o["supported"] += p["status"] == "supported"
             o["dollars"] += float(r.get("tot") or 0)

@@ -200,6 +200,7 @@ export function FarPanel({ runId }: { runId: string }) {
   const { data } = useAsync(() => api.far(runId), [runId])
   if (!data) return null
   const rows = data.provisions.filter((p) => p.vendors > 0)
+  const green = data.provisions.reduce((n, p) => n + p.green, 0)
   return (
     <Card title="FAR provisions to review" action={<span className="text-xs text-slate-500">FAR map {data.version}</span>}>
       {rows.length === 0 ? (
@@ -226,7 +227,7 @@ export function FarPanel({ runId }: { runId: string }) {
             {rows.map((p) => (
               <tr key={p.id}>
                 <td className="py-2 pr-3">
-                  <Link to={`/runs/${runId}/queue?queue=&far=${encodeURIComponent(p.id)}`} className="hover:underline">
+                  <Link to={`/runs/${runId}/queue?queue=&color=red,yellow&far=${encodeURIComponent(p.id)}`} className="hover:underline">
                     <span className="font-mono text-xs text-slate-600">{p.cite}</span> <span className="text-navy">{p.title}</span>
                   </Link>
                 </td>
@@ -240,8 +241,9 @@ export function FarPanel({ runId }: { runId: string }) {
         </table>
       )}
       <p className="mt-3 text-xs text-slate-500">
-        Provisions a vendor's evidence may implicate. LedgerHawk shows which elements its data supports and which need a contract record; it doesn't
-        decide that a provision was violated.
+        Red and yellow vendors only
+        {green > 0 && `; ${green} more provision matches are on green vendors (the watch list or cleared), shown on their case pages`}. LedgerHawk
+        shows which elements its data supports and which need a contract record; it doesn't decide that a provision was violated.
       </p>
     </Card>
   )

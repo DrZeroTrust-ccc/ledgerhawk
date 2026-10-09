@@ -37,8 +37,19 @@ def test_excluded_vendor_with_new_orders_and_options():
     assert el["new_award"]["state"] == "shown" and el["new_award"]["detail"].startswith("2 new contracts or orders")
     assert "Jul 01, 2025" in el["new_award"]["detail"] and el["determination"]["state"] == "needs_record"
     assert p["9.405"]["binds"] == "Awarding agency" and "GSA suspension and debarment official" in p["9.405"]["routes_to"]
-    assert "2 actions after the exclusion date" in p["9.405-1"]["elements"][1]["detail"]
+    work = p["9.405-1"]["elements"][1]
+    assert work["state"] == "shown" and work["detail"].startswith("1 action with new money after the exclusion date")
+    assert work["detail"].endswith(", and 1 zero-dollar")
     assert p["52.209-5"]["binds"] == "Vendor"
+
+
+def test_zero_dollar_changes_need_a_record():
+    """A zero-dollar option or change can extend the term or add work, but is often administrative: a lead, not shown."""
+    v = _v(exclusion_flags=["EXCLUDED"], exclusion=[EXCL])
+    p = _by(evaluate(v, {"actions": [_act("2025-08-02", "work", 0), _act("2025-09-02", "work", 0)], "awards": []}))
+    assert set(p) == {"9.405-1"}
+    work = p["9.405-1"]["elements"][1]
+    assert work["state"] == "needs_record" and work["detail"].startswith("2 zero-dollar actions after the exclusion date")
 
 
 def test_ended_exclusion_and_unchecked_vendor():
@@ -62,6 +73,10 @@ def test_affiliates_and_small_business_provisions():
     assert set(p) == {"19.301", "52.219-14"}
     assert p["19.301"]["cite"].endswith("FAR 19.8") and p["19.301"]["routes_to"] == "SBA 8(a) continuing-eligibility review"
     assert evaluate(_v(signals=sigs)) == []  # no certification, nothing to represent
+    # a tribe's, ANC's or NHO's firms aren't affiliates for that reason, and growth is already discounted for them
+    assert evaluate(_v(sam={"certs": ["8(a)"]}, signals=sigs, suppression="Tribal, ANC or NHO family entity")) == []
+    p = _by(evaluate(_v(sam={"certs": ["SDVOSB"]}, signals=sigs, suppression="Declared joint venture")))
+    assert set(p) == {"19.301"}  # a joint venture's growth is discounted, its affiliation still counts
 
 
 def test_decisions_change_status():
@@ -104,6 +119,17 @@ def test_far_through_the_api_and_export(sam_ctx_export):
     assert any(h["action"] == "far" and "Confirmed FAR 9.405(a)" in h["detail"] for h in v["history"])
     summary = {p["id"]: p for p in client.get(f"/api/runs/{run_id}/far").json()["provisions"]}
     assert summary["9.405"]["vendors"] >= 1 and summary["9.405"]["supported"] >= 1
+    # the counts are red and yellow vendors; green ones (the watch list, anything cleared) are counted apart
+    lens, colors = appmod._far_lens(run_id), {}
+    for r in rows:
+        provs = [p for p in lens(r) if p["status"] != "not_applicable"]
+        if provs:
+            c = client.get(f"/api/runs/{run_id}/vendors/{r['uei']}").json()["color"]
+            for p in provs:
+                colors.setdefault(p["id"], []).append(c)
+    for pid, cs in colors.items():
+        assert summary[pid]["vendors"] == sum(c in ("red", "yellow") for c in cs), pid
+        assert summary[pid]["green"] == sum(c not in ("red", "yellow") for c in cs), pid
     queue = client.get(f"/api/runs/{run_id}/vendors", params={"far": "9.405", "limit": 500}).json()["rows"]
     assert u in {x["uei"] for x in queue}
     z = zipfile.ZipFile(io.BytesIO(client.get(f"/api/runs/{run_id}/exports/analysis.zip").content))
