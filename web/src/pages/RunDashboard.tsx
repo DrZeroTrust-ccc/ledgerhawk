@@ -6,6 +6,7 @@ import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
 import { FollowUpButton } from './RunRecordPage'
+import { FarPanel } from '../Far'
 
 const STAGE_FILTER: Record<string, string> = { '1a': '1a', '1b': '1b,1c', '1d': '1d' }
 
@@ -146,7 +147,11 @@ function Funnel({ run }: { run: RunSummary }) {
       <ol className="space-y-3">
         {run.funnel.map((s) => (
           <li key={s.key}>
-            <button disabled={!s.cut} onClick={() => setOpen(open === s.key ? null : s.key)} className="group block w-full text-left disabled:cursor-default">
+            <button
+              disabled={!s.cut}
+              onClick={() => setOpen(open === s.key ? null : s.key)}
+              className="group block w-full text-left disabled:cursor-default"
+            >
               <div className="flex items-baseline justify-between gap-4 text-sm">
                 <span className="font-medium">{s.label}</span>
                 <span className="tabular text-slate-600">
@@ -304,9 +309,9 @@ function RoiPanel({ run }: { run: RunSummary }) {
             ))}
           </ul>
           <p className="mt-2 text-xs text-slate-500">
-            Tier 5 at {rates[0]}–{rates[1]}% would add {money((t5 * rates[0]) / 100)}–{money((t5 * rates[1]) / 100)}. The 3% and 7% defaults come from the range
-            in GAO-24-105833, which estimates annual government-wide losses of $233B to $521B; 15% is an illustrative concentrated-risk case. Look-back dollars
-            become recoveries only through investigation; forward dollars are protected by acting sooner.
+            Tier 5 at {rates[0]}–{rates[1]}% would add {money((t5 * rates[0]) / 100)}–{money((t5 * rates[1]) / 100)}. The 3% and 7% defaults come from
+            the range in GAO-24-105833, which estimates annual government-wide losses of $233B to $521B; 15% is an illustrative concentrated-risk
+            case. Look-back dollars become recoveries only through investigation; forward dollars are protected by acting sooner.
           </p>
         </div>
         <div className="text-sm">
@@ -488,6 +493,7 @@ export default function RunDashboard() {
         </div>
         <Histogram runId={id} />
       </div>
+      <FarPanel runId={id} />
       <RoiPanel run={run} />
       <Inputs run={run} />
     </div>

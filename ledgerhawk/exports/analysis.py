@@ -23,6 +23,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from ..pipeline.far import FAR_MAP_VERSION
 from ..pipeline.integrity import FY_START, INTEGRITY_MEANING, _parse_date
 from ..pipeline.rules import policy_label
 from ..pipeline.stages import SIGNAL_LABELS
@@ -125,9 +126,16 @@ def _family_total(v: dict) -> float | None:
     return max(totals) if totals else None
 
 
-def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict], list[dict]]:
-    """items: [{"v", "wf", "disposition"}]. Returns (vendors, evidence, links) for the vendors in `colors`."""
-    vendors, evidence, links = [], [], []
+FAR_STATE = {"shown": "Data shows", "needs_record": "Needs a record", "confirmed": "Analyst confirmed",
+             "not_applicable": "Not applicable"}
+FAR_COLS = ["uei", "name", "color", "provision", "cite", "title", "binds", "routes_to", "status", "element", "element_text",
+            "state", "detail", "source", "analyst_note", "analyst"]
+
+
+def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
+    """items: [{"v", "wf", "disposition", "awards"?, "far"?}]. Returns (vendors, evidence, links, far) for the vendors
+    in `colors`; far has one row per element of each FAR provision the vendor's evidence implicates."""
+    vendors, evidence, links, far = [], [], [], []
     for it in items:
         v, wf, disp, aw = it["v"], it["wf"], it["disposition"], it.get("awards")
         c, why = color(v, wf, disp, aw)
@@ -164,8 +172,17 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "in_sam": int(bool(sam)), "sam_start_date": sam.get("start_date", ""), "state": sam.get("state", ""),
             "naics": v.get("naics", ""), "psc": v.get("psc", ""), "structure": v.get("struct", ""),
             "suite_shared_by": sam.get("suite_count", ""),
+            "far_provisions": "; ".join(p["cite"] for p in it.get("far") or [] if p["status"] != "not_applicable"),
         }
         vendors.append(row)
+        for p in it.get("far") or []:
+            for e in p["elements"]:
+                d = e.get("decision") or p.get("decision") or {}
+                far.append({"uei": v["uei"], "name": v["name"], "color": c, "provision": p["id"], "cite": p["cite"],
+                            "title": p["title"], "binds": p["binds"], "routes_to": p["routes_to"],
+                            "status": p["status"].replace("_", " "), "element": e["id"], "element_text": e["text"],
+                            "state": FAR_STATE.get(e["state"], e["state"]), "detail": e["detail"], "source": e["source"],
+                            "analyst_note": d.get("note", ""), "analyst": d.get("analyst", "")})
         for s in v.get("signals") or []:
             evidence.append({"uei": v["uei"], "name": v["name"], "color": c, "kind": "signal", "type": s["id"],
                              "label": SIGNAL_LABELS.get(s["id"], s.get("label", s["id"])), "detail": s.get("detail", ""),
@@ -187,7 +204,7 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
                              "source": "SAM entity extract"})
     order = {k: i for i, k in enumerate(COLORS)}
     vendors.sort(key=lambda r: (order[r["color"]], -r["fy24_fy25_total"]))
-    return vendors, evidence, links
+    return vendors, evidence, links, far
 
 
 def _csv(rows: list[dict], cols: list[str]) -> bytes:
@@ -233,7 +250,11 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "evidence.csv  One row per signal, exclusion record, integrity finding and linked firm, with the detail",
         "              and the source it came from. Join to vendors.csv on uei.",
         "links.csv     Firm-to-firm connections (shared contacts, suites), for link-analysis tools.",
-        "LedgerHawk analysis export.xlsx  The same three tables as sheets, for opening directly in Excel.",
+        "far.csv       One row per element of each FAR provision a vendor's evidence may implicate: what the data",
+        "              shows (with its source), what needs a record LedgerHawk doesn't hold, and any analyst decision.",
+        "              vendors.csv far_provisions lists the provisions per vendor. These are provisions to review,",
+        f"              not findings that a provision was violated. FAR map {FAR_MAP_VERSION}.",
+        "LedgerHawk analysis export.xlsx  The same four tables as sheets, for opening directly in Excel.",
         "",
         "Signals",
         "-------",
@@ -252,7 +273,7 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
 def build_analysis_zip(items: list[dict], summary: dict, colors: set[str],
                        generated_at: datetime | None = None) -> tuple[bytes, dict]:
     generated_at = generated_at or datetime.now(timezone.utc)
-    vendors, evidence, links = rows_for(items, colors)
+    vendors, evidence, links, far = rows_for(items, colors)
     counts = {c: sum(1 for r in vendors if r["color"] == c) for c in COLORS}
     vcols = list(vendors[0].keys()) if vendors else ["color", "why_color", "uei", "name"]
     ecols = ["uei", "name", "color", "kind", "type", "label", "detail", "source"]
@@ -260,7 +281,7 @@ def build_analysis_zip(items: list[dict], summary: dict, colors: set[str],
 
     wb = Workbook()
     fills = {"red": "F8D7DA", "yellow": "FFF3CD", "green": "D1E7DD"}
-    for i, (title, rows, cols) in enumerate([("Vendors", vendors, vcols), ("Evidence", evidence, ecols), ("Links", links, lcols)]):
+    for i, (title, rows, cols) in enumerate([("Vendors", vendors, vcols), ("Evidence", evidence, ecols), ("Links", links, lcols), ("FAR", far, FAR_COLS)]):
         ws = wb.active if i == 0 else wb.create_sheet()
         ws.title = title
         ws.append(cols)
@@ -285,6 +306,7 @@ def build_analysis_zip(items: list[dict], summary: dict, colors: set[str],
         z.writestr("vendors.csv", _csv(vendors, vcols))
         z.writestr("evidence.csv", _csv(evidence, ecols))
         z.writestr("links.csv", _csv(links, lcols))
+        z.writestr("far.csv", _csv(far, FAR_COLS))
         z.writestr("LedgerHawk analysis export.xlsx", xbuf.getvalue())
         z.writestr("README.txt", _readme(summary, counts, colors, generated_at))
     return zbuf.getvalue(), counts

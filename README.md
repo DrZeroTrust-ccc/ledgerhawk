@@ -231,6 +231,30 @@ There is no sign-in yet. Analysts type their name in the header, and that's what
 Not yet built: USAspending verification (Stage 6, including awards after exclusion and GSA Schedule
 modifications; Tier A uses fiscal-year timing until then), OSINT, and the briefing deck.
 
+## FAR provisions to review
+
+For each vendor, LedgerHawk lists the FAR provisions its evidence may implicate, element by element
+(`ledgerhawk/pipeline/far.py`, FAR map version in `FAR_MAP_VERSION`). It never decides that a provision was violated:
+each element is either shown by the import's data, with its source, or needs a record LedgerHawk doesn't hold (the
+contract file, a certification, an SBA determination). Each provision also says whom it binds, because several of these
+duties fall on the awarding agency rather than the vendor.
+
+| Provision | Implicated when | Needs a record |
+| --- | --- | --- |
+| FAR 9.405(a) | An excluded vendor has a new contract or order in USAspending dated after the exclusion (and before it ended); without a USAspending check, GSA obligations in a fiscal year that began after it | The agency head's compelling-reason determination |
+| FAR 9.405-1(b) | An option exercised or work added after the exclusion (funding a continuing contract doesn't count) | The same determination |
+| FAR 52.209-5 | A new award while excluded | What the vendor certified |
+| FAR 9.406-5, 9.403 | A vendor not on the list is tied to an excluded party (alias, joint venture, shared suite or contact, supported name match) | Control or common ownership |
+| FAR 19.301-1, 52.219-1; 13 CFR 121.103 (plus the FAR 19 subpart for the certification) | A certified firm with affiliation signals (L_affil_cert, R_split_cert, R_split) | An SBA size or status determination |
+| FAR 52.219-14 | A certified firm with growth signals (S2, S3) | The share of work it performed itself |
+
+Analysts confirm an element from a record or mark an element (or the whole provision) not applicable, with a required
+note; each decision is logged and carries into follow-up imports like dispositions. The case page shows a "FAR
+provisions to review" card, the import dashboard counts vendors by provision (each linking to the queue filtered with
+`far=<provision>`), and the analysis export adds `far_provisions` to vendors.csv, a far.csv with one row per element, and
+a FAR sheet. Not yet covered: active SAM registration at award (FAR 4.1102, needs SAM registration history), FAPIIS
+responsibility records (FAR 9.104-6), and subaward data for 52.219-14.
+
 ## Deploying on Render
 
 The `Dockerfile` builds the web app and serves it with the API from one container. `render.yaml` is the matching

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from ..pipeline.decisions import parse_decisions
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
+from ..pipeline import far as far_mod
 from ..pipeline.ledger import build_ledger
 from ..pipeline import samgov
 from ..pipeline import summary as summary_mod
@@ -1101,6 +1102,12 @@ def _workflow(v: dict, st: dict) -> dict:
     }
 
 
+def _far_lens(run_id: str):
+    """A function from a vendor record to its FAR provisions in this import, with analyst decisions applied."""
+    entities, decisions = store.case_awards_entities(run_id), store.far_decisions(run_id)
+    return lambda v: far_mod.apply_decisions(far_mod.evaluate(v, entities.get(v["uei"])), decisions.get(v["uei"], {}))
+
+
 def _slim(v: dict, disp: dict, state: dict | None = None, hawk: dict | None = None, awards: dict | None = None) -> dict:
     wf = _workflow(v, (state or {}).get(v["uei"], {}))
     c, why = vendor_color(v, wf, disp.get(v["uei"]), (awards or {}).get(v["uei"]))
@@ -1132,6 +1139,7 @@ def list_vendors(
     owner: str = "",
     assignee: str = "",
     color: str = "",
+    far: str = "",
     q: str = "",
     sort: str = "-tot",
     offset: int = 0,
@@ -1182,6 +1190,9 @@ def list_vendors(
         rows = [r for r in rows if disp.get(r["uei"], {}).get("carried_from")]
     elif disposition:
         rows = [r for r in rows if disp.get(r["uei"], {}).get("value") == disposition]
+    if far:  # a provision id, e.g. 9.405: vendors whose evidence implicates it (and no analyst ruled it out)
+        lens = _far_lens(run_id)
+        rows = [r for r in rows if any(p["id"] == far and p["status"] != far_mod.NOT_APPLICABLE for p in lens(r))]
     if q:
         ql = q.lower()
         rows = [r for r in rows if ql in r["name"].lower() or ql in r["uei"].lower()]
@@ -1227,6 +1238,7 @@ def vendor(run_id: str, uei: str):
     out.update(_workflow(v, store.analyst_state(run_id).get(uei, {})))
     out["color"], out["color_why"] = vendor_color(v, out, out["disposition"], store.case_awards_index(run_id).get(uei))
     out["history"] = _history(run_id, uei)
+    out["far"] = _far_lens(run_id)(v)
     out["case"] = store.case(run_id, uei)
     out["ledger"] = _ledger(v, out["case"])
     out["summary_enabled"] = summary_mod.enabled() or store.summary_client is not None
@@ -1460,8 +1472,9 @@ def export_analysis(run_id: str, colors: str = "red,yellow"):
     disp = store.dispositions(run_id)
     state = store.analyst_state(run_id)
     awards = store.case_awards_index(run_id)
-    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"]), "awards": awards.get(r["uei"])}
-             for r in data["rows"]]
+    lens = _far_lens(run_id)
+    items = [{"v": r, "wf": _workflow(r, state.get(r["uei"], {})), "disposition": disp.get(r["uei"]), "awards": awards.get(r["uei"]),
+              "far": lens(r)} for r in data["rows"]]
     body, counts = build_analysis_zip(items, store.summary(run_id), want)
     u = CURRENT_USER.get()
     store.audit(u.name if u else "", "export", None, run_id,
@@ -1641,6 +1654,45 @@ def set_disposition(run_id: str, uei: str, body: DispositionIn):
         return store.set_disposition(uei, body.value, body.note, body.analyst, run_id)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+class FarDecisionIn(BaseModel):
+    provision: str
+    element: str
+    state: str
+    note: str
+    analyst: str
+
+
+@app.post("/api/runs/{run_id}/vendors/{uei}/far")
+def set_far(run_id: str, uei: str, body: FarDecisionIn):
+    """Confirm an element of a FAR provision from a record, or mark an element or the whole provision (element "*") not
+    applicable; state "" takes a decision back. A note is required either way."""
+    body.analyst = who(body.analyst)
+    if uei not in _get(store.vendors, run_id)["by_uei"]:
+        raise HTTPException(404, "Vendor not in this import")
+    try:
+        return store.set_far(run_id, uei, body.provision, body.element, body.state, body.note, body.analyst)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/runs/{run_id}/far")
+def far_summary(run_id: str):
+    """For each FAR provision, how many vendors in this import the evidence implicates, how many have every element
+    shown or confirmed, and the dollars they hold. Provisions an analyst marked not applicable are left out."""
+    lens = _far_lens(run_id)
+    out = {pid: {"id": pid, "cite": p["cite"], "title": p["title"], "binds": p["binds"], "vendors": 0, "supported": 0,
+                 "dollars": 0.0} for pid, p in far_mod.PROVISIONS.items()}
+    for r in _get(store.vendors, run_id)["rows"]:
+        for p in lens(r):
+            if p["status"] == far_mod.NOT_APPLICABLE:
+                continue
+            o = out[p["id"]]
+            o["vendors"] += 1
+            o["supported"] += p["status"] == "supported"
+            o["dollars"] += float(r.get("tot") or 0)
+    return {"version": far_mod.FAR_MAP_VERSION, "provisions": list(out.values())}
 
 
 class BulkDispositionIn(BaseModel):

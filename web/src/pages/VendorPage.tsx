@@ -6,6 +6,7 @@ import { useAnalystName } from '../App'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkMap from '../LinkMap'
+import { FarCard } from '../Far'
 import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
 import { Button, Card, ColorChip, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
@@ -48,7 +49,8 @@ function ExclusionRecord({ h, ties }: { h: ExclusionHit; ties: ExclusionHit[] })
       <dl className="mt-3 grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2">
         <dt className="text-slate-500">Excluded party</dt>
         <dd>
-          {h.name || <span className="text-slate-500">Name not given</span>} {h.uei && <span className="font-mono text-xs text-slate-500">{h.uei}</span>}
+          {h.name || <span className="text-slate-500">Name not given</span>}{' '}
+          {h.uei && <span className="font-mono text-xs text-slate-500">{h.uei}</span>}
         </dd>
         <dt className="text-slate-500">Excluding agency</dt>
         <dd>{h.agency || '—'}</dd>
@@ -90,6 +92,7 @@ const HISTORY_LABEL: Record<string, string> = {
   case_approve: 'Approved',
   case_return: 'Returned',
   case_reopen: 'Reopened',
+  far: 'FAR review',
 }
 
 const ROLE: Record<string, string> = {
@@ -118,7 +121,9 @@ function SamProfile({ c }: { c: SamCard }) {
     <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[10rem_1fr]">
       <dt className="text-slate-500">Registration</dt>
       <dd>
-        <span className={`mr-2 rounded px-1.5 py-0.5 text-xs font-medium ${c.active ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+        <span
+          className={`mr-2 rounded px-1.5 py-0.5 text-xs font-medium ${c.active ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}
+        >
           {c.active ? 'Active' : 'Expired'}
         </span>
         registered {c.reg_date || '?'}, expires {c.exp_date || '?'}, updated {c.last_update || '?'}
@@ -209,7 +214,8 @@ function TierRouting({ runId, v, onSaved }: { runId: string; v: VendorDetail; on
           <p className="mt-1.5 text-xs text-slate-600">
             {v.tier_change.reason}
             <span className="block text-slate-500">
-              {v.tier_change.analyst} · {new Date(v.tier_change.at).toLocaleString()} · was {v.tier_change.prior ? TIER_SHORT[v.tier_change.prior] : 'no tier'}
+              {v.tier_change.analyst} · {new Date(v.tier_change.at).toLocaleString()} · was{' '}
+              {v.tier_change.prior ? TIER_SHORT[v.tier_change.prior] : 'no tier'}
             </span>
           </p>
         )}
@@ -254,7 +260,12 @@ function TierRouting({ runId, v, onSaved }: { runId: string; v: VendorDetail; on
         }}
       >
         <label className="block text-xs text-slate-500">Routes to</label>
-        <input list="owners" value={owner} onChange={(e) => setOwner(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5" />
+        <input
+          list="owners"
+          value={owner}
+          onChange={(e) => setOwner(e.target.value)}
+          className="w-full rounded-md border border-slate-300 px-2 py-1.5"
+        />
         <datalist id="owners">
           {owners.map((o) => (
             <option key={o} value={o} />
@@ -305,10 +316,13 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
       }}
     >
       {v.disposition && (
-        <div className={`rounded-md p-3 text-sm ${v.disposition.carried_from ? 'border border-dashed border-amber-300 bg-amber-50/60' : 'bg-slate-50'}`}>
+        <div
+          className={`rounded-md p-3 text-sm ${v.disposition.carried_from ? 'border border-dashed border-amber-300 bg-amber-50/60' : 'bg-slate-50'}`}
+        >
           {v.disposition.carried_from && (
             <div className="mb-1 text-xs font-medium text-amber-800">
-              Carried from import {v.disposition.carried_from.label} of {v.disposition.carried_from.created_at.slice(0, 10)}. Not yet decided in this import.
+              Carried from import {v.disposition.carried_from.label} of {v.disposition.carried_from.created_at.slice(0, 10)}. Not yet decided in this
+              import.
             </div>
           )}
           <div className="font-medium">{v.disposition.value}</div>
@@ -340,7 +354,12 @@ function DispositionForm({ runId, v, onSaved }: { runId: string; v: VendorDetail
           )}
         </div>
       )}
-      <select required value={value} onChange={(e) => setValue(e.target.value)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm">
+      <select
+        required
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+      >
         <option value="" disabled>
           Choose a disposition
         </option>
@@ -398,7 +417,12 @@ function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
     <Card
       title="Outside context"
       action={
-        <Button variant="secondary" disabled={busy || !analyst.trim()} onClick={look} title={analyst.trim() ? undefined : 'Enter your name in the header first'}>
+        <Button
+          variant="secondary"
+          disabled={busy || !analyst.trim()}
+          onClick={look}
+          title={analyst.trim() ? undefined : 'Enter your name in the header first'}
+        >
           {busy ? 'Searching…' : c ? 'Refresh' : 'Search news, courts, DOJ, SEC, OFAC'}
         </Button>
       }
@@ -409,8 +433,8 @@ function OutsideContextCard({ runId, v }: { runId: string; v: VendorDetail }) {
       ) : (
         !busy && (
           <p className="text-sm text-slate-500">
-            Not searched yet. Looks for news coverage, DOJ press releases, federal court dockets and opinions, SEC filings and the OFAC sanctions
-            list that name this vendor.
+            Not searched yet. Looks for news coverage, DOJ press releases, federal court dockets and opinions, SEC filings and the OFAC sanctions list
+            that name this vendor.
           </p>
         )
       )}
@@ -490,7 +514,9 @@ function SignalsCard({ v }: { v: VendorDetail }) {
           </li>
         ))}
       </ul>
-      {v.suppression && <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>}
+      {v.suppression && (
+        <p className="mt-4 rounded-md bg-slate-50 p-3 text-sm text-slate-600">Lawful pattern, growth signals discounted: {v.suppression}</p>
+      )}
     </Card>
   )
 }
@@ -510,7 +536,14 @@ export default function VendorPage() {
   return (
     <div className="space-y-6">
       <div>
-        <Breadcrumbs items={[{ label: 'Imports', to: '/' }, { label: runLabel(runs, id), to: `/runs/${id}` }, { label: 'Queue', to: queueHref(id) }, { label: v.name }]} />
+        <Breadcrumbs
+          items={[
+            { label: 'Imports', to: '/' },
+            { label: runLabel(runs, id), to: `/runs/${id}` },
+            { label: 'Queue', to: queueHref(id) },
+            { label: v.name },
+          ]}
+        />
         <div className="mt-2 flex flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold text-navy">{v.name}</h1>
           <QueueChip queue={v.queue || (v.bucket === 'watch' ? 'watch' : '')} />
@@ -522,7 +555,11 @@ export default function VendorPage() {
           <span className="ml-auto">
             <DownloadMenu
               items={[
-                { label: 'Case file (Word)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`, hint: 'Editable, with notes and sign-off' },
+                {
+                  label: 'Case file (Word)',
+                  href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`,
+                  hint: 'Editable, with notes and sign-off',
+                },
                 { label: 'Case file (PDF)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`, hint: 'For sharing as is' },
               ]}
             />
@@ -584,6 +621,8 @@ export default function VendorPage() {
             </div>
           </Card>
 
+          <FarCard runId={id} uei={v.uei} far={v.far} onSaved={reload} />
+
           <LedgerCard
             ledger={v.ledger}
             action={
@@ -624,7 +663,8 @@ export default function VendorPage() {
                       <SamProfile c={v.sam} />
                     ) : (
                       <p className="text-sm text-slate-500">
-                        No SAM registration in this import's extract. Unmatched vendors usually have lapsed registrations, or the import had no SAM extract.
+                        No SAM registration in this import's extract. Unmatched vendors usually have lapsed registrations, or the import had no SAM
+                        extract.
                       </p>
                     )}
                   </Card>
@@ -645,8 +685,8 @@ export default function VendorPage() {
                   {v.links.length > 0 && (
                     <Card title="Linked vendors">
                       <p className="mb-3 text-sm text-slate-600">
-                        Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof of
-                        common control.
+                        Different companies that share a contact and a suite or building with this vendor, after hub suppression. Signals, not proof
+                        of common control.
                       </p>
                       <ul className="divide-y divide-slate-100 text-sm">
                         {v.links.map((l) => (
@@ -654,7 +694,8 @@ export default function VendorPage() {
                             <Link to={`/runs/${id}/vendors/${encodeURIComponent(l.uei)}`} className="font-medium text-navy hover:underline">
                               {l.name}
                             </Link>{' '}
-                            <span className="font-mono text-xs text-slate-500">{l.uei}</span> <span className="tabular text-slate-600">{money(l.tot)}</span>
+                            <span className="font-mono text-xs text-slate-500">{l.uei}</span>{' '}
+                            <span className="tabular text-slate-600">{money(l.tot)}</span>
                             {l.certified && <span className="ml-2 rounded bg-navy-50 px-1.5 py-0.5 text-xs text-navy">certified</span>}
                             <div className="text-xs text-slate-500">via {l.via}</div>
                           </li>
@@ -687,7 +728,10 @@ export default function VendorPage() {
                           {h.other_run && (
                             <>
                               {' · '}
-                              <Link to={`/runs/${h.other_run.id}/vendors/${v.uei}`} className="rounded bg-slate-100 px-1 text-slate-600 hover:underline">
+                              <Link
+                                to={`/runs/${h.other_run.id}/vendors/${v.uei}`}
+                                className="rounded bg-slate-100 px-1 text-slate-600 hover:underline"
+                              >
                                 import {h.other_run.label}, {h.other_run.created_at.slice(0, 10)}
                               </Link>
                             </>

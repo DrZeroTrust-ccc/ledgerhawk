@@ -35,7 +35,7 @@ def test_export_zip(sam_ctx_export):
     r = client.get(f"/api/runs/{run_id}/exports/analysis.zip")
     assert r.status_code == 200 and r.headers["content-type"] == "application/zip"
     z = zipfile.ZipFile(io.BytesIO(r.content))
-    assert set(z.namelist()) == {"vendors.csv", "evidence.csv", "links.csv", "LedgerHawk analysis export.xlsx", "README.txt"}
+    assert set(z.namelist()) == {"vendors.csv", "evidence.csv", "links.csv", "far.csv", "LedgerHawk analysis export.xlsx", "README.txt"}
     vendors = list(csv.DictReader(io.StringIO(z.read("vendors.csv").decode("utf-8-sig"))))
     assert vendors and {v["color"] for v in vendors} <= {"red", "yellow"}
     assert [v["color"] for v in vendors] == sorted((v["color"] for v in vendors), key=["red", "yellow"].index)
