@@ -257,6 +257,14 @@ export type Person = { email: string; name: string; role: 'admin' | 'analyst' | 
 export type People = { people: Person[]; roles: Record<string, string>; bootstrap: { email: string; name: string }[] }
 export type Alert = { at: string; kind: string; title: string; detail: string; sent: string[]; errors: string[]; repeat: boolean }
 export type Alerts = { channels: string[]; alerts: Alert[] }
+export type WeeklyStatus = {
+  enabled: boolean
+  when: string
+  keep: number
+  next: string | null
+  targets: { id: string; label: string; created_at: string }[]
+  last: { at: string; followed: string; run_id: string; removed: string[] } | null
+}
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -951,6 +959,7 @@ export const api = {
   runs: () => req<RunMeta[]>('/api/runs'),
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
   createRun: (form: FormData) => req<ImportStart>('/api/runs', { method: 'POST', body: form }),
+  weekly: () => req<WeeklyStatus>('/api/weekly'),
   importJobs: (active: boolean) => req<{ jobs: ImportJob[] }>(`/api/import-jobs${active ? '?active=true' : ''}`),
   importJob: (id: string) => req<ImportJob>(`/api/import-jobs/${encodeURIComponent(id)}`),
   exclusionCheck: (id: string) => req<{ excluded: number; checked: number; paid_after: number }>(`/api/runs/${id}/exclusion-check`),

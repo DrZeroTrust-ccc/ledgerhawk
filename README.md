@@ -362,3 +362,20 @@ set either or both on the server:
   `LEDGERHAWK_SMTP_USER`, `LEDGERHAWK_SMTP_PASSWORD` and optionally `LEDGERHAWK_SMTP_FROM`.
 
 `LEDGERHAWK_SITE_URL` adds a link to the site in each alert. The same alert isn't sent twice within an hour.
+
+## Weekly re-screen
+
+Every Monday after 11:00 UTC (7am Eastern), LedgerHawk follows up the newest real import under each policy pack:
+
+1. It fetches the newest SAM.gov extracts when `SAM_API_KEY` is set.
+2. It re-screens the same vendor file against them as an automatic follow-up, carrying review decisions forward.
+3. It looks up the import's excluded vendors in USAspending.
+4. It sends a "new since last week" note as an alert: what's new in the queue, what left it, what changed, and how
+   many excluded vendors were paid after their exclusion.
+
+The Imports page shows when it runs next. Only the newest 4 automatic follow-ups are kept. An import someone started,
+any import with analyst work on it, and any import another one was restored from are never removed, and the import
+that followed a removed one is re-linked so decisions still carry forward. Removed imports are in the nightly backups.
+
+Settings: `LEDGERHAWK_WEEKLY=0` turns it off; `LEDGERHAWK_WEEKLY_DAY` (0 = Monday), `LEDGERHAWK_WEEKLY_HOUR` (UTC) and
+`LEDGERHAWK_WEEKLY_KEEP` change when it runs and how many are kept.

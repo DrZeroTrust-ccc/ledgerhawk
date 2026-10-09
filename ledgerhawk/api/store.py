@@ -394,7 +394,7 @@ class Store:
                    *, synthetic: bool, analyst: str, restore: set[str] | None = None,
                    parent_id: str | None = None, label: str = "", sam_source: str | None = None,
                    follows_id: str | None = None, policy_pack: str | None = None,
-                   rules: tuple[RuleSet, dict] | None = None, progress=None) -> str:
+                   rules: tuple[RuleSet, dict] | None = None, progress=None, auto: bool = False) -> str:
         """Screen a vendor file. It uses the live version of `policy_pack` (LedgerHawk defaults when none), or exactly
         `rules` (a restore re-screens with its parent's rules), and keeps those rules beside the results."""
         sam = self.source(sam_source) if sam_source else None
@@ -433,7 +433,7 @@ class Store:
             "exclusions_date": exclusions_date.isoformat() if exclusions_date else None,
             "restore": sorted(restore or []),
             "sam_source": sam["id"] if sam else None, "sam_date": sam["as_of"] if sam else None,
-            "follows_id": follows_id, "app_version": APP_VERSION, "policy": policy,
+            "follows_id": follows_id, "app_version": APP_VERSION, "policy": policy, "auto": auto,
             "inputs_sha256": {"vendor_file": file_sha256(v), "exclusions_file": file_sha256(e) if e else None},
         }
         (d / "meta.json").write_text(json.dumps(meta, indent=2))
@@ -447,7 +447,7 @@ class Store:
         return run_id
 
     def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "",
-                      policy_pack: str | None = None, progress=None) -> str:
+                      policy_pack: str | None = None, progress=None, auto: bool = False) -> str:
         """A new run of the same list against the newest SAM and exclusions extracts (or a newer vendor file), linked
         to the run it follows so its changes and carried-forward decisions are clear."""
         d = self.run_dir(run_id)
@@ -466,7 +466,58 @@ class Store:
         return self.create_run(vendor_path or d / "inputs" / meta["vendor_file"], excl, ed,
                                synthetic=meta["data_class"] == "synthetic", analyst=analyst, sam_source=sam,
                                label=label or meta["label"], follows_id=run_id,
-                               policy_pack=policy_pack or (meta.get("policy") or {}).get("pack_id"), progress=progress)
+                               policy_pack=policy_pack or (meta.get("policy") or {}).get("pack_id"), progress=progress,
+                               auto=auto)
+
+    # ---- the weekly re-screen ----
+    def weekly_targets(self) -> list[str]:
+        """What the weekly re-screen follows up: the newest real (not synthetic) import under each policy pack."""
+        seen, out = set(), []
+        for m in self.list_runs():  # newest first
+            pack = (m.get("policy") or {}).get("pack_id", DEFAULTS_ID)
+            if m.get("data_class") == "synthetic" or m.get("parent_id") or pack in seen:
+                continue
+            seen.add(pack)
+            out.append(m["id"])
+        return out
+
+    def _has_analyst_work(self, run_id: str) -> bool:
+        with self._db() as db:
+            for table in ("run_disposition", "run_routing", "run_assignment", "run_far", "tier_change"):
+                if db.execute(f"SELECT 1 FROM {table} WHERE run_id = ? LIMIT 1", (run_id,)).fetchone():
+                    return True
+        return False
+
+    def prune_auto_runs(self, keep: int = 4) -> list[str]:
+        """Remove automatic follow-ups beyond the newest `keep`, so weekly re-screens don't fill the disk. Never an
+        import someone started, one with any analyst work recorded on it (decisions, routing, assignments, FAR
+        notes, tier changes), or one another import was restored from. The import that followed a removed one is
+        re-linked to the one before it, so decisions still carry forward; nightly backups keep the removed data."""
+        runs = self.list_runs()
+        parents = {m.get("parent_id") for m in runs}
+        auto = [m for m in runs if m.get("auto")]
+        removed = []
+        for m in auto[keep:]:
+            rid = m["id"]
+            if rid in parents or self._has_analyst_work(rid):
+                continue
+            for nxt in runs:  # splice: whatever followed it now follows what it followed
+                if nxt.get("follows_id") == rid:
+                    f = self.run_dir(nxt["id"]) / "meta.json"
+                    nm = json.loads(f.read_text())
+                    nm["follows_id"] = m.get("follows_id")
+                    nm["follows_removed"] = (nm.get("follows_removed") or []) + [rid]
+                    f.write_text(json.dumps(nm, indent=2))
+                    nxt["follows_id"] = m.get("follows_id")
+            shutil.rmtree(self.root / "runs" / rid, ignore_errors=True)
+            shutil.rmtree(self.root / "cases" / rid, ignore_errors=True)
+            removed.append(rid)
+        if removed:
+            self.free_memory()
+            self.audit("LedgerHawk", "run_removed", None, None,
+                       f"Removed {len(removed)} older automatic re-screen{'s' if len(removed) != 1 else ''} to save disk "
+                       f"space (kept the newest {keep}): " + ", ".join(removed))
+        return removed
 
     def list_runs(self) -> list[dict]:
         out = []
@@ -591,7 +642,7 @@ class Store:
             jobs = [j for j in jobs if j["state"] in ("queued", "running")]
         return jobs[:limit]
 
-    def start_import(self, kind: str, label: str, by: str, fn, cleanup: Path | None = None) -> dict:
+    def start_import(self, kind: str, label: str, by: str, fn, cleanup: Path | None = None, on_done=None) -> dict:
         """Run fn(progress) -> import id in the background. progress(step) updates the job; returns the job."""
         jid = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
         f = self._import_job_file(jid)
@@ -632,6 +683,11 @@ class Store:
             if job["state"] == "error":
                 self._alert("job", f"{JOB_KINDS.get(kind, 'Import')} failed: {label}",
                             f"Started by {by or 'someone'}. {job['error']}", key=f"job:{jid}")
+            elif on_done and job.get("run_id"):
+                try:
+                    on_done(job["run_id"])
+                except Exception:
+                    logging.getLogger("ledgerhawk").exception("after import job %s", jid)
         if self.jobs_inline:
             work()
         else:

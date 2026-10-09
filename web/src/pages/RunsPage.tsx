@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { lastPlace } from '../nav'
 import { api, money, num, queueTotal, type AutoSources, type ImportJob, type RunMeta, type Source } from '../api'
-import { ImportProgress, RecentImports, useImportJob } from '../imports'
+import { ImportProgress, RecentImports, useImportJob, WeeklyRescreen } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
 
@@ -41,18 +41,33 @@ function SourceForm({ onAdded }: { onAdded: () => void }) {
     >
       <label className="space-y-1">
         <span className="block text-xs font-medium text-slate-600">Source</span>
-        <select value={kind} onChange={(e) => setKind(e.target.value as 'sam' | 'exclusions')} className="rounded-md border border-slate-300 px-2 py-1 text-sm">
+        <select
+          value={kind}
+          onChange={(e) => setKind(e.target.value as 'sam' | 'exclusions')}
+          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+        >
           <option value="sam">SAM entity extract (V2 .dat)</option>
           <option value="exclusions">SAM exclusions extract (.csv)</option>
         </select>
       </label>
       <label className="space-y-1">
         <span className="block text-xs font-medium text-slate-600">File</span>
-        <input type="file" accept={kind === 'sam' ? '.zip,.dat,.txt' : '.zip,.csv'} onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="text-sm" />
+        <input
+          type="file"
+          accept={kind === 'sam' ? '.zip,.dat,.txt' : '.zip,.csv'}
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          className="text-sm"
+        />
       </label>
       <label className="space-y-1">
         <span className="block text-xs font-medium text-slate-600">Extract date</span>
-        <input type="date" required value={asOf} onChange={(e) => setAsOf(e.target.value)} className="rounded-md border border-slate-300 px-2 py-1 text-sm" />
+        <input
+          type="date"
+          required
+          value={asOf}
+          onChange={(e) => setAsOf(e.target.value)}
+          className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+        />
       </label>
       <Button type="submit" variant="secondary" disabled={!file || !asOf || busy || !analyst.trim()}>
         {busy ? 'Uploading…' : 'Add source'}
@@ -92,9 +107,7 @@ function AutoFetch({ auto, reload }: { auto?: AutoSources; reload: () => void })
   return (
     <div className="mb-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
       <div className="flex flex-wrap items-center gap-2">
-        <span>
-          Updated automatically from SAM.gov: exclusions daily, the entity file monthly. Last checked {when(auto.exclusions?.checked_at)}.
-        </span>
+        <span>Updated automatically from SAM.gov: exclusions daily, the entity file monthly. Last checked {when(auto.exclusions?.checked_at)}.</span>
         <Button variant="secondary" className="ml-auto" disabled={auto.running || asked || !analyst.trim()} onClick={check}>
           {auto.running || asked ? 'Checking SAM.gov…' : 'Check SAM.gov now'}
         </Button>
@@ -137,7 +150,9 @@ function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto
                   <td className="py-2">{s.label}</td>
                   <td className="py-2">
                     {s.as_of}{' '}
-                    <span className={`ml-1 rounded px-1.5 py-0.5 text-xs ${s.stale ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}>
+                    <span
+                      className={`ml-1 rounded px-1.5 py-0.5 text-xs ${s.stale ? 'bg-amber-50 text-amber-800' : 'bg-emerald-50 text-emerald-800'}`}
+                    >
                       {s.age_days} {s.age_days === 1 ? 'day' : 'days'} old
                       {s.stale ? `, stale after ${s.stale_after_days}` : ''}
                     </span>
@@ -145,7 +160,10 @@ function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto
                   <td className="py-2 text-slate-600">
                     {s.file} · {sizeLabel(s.bytes)}
                     {s.kind === 'sam' && s.entities !== undefined && (
-                      <span className={s.entities ? '' : 'text-crimson'}> · {s.entities ? `${s.entities.toLocaleString()} entities` : 'no entities could be read'}</span>
+                      <span className={s.entities ? '' : 'text-crimson'}>
+                        {' '}
+                        · {s.entities ? `${s.entities.toLocaleString()} entities` : 'no entities could be read'}
+                      </span>
                     )}
                   </td>
                   <td className="py-2 text-slate-600">{s.uploaded_by}</td>
@@ -267,7 +285,9 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
               </option>
             ))}
           </select>
-          <span className="block text-xs text-slate-500">Adds SAM cards, the relationship screen, and address and contact ties to excluded parties.</span>
+          <span className="block text-xs text-slate-500">
+            Adds SAM cards, the relationship screen, and address and contact ties to excluded parties.
+          </span>
         </label>
       </div>
       <div className="flex flex-wrap items-end gap-4">
@@ -306,7 +326,11 @@ function UploadForm({ sources, runs }: { sources: Source[]; runs: RunMeta[] }) {
         </label>
         <label className="space-y-1.5">
           <span className="block text-sm font-medium">Policy pack</span>
-          <select value={pack} onChange={(e) => setPack(e.target.value)} className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm">
+          <select
+            value={pack}
+            onChange={(e) => setPack(e.target.value)}
+            className="block max-w-xs rounded-md border border-slate-300 px-2 py-1 text-sm"
+          >
             {(packs.data?.packs ?? []).map((p) => (
               <option key={p.id} value={p.locked ? '' : p.id}>
                 {p.name} · v{p.live}
@@ -366,9 +390,12 @@ export default function RunsPage() {
       <div>
         <h1 className="text-2xl font-semibold text-navy">Imports</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Each import screens one vendor file against the SAM and exclusions extracts you pick. Imports never change after they finish, so their numbers stay
-          reproducible.
+          Each import screens one vendor file against the SAM and exclusions extracts you pick. Imports never change after they finish, so their
+          numbers stay reproducible.
         </p>
+        <div className="mt-2">
+          <WeeklyRescreen />
+        </div>
       </div>
       <Card title="Start a new import">
         <UploadForm key={sources.data ? 'loaded' : 'loading'} sources={sources.data?.sources ?? []} runs={runs ?? []} />

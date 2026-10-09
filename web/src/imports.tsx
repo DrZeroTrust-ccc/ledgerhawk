@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { api, type ImportJob } from './api'
+import { api, type ImportJob, type WeeklyStatus } from './api'
 import { useAnalystName } from './App'
 
 // Imports run in the background on the server. These show that one is being handled: a badge in the top bar while
@@ -118,6 +118,35 @@ export function ExclusionCheck({ runId, onDone }: { runId: string; onDone?: () =
       {watched && <ImportProgress job={watched} />}
       {err && <span className="text-crimson">{err}</span>}
     </div>
+  )
+}
+
+/** The weekly re-screen: when it runs next and what it follows up. */
+export function WeeklyRescreen() {
+  const [s, setS] = useState<WeeklyStatus | null>(null)
+  useEffect(() => {
+    api.weekly().then(setS, () => {})
+  }, [])
+  if (!s || !s.enabled || !s.targets.length) return null
+  const next = s.next
+    ? new Date(s.next).toLocaleString([], { weekday: 'long', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : ''
+  return (
+    <p className="text-sm text-slate-600">
+      <span className="font-medium text-ink">Weekly re-screen:</span> {s.targets.map((t) => t.label).join(', ')} against the newest SAM and exclusions
+      extracts, with a USAspending check of excluded vendors, next on {next}. What’s new since the last one goes out as an alert.
+      {s.last && (
+        <>
+          {' '}
+          Last:{' '}
+          <Link to={`/runs/${s.last.run_id}`} className="text-navy underline">
+            {new Date(s.last.at).toLocaleDateString()}
+          </Link>
+          .
+        </>
+      )}{' '}
+      The newest {s.keep} automatic re-screens are kept.
+    </p>
   )
 }
 
