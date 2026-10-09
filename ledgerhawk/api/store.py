@@ -13,6 +13,7 @@ import hashlib
 import json
 import gc
 import logging
+import multiprocessing
 import os
 import re
 import secrets
@@ -133,6 +134,42 @@ def compare_runs(old_rows: list[dict], new_rows: list[dict]) -> dict:
             "counts": {"new": len(added), "dropped": len(dropped), "changed": len(changed)}}
 
 
+OUT_OF_MEMORY = ("The server ran out of memory partway through. LedgerHawk itself kept running. Try again when nothing "
+                 "else is importing; if it happens again, the file needs a larger server.")
+RECOVERED = "Saved before the job was cut off; its last steps are finished when the import is opened."
+
+
+class OutOfMemory(Exception):
+    """A job's process was stopped by the system before it finished, nearly always for running out of memory."""
+
+
+class JobFailed(Exception):
+    """An unexpected error inside a job's process, carried back by name."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
+def _job_process(store: "Store", fn, args: tuple, conn) -> None:
+    """The child side of Store._isolated."""
+    store._lock = threading.Lock()  # a lock another thread held at the fork would never be released here
+    try:
+        with open("/proc/self/oom_score_adj", "w") as fh:
+            fh.write("1000")  # if memory runs out, the system stops this process rather than the web app
+    except OSError:
+        pass
+    try:
+        conn.send(("ok", fn(*args)))
+    except (ValueError, KeyError, FileNotFoundError) as exc:
+        conn.send(("expected", type(exc).__name__, str(exc)))
+    except BaseException as exc:
+        logging.getLogger("ledgerhawk").exception("job process failed")
+        conn.send(("unexpected", type(exc).__name__, str(exc)))
+    finally:
+        conn.close()
+
+
 class Store:
     def __init__(self, root: str | Path):
         self.root = Path(root)
@@ -159,6 +196,8 @@ class Store:
         self.hawk_inline = False  # tests write queue reasons in the request instead of a background thread
         # and run screen jobs (awards, outside context, re-check) in the request
         self.jobs_inline = os.environ.get("LEDGERHAWK_JOBS_INLINE") == "1"
+        # heavy jobs (imports, previews, checks) run in a process of their own where the system allows it
+        self.isolate_jobs = hasattr(os, "fork") and os.environ.get("LEDGERHAWK_JOBS_IN_PROCESS") != "1"
         self._jobs_running: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._auto_lock = threading.Lock()
@@ -469,11 +508,67 @@ class Store:
             if not f.exists():
                 raise KeyError(jid)
             j = json.loads(f.read_text())
-            if j["state"] in ("queued", "running") and j.get("boot") != self._boot:
+        cut_off = j["state"] in ("queued", "running") and j.get("boot") != self._boot
+        unchecked = j["state"] == "error" and "restarted" in j.get("error", "") and not j.get("recovery_checked")
+        if cut_off or unchecked:
+            rid = self._recover_run(j) if j.get("running_at") else ""
+            if rid:
+                j.update(state="done", step="Done", run_id=rid, error="", note=RECOVERED,
+                         finished_at=j.get("finished_at") or _now())
+            elif cut_off:
                 j.update(state="error", finished_at=j.get("finished_at") or _now(),
                          error="LedgerHawk restarted while this was running. Start it again.")
+            j["recovery_checked"] = True
+            with self._lock:
                 f.write_text(json.dumps(j, indent=2))
         return j
+
+    def _recover_run(self, j: dict) -> str:
+        """The import a cut-off job made, if it got as far as saving one (only the comparison or the log entry
+        missing): imports run one at a time, so it's the first one created after this job began running and before
+        the next job did."""
+        if j.get("kind") not in ("new", "follow_up"):
+            return ""
+        since = j.get("running_at") or ""
+        later = []
+        for p in (self.root / "import_jobs").glob("*.json"):
+            try:
+                o = json.loads(p.read_text())
+            except (OSError, ValueError):
+                continue
+            if o.get("id") != j.get("id") and (o.get("running_at") or "") > since:
+                later.append(o["running_at"])
+        until = min(later, default="9999")
+        made = [m for m in self.list_runs() if since <= m.get("created_at", "") < until]
+        return made[-1]["id"] if made else ""  # newest first, so the last is the first made
+
+    def _isolated(self, fn, *args):
+        """fn(*args) in a process of its own, returning its result. If the server runs short of memory the system
+        stops that process, not the web app, and this raises OutOfMemory. Runs in place where processes can't fork
+        (Windows) or when jobs run inside the request (tests)."""
+        if not self.isolate_jobs or self.jobs_inline:
+            return fn(*args)
+        ctx = multiprocessing.get_context("fork")
+        recv, send = ctx.Pipe(duplex=False)
+        p = ctx.Process(target=_job_process, args=(self, fn, args, send), name="ledgerhawk-job")
+        p.start()
+        send.close()
+        try:
+            msg = recv.recv()
+        except EOFError:
+            msg = None
+        finally:
+            recv.close()
+        p.join()
+        self.free_memory()  # the job changed files on disk; anything cached from before may be stale
+        if msg is None:
+            logging.getLogger("ledgerhawk").error("job process stopped with exit code %s", p.exitcode)
+            raise OutOfMemory(f"exit code {p.exitcode}")
+        if msg[0] == "ok":
+            return msg[1]
+        if msg[0] == "expected":
+            raise {"KeyError": KeyError, "FileNotFoundError": FileNotFoundError}.get(msg[1], ValueError)(msg[2])
+        raise JobFailed(msg[1], msg[2])
 
     def import_jobs(self, active: bool = False, limit: int = 20) -> list[dict]:
         names = sorted((p.stem for p in (self.root / "import_jobs").glob("*.json")), reverse=True)[:200]
@@ -508,13 +603,20 @@ class Store:
                 with self._import_gate:
                     write(state="running", step="Starting", running_at=_now())
                     self.free_memory()
-                    rid = fn(lambda step: write(step=step))
+                    rid = self._isolated(fn, lambda step: write(step=step))
                     write(state="done", step="Done", run_id=rid, finished_at=_now())
+            except OutOfMemory:
+                rid = self._recover_run(job)
+                if rid:
+                    write(state="done", step="Done", run_id=rid, finished_at=_now(), note=RECOVERED)
+                else:
+                    write(state="error", finished_at=_now(), error=OUT_OF_MEMORY)
             except (ValueError, KeyError, FileNotFoundError) as exc:
                 write(state="error", finished_at=_now(), error=str(exc).strip("'\"") or type(exc).__name__)
             except Exception as exc:
                 logging.getLogger("ledgerhawk").exception("import job %s failed", jid)
-                write(state="error", finished_at=_now(), error=f"Unexpected error ({type(exc).__name__}). Try again.")
+                write(state="error", finished_at=_now(),
+                      error=f"Unexpected error ({getattr(exc, 'kind', type(exc).__name__)}). Try again.")
             finally:
                 if cleanup:
                     shutil.rmtree(cleanup, ignore_errors=True)
@@ -579,7 +681,9 @@ class Store:
             try:
                 self.free_memory()
                 write(state="done", step="Done", finished_at=_now(),
-                      result=self._run_preview(pid, draft, lambda step: write(step=step)))
+                      result=self._isolated(self._run_preview, pid, draft, lambda step: write(step=step)))
+            except OutOfMemory:
+                write(state="error", finished_at=_now(), error=OUT_OF_MEMORY)
             except (ValueError, KeyError, FileNotFoundError) as exc:
                 write(state="error", finished_at=_now(), error=str(exc).strip("'\""))
             except Exception as exc:
