@@ -1760,6 +1760,11 @@ class Store:
                 "actions_flagged": e.get("actions_flagged", 0), "actions_dollars": e.get("actions_dollars", 0),
                 "after_exclusion": e.get("after_exclusion", 0), "actions_error": e.get("actions_error", ""),
             }
+            if "subawards" in e:  # looked up since subcontracts were added
+                out[f.parent.name].update({"subawards": len(e["subawards"]), "subawards_total": e.get("subawards_total", 0),
+                                           "subawards_after": e.get("subawards_after", 0),
+                                           "subawards_after_dollars": e.get("subawards_after_dollars", 0),
+                                           "subawards_error": e.get("subawards_error", "")})
             if "actions" in e and since:  # the itemised actions are there to count strictly
                 out[f.parent.name].update({
                     "paid_actions": len(paid), "paid_dollars": round(sum(a["amount"] for a in paid), 2),

@@ -48,7 +48,11 @@ def paid_after_exclusion(awards: dict | None) -> bool:
     if not awards:
         return False
     a = strict_awards(awards)
-    return bool(a["paid_actions"] or a["new_awards_after"])
+    return bool(a["paid_actions"] or a["new_awards_after"] or a.get("subawards_after"))
+
+
+def _money(x: float) -> str:
+    return f"${x / 1e6:.1f}M" if x >= 50_000 else f"${x:,.0f}"
 
 
 def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
@@ -68,10 +72,11 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
     if awards:
         awards = strict_awards(awards)
         n, dollars, new = awards["paid_actions"], awards["paid_dollars"], awards["new_awards_after"]
+        subs, sub_dollars = awards.get("subawards_after", 0), awards.get("subawards_after_dollars", 0)
         if paid_after_exclusion(awards):
-            money = f"${dollars / 1e6:.1f}M" if dollars >= 50_000 else f"${dollars:,.0f}"
-            bits = ([f"{n} paid contract action{'s' if n != 1 else ''} ({money})" if n else ""]
-                    + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""])
+            bits = ([f"{n} paid contract action{'s' if n != 1 else ''} ({_money(dollars)})" if n else ""]
+                    + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""]
+                    + [f"{subs} subcontract{'s' if subs != 1 else ''} under other firms' contracts ({_money(sub_dollars)})" if subs else ""])
             return "after", "USAspending: " + " and ".join(b for b in bits if b) + " after the exclusion date"
         on_day, zero = awards.get("same_day", 0), awards.get("zero_dollar", 0)
         if on_day or zero:
@@ -166,6 +171,9 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "paid_dollars_after_exclusion": round(float((aw or {}).get("paid_dollars", (aw or {}).get("actions_dollars")) or 0), 2) if aw else "",
             "awards_starting_after_exclusion": (aw or {}).get("new_awards_after", "") if aw else "",
             "same_day_or_zero_dollar_actions": ((aw or {}).get("same_day", 0) + (aw or {}).get("zero_dollar", 0)) if aw else "",
+            "subcontracts_after_exclusion": (aw or {}).get("subawards_after", "") if aw else "",
+            "subcontract_dollars_after_exclusion": (aw or {}).get("subawards_after_dollars", "") if aw else "",
+            "subcontracts_ever": (aw or {}).get("subawards", "") if aw else "",
             "linked_firms": len(v.get("links") or []), "neighbors": len(v.get("neighbors") or []),
             "family_total": _family_total(v) or "",
             "ownership": "; ".join(sam.get("owner") or []), "certifications": "; ".join(sam.get("certs") or []),
@@ -232,8 +240,8 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "------",
         "RED: two or more independent signals (priority queue); a vendor on the SAM exclusions list that was paid after",
         "  its exclusion date (obligations in a fiscal year that began after it, or in USAspending a contract action",
-        "  with new money, or an award starting, strictly after that date), or whose payments after the date have not",
-        "  been checked yet; an analyst's Tier 1; or a",
+        "  with new money, an award starting, or a subcontract under another firm's contract, strictly after that",
+        "  date), or whose payments after the date have not been checked yet; an analyst's Tier 1; or a",
         "  decision to refer.",
         "YELLOW: an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
         "  exclusion date itself and zero-dollar actions are listed, not counted as payment); one strong signal;",

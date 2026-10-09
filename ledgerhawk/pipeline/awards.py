@@ -236,6 +236,42 @@ def actions_summary(actions: list[dict], since: str) -> str:
     return ". ".join(parts_out)
 
 
+SUB_FIELDS = ["Sub-Award ID", "Sub-Awardee Name", "Sub-Award Date", "Sub-Award Amount", "Prime Award ID",
+              "Prime Recipient Name", "Sub-Recipient UEI", "Awarding Agency", "Sub-Award Description"]
+SUB_LIMIT = 100
+
+
+def subawards_for_uei(uei: str, since: str, post: Post = _post, today: date | None = None) -> dict:
+    """Subcontracts reported against a UEI on federal contracts (FFATA subaward reports by the prime contractor),
+    largest first. An excluded firm can keep being paid as a subcontractor under someone else's contract, which
+    nothing in its own contract history shows. Primes report subawards late, so a recent exclusion with none yet
+    is not a clean answer. Errors are returned, not raised."""
+    today = today or date.today()
+    out = {"subawards": [], "truncated": False, "error": ""}
+    body = {"spending_level": "subawards", "subawards": True,
+            "filters": {"award_type_codes": GROUPS["contract"][0], "recipient_search_text": [uei],
+                        "time_period": [{"start_date": EARLIEST, "end_date": today.isoformat()}]},
+            "fields": SUB_FIELDS, "limit": SUB_LIMIT, "page": 1, "sort": "Sub-Award Amount", "order": "desc"}
+    try:
+        res = post(API, body)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+        out["error"] = f"USAspending subawards did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"
+        return out
+    for row in res.get("results") or []:
+        if (row.get("Sub-Recipient UEI") or "").strip().upper() != uei:
+            continue  # the text search also matches names; only this UEI's own subcontracts count
+        when = _iso(row.get("Sub-Award Date"))
+        gid = row.get("prime_award_generated_internal_id") or ""
+        out["subawards"].append({
+            "id": str(row.get("Sub-Award ID") or ""), "date": when, "amount": float(row.get("Sub-Award Amount") or 0),
+            "prime_award_id": row.get("Prime Award ID") or "", "prime": row.get("Prime Recipient Name") or "",
+            "agency": row.get("Awarding Agency") or "", "description": (row.get("Sub-Award Description") or "").strip()[:300],
+            "after_exclusion": bool(since and when and when > since), "url": AWARD_PAGE + gid if gid else "",
+        })
+    out["truncated"] = bool((res.get("page_metadata") or {}).get("hasNext"))
+    return out
+
+
 HISTORY_API = "https://api.usaspending.gov/api/v2/search/spending_over_time/"
 GROWTH_MIN = 1_000_000   # a jump only matters at real money
 GROWTH_RATIO = 5         # this year at least 5x the best earlier year
@@ -384,6 +420,13 @@ def _excluded_since(entity: dict) -> str:
     return min(dates) if dates else ""
 
 
+def _sub_fields(sub: dict) -> dict:
+    after = [s for s in sub["subawards"] if s["after_exclusion"] and s["amount"] > 0]
+    return {"subawards": sub["subawards"], "subawards_truncated": sub["truncated"], "subawards_error": sub["error"],
+            "subawards_total": round(sum(s["amount"] for s in sub["subawards"]), 2),
+            "subawards_after": len(after), "subawards_after_dollars": round(sum(s["amount"] for s in after), 2)}
+
+
 def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
                   progress: Callable[[int, int, str], None] | None = None) -> dict:
     """Look up every subject UEI, and every excluded related entity, in one pass. `progress` is told
@@ -416,16 +459,18 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
         if progress:
             with lock:
                 done[0] += 1
-                progress(done[0], 3 * len(ueis), f"{step}: {targets[u]['name']}")
+                progress(done[0], 4 * len(ueis), f"{step}: {targets[u]['name']}")
         return res
 
     if progress:
-        progress(0, 3 * len(ueis), f"Looking up {len(ueis)} UEIs: contracts, actions after exclusion, yearly totals")
+        progress(0, 4 * len(ueis), f"Looking up {len(ueis)} UEIs: contracts, actions after exclusion, yearly totals, subcontracts")
     with ThreadPoolExecutor(max_workers=6) as pool:
         found = list(pool.map(lambda u: tick("Contracts and IDVs", u, awards_for_uei(u, post, today)), ueis))
         acts = dict(zip(ueis, pool.map(lambda u: tick("Actions after exclusion", u, actions_after(
             u, targets[u]["excluded_since"], post, today)), ueis)))
         hist = dict(zip(ueis, pool.map(lambda u: tick("Year-by-year history", u, history_for_uei(u, post, today)), ueis)))
+        subs = dict(zip(ueis, pool.map(lambda u: tick("Subcontracts", u, subawards_for_uei(
+            u, targets[u]["excluded_since"], post, today)), ueis)))
     entities = []
     for res in found:
         t = targets[res["uei"]]
@@ -447,6 +492,7 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
             "actions_flagged": len(flagged), "actions_dollars": round(sum(a["amount"] for a in flagged if a["amount"] > 0), 2),
             "schedule_actions": sum(1 for a in flagged if a["schedule"]),
             "actions_summary": actions_summary(act["actions"], since),
+            **_sub_fields(subs.get(res["uei"]) or {"subawards": [], "truncated": False, "error": ""}),
             **res, "name": t["name"], "refs": sorted(t["refs"]), "role": t["role"], "excluded_since": since,
             "total": round(sum(a["amount"] for a in res["awards"]), 2), "count": len(res["awards"]),
             "after_exclusion": sum(a["after_exclusion"] for a in res["awards"]),
@@ -468,7 +514,7 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
             shifts[str(s["ref"])] = note
     return {
         "shifts": shifts,
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award, spending_by_transaction and spending_over_time",
+        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "source": "USAspending.gov spending_by_award (prime awards and subawards), spending_by_transaction and spending_over_time",
         "entities": entities, "skipped": max(len(targets) - MAX_UEIS, 0),
         "errors": sum(1 for e in entities if e["error"]),
     }
