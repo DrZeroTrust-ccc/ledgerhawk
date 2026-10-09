@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from datetime import date
 
+from .awards import awarded_after
 from .integrity import FY_START, _parse_date
 from .stages import SIGNAL_LABELS
 from .tiering import _sdo
 
-FAR_MAP_VERSION = "2026.10-2"
+FAR_MAP_VERSION = "2026.10-3"
 
 SHOWN, NEEDS_RECORD, CONFIRMED, NOT_APPLICABLE = "shown", "needs_record", "confirmed", "not_applicable"
 ANALYST_STATES = {CONFIRMED, NOT_APPLICABLE}
@@ -122,8 +123,11 @@ def evaluate(v: dict, entity: dict | None = None) -> list[dict]:
         actions = (entity or {}).get("actions") or []
         new = [a for a in actions if a.get("kind") in NEW_KINDS and _while_excluded(a.get("date", ""), since, until)]
         new_ids = {a.get("award_id") for a in new}
+        known = None if (entity or {}).get("actions_error") or (entity or {}).get("actions_truncated") or "actions" not in (entity or {}) else actions
+        # an award that only starts after the exclusion but was signed before it is a continuing contract, not a new one
         started = [a for a in (entity or {}).get("awards") or []
-                   if _while_excluded(a.get("start", ""), since, until) and a.get("award_id") not in new_ids]
+                   if _while_excluded(a.get("start", ""), since, until) and a.get("award_id") not in new_ids
+                   and awarded_after(a, known, since.isoformat())]
         opts = [a for a in actions if a.get("kind") in OPTION_KINDS and _while_excluded(a.get("date", ""), since, until)]
         fy_after = [fy for fy in ("fy24", "fy25") if FY_START[fy] >= since and float(v.get(fy) or 0) > 0]
         if new or started:

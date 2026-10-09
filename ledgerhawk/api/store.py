@@ -26,6 +26,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from ..pipeline import awards as awards_mod
+from ..pipeline.awards import awarded_after
 from ..pipeline import context as context_mod
 from ..pipeline import samgov
 from ..pipeline import summary as summary_mod
@@ -1572,7 +1573,8 @@ class Store:
             # the exclusion date itself can be timing, and zero-dollar actions move no money: both are reported,
             # not counted.
             paid = [a for a in flagged if (a.get("amount") or 0) > 0 and since and (a.get("date") or "") > since]
-            new_awards = [a for a in e.get("awards") or [] if since and (a.get("start") or "") > since]
+            actions = None if e.get("actions_error") or e.get("actions_truncated") else e.get("actions") or []
+            new_awards = [a for a in e.get("awards") or [] if awarded_after(a, actions, since)]
             out[f.parent.name] = {
                 "fetched_at": res.get("fetched_at", ""), "excluded_since": since,
                 "actions_flagged": e.get("actions_flagged", 0), "actions_dollars": e.get("actions_dollars", 0),
