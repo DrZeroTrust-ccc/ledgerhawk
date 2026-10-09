@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, type Person } from '../api'
 import { usePlace } from '../nav'
 import { Button, Card, ErrorNote, Loading, useAsync } from '../ui'
@@ -189,6 +189,95 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
           </div>
         )}
       </Card>
+      <BackupsCard />
     </div>
+  )
+}
+
+const mb = (b: number) => `${(b / 1e6).toFixed(1)} MB`
+const when = (iso: string) => new Date(iso).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+
+// Admins only: nightly copies of everything to a bucket off the server, and a download of everything on demand.
+function BackupsCard() {
+  const { data, error, reload } = useAsync(() => api.backups(), [])
+  const [err, setErr] = useState<string | null>(null)
+  const [started, setStarted] = useState(false)
+  const running = !!data?.running || started
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(async () => {
+      const s = await api.backups().catch(() => null)
+      if (s && !s.running) {
+        setStarted(false)
+        reload()
+      }
+    }, 3000)
+    return () => clearInterval(t)
+  }, [running, reload])
+  const failedLast = data?.last_error && (!data.last_ok || data.last_error.at > data.last_ok.at)
+  return (
+    <Card
+      title="Backups"
+      action={
+        <a href="/api/admin/export-all" className="text-sm font-medium text-navy underline" title="Everything LedgerHawk holds, as one .tar.gz">
+          Download all data
+        </a>
+      }
+    >
+      <ErrorNote error={error || err} />
+      {!data && !error && <Loading />}
+      {data && !data.configured && (
+        <p className="text-sm text-amber-800">
+          No backup bucket is set up, so imports, decisions and lookups live only on the server’s disk. Set the LEDGERHAWK_BACKUP_* settings on the
+          server (a Cloudflare R2 or S3 bucket) to back up every night, and use “Download all data” in the meantime.
+        </p>
+      )}
+      {data?.configured && (
+        <div className="space-y-3 text-sm">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <span className={failedLast ? 'text-crimson' : 'text-slate-700'}>
+              {data.last_ok
+                ? `Last backup ${when(data.last_ok.at)} (${mb(data.last_ok.bytes)}, ${data.last_ok.files} files, by ${data.last_ok.by})`
+                : 'No backup yet'}
+            </span>
+            <Button
+              variant="secondary"
+              disabled={running}
+              onClick={async () => {
+                setErr(null)
+                try {
+                  await api.backupNow()
+                  setStarted(true)
+                } catch (e) {
+                  setErr((e as Error).message)
+                }
+              }}
+            >
+              {running ? 'Backing up…' : 'Back up now'}
+            </Button>
+          </div>
+          {failedLast && data.last_error && (
+            <p className="text-crimson">
+              The last backup failed ({when(data.last_error.at)}): {data.last_error.error}
+            </p>
+          )}
+          <p className="text-xs text-slate-500">
+            Every night after {String(data.hour_utc).padStart(2, '0')}:00 UTC (skipped while an import runs, then tried the next hour) to the{' '}
+            {data.bucket} bucket; the newest {data.keep} are kept.
+          </p>
+          {data.remote_error && <p className="text-crimson">{data.remote_error}</p>}
+          {data.remote.length > 0 && (
+            <ul className="divide-y divide-slate-100 text-xs text-slate-600">
+              {data.remote.map((o) => (
+                <li key={o.name} className="flex justify-between py-1.5">
+                  <span className="tabular">{o.name}</span>
+                  <span className="tabular">{mb(o.bytes)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
   )
 }

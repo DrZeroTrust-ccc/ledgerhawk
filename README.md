@@ -320,3 +320,26 @@ With the two Cloudflare settings unset, sign-in is off and the app works as befo
 - `LEDGERHAWK_SEED_SYNTHETIC=1`: on an empty data directory, creates one synthetic import so a fresh deploy has
   something to show.
 - Without a disk, everything under `/var/data` is lost on each deploy.
+
+## Backups
+
+Everything LedgerHawk holds lives in `LEDGERHAWK_DATA_DIR`: imports, uploaded sources, the analyst database
+(decisions, tiers, assignments, audit log), policy packs and USAspending lookups. A backup is that folder as one
+`.tar.gz`, minus scratch space and caches rebuilt on demand.
+
+- **Nightly, off the server.** Set `LEDGERHAWK_BACKUP_BUCKET`, `LEDGERHAWK_BACKUP_ENDPOINT` (for Cloudflare R2,
+  `https://<account id>.r2.cloudflarestorage.com`; leave out for AWS S3), `LEDGERHAWK_BACKUP_KEY_ID` and
+  `LEDGERHAWK_BACKUP_SECRET`. A backup then runs once a day after `LEDGERHAWK_BACKUP_HOUR` (UTC, default 7), waiting
+  if an import is running, and the newest `LEDGERHAWK_BACKUP_KEEP` (default 14) are kept. Give the key access to that
+  one bucket only (R2: an API token with Object Read & Write on the bucket).
+- **On demand.** Admins see the last backup, the ones in the bucket and a **Back up now** button on the People page,
+  plus **Download all data**, the same archive streamed to the browser.
+- **Restore.** From a shell on the server (Render: the service's Shell tab), then restart the service:
+
+  ```
+  python -m ledgerhawk.api.backup list
+  python -m ledgerhawk.api.backup restore 20261009-070012.tar.gz     # from the bucket, or a downloaded file's path
+  ```
+
+  What was in the data folder is moved aside to `<data dir>.before-restore-<time>`, never deleted; remove it once the
+  restore checks out (the disk is small).
