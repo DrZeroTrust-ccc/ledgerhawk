@@ -33,6 +33,23 @@ COLORS = ("red", "yellow", "green")
 SIGNAL_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "R_young", "R_split", "R_split_cert", "L_successor", "L_affil_cert"]
 
 
+def strict_awards(awards: dict) -> dict:
+    """A USAspending lookup summary with the strict counts (new money strictly after the exclusion date); a summary from
+    before the strict count falls back to the raw counts."""
+    if "paid_actions" in awards:
+        return awards
+    return {**awards, "paid_actions": awards.get("actions_flagged", 0), "paid_dollars": awards.get("actions_dollars", 0),
+            "new_awards_after": awards.get("after_exclusion", 0), "same_day": 0, "zero_dollar": 0}
+
+
+def paid_after_exclusion(awards: dict | None) -> bool:
+    """Whether a USAspending lookup shows new money after the exclusion date: a paid contract action or a new award."""
+    if not awards:
+        return False
+    a = strict_awards(awards)
+    return bool(a["paid_actions"] or a["new_awards_after"])
+
+
 def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
     """For a vendor on the exclusions list: ("after", why) when money moved after the exclusion date, by fiscal year
     in the vendor file or by contract actions in USAspending; ("cleared", why) when USAspending was checked and shows
@@ -48,11 +65,9 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
         if paid:
             return "after", f"Excluded {since:%b %d, %Y}; obligations in {' and '.join(x.upper() for x in paid)}, which began after it"
     if awards:
-        if "paid_actions" not in awards:  # a summary from before the strict count: fall back to the raw counts
-            awards = {**awards, "paid_actions": awards.get("actions_flagged", 0), "paid_dollars": awards.get("actions_dollars", 0),
-                      "new_awards_after": awards.get("after_exclusion", 0), "same_day": 0, "zero_dollar": 0}
+        awards = strict_awards(awards)
         n, dollars, new = awards["paid_actions"], awards["paid_dollars"], awards["new_awards_after"]
-        if n or new:
+        if paid_after_exclusion(awards):
             money = f"${dollars / 1e6:.1f}M" if dollars >= 50_000 else f"${dollars:,.0f}"
             bits = ([f"{n} paid contract action{'s' if n != 1 else ''} ({money})" if n else ""]
                     + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""])

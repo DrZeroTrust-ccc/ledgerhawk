@@ -1,7 +1,7 @@
 """Vendors of Interest workbook, laid out like the hand-built pilot list.
 
-One row per tiered vendor (tiers 1-5; "Explained by open source" and untiered queue rows are left off and
-counted on the Read Me sheet). Workbook metadata names LedgerHawk, never the analyst's machine or account.
+One row per tiered vendor (tiers 1-5, then "Explained by open source" with the analyst's reason in the disposition
+column; untiered queue rows are left off and counted on the Read Me sheet). Workbook metadata names LedgerHawk, never the analyst's machine or account.
 """
 from __future__ import annotations
 
@@ -24,8 +24,9 @@ XLSX_TIER = {
     "3": "3 - Exclusion-related",
     "4": "4 - Data anomaly",
     "5": "5 - Screen hit, not yet reviewed",
+    "explained": "Explained by open source",
 }
-TIER_FILL = {"1": "F6E3E6", "2": "FBF0DC", "3": "EFE6F4", "4": "E4EAF2", "5": "F2F2F2"}
+TIER_FILL = {"1": "F6E3E6", "2": "FBF0DC", "3": "EFE6F4", "4": "E4EAF2", "5": "F2F2F2", "explained": "E3F1E6"}
 NAVY = "1F2A3A"
 MUTED = "5A6270"
 MONEY = '\\$#,##0;[RED]"-$"#,##0'
@@ -49,16 +50,21 @@ def carried_note(d: dict) -> str:
     return f"; carried from import {c['label']} of {c['created_at'][:10]}, not yet confirmed in this import" if c else ""
 
 
-def _disposition(d: dict | None) -> str:
+def _disposition(d: dict | None, wf: dict | None = None) -> str:
+    """The analyst's disposition; for a vendor moved to "Explained by open source" without one, the tier change itself,
+    in the same "Value: note (analyst, date)" form, so the row says who explained it and why."""
     if not d:
-        return ""
+        t = (wf or {}).get("tier_change") or {}
+        if (wf or {}).get("tier") != "explained" or not t:
+            return ""
+        return f"{XLSX_TIER['explained']}: {t.get('reason', '')} ({t.get('analyst', '')}, {str(t.get('at', ''))[:10]}{carried_note(t)})"
     return f"{d['value']}: {d['note']} ({d['analyst']}, {d['at'][:10]}{carried_note(d)})"
 
 
 def ordered(items: list[dict]) -> list[dict]:
-    """Tiered rows only, tier 1 first, then by dollars under review."""
+    """Tiered rows only, tier 1 first, then by dollars under review; "Explained by open source" last."""
     rows = [i for i in items if i["wf"]["tier"] in XLSX_TIER]
-    return sorted(rows, key=lambda i: (i["wf"]["tier"], -i["v"]["tot"]))
+    return sorted(rows, key=lambda i: (i["wf"]["tier"] == "explained", i["wf"]["tier"], -i["v"]["tot"]))
 
 
 def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = None, log: list[dict] | None = None) -> bytes:
@@ -101,7 +107,7 @@ def build_voi(items: list[dict], summary: dict, generated_at: datetime | None = 
         v, wf = it["v"], it["wf"]
         r = 5 + n
         vals = [n, XLSX_TIER[wf["tier"]], category(v, wf["tier"]), v["uei"], v["name"], _place(v), v["fy24"], v["fy25"],
-                _why(v), next_step(v, wf["tier"]), wf["owner"], _disposition(it.get("disposition"))]
+                _why(v), next_step(v, wf["tier"]), wf["owner"], _disposition(it.get("disposition"), wf)]
         for c, val in enumerate(vals, start=2):
             cell = ws.cell(r, c, val)
             cell.alignment = wrap
@@ -168,11 +174,12 @@ def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) 
         ws.cell(r, 2, label).fill = PatternFill("solid", fgColor=TIER_FILL[k])
         ws.cell(r, 3, f"=COUNTIF('Vendors of Interest'!C6:C{last},B{r})")
         ws.cell(r, 4, TIER_MEANING[k]).alignment = Alignment(wrap_text=True, vertical="top")
-    ws.cell(10, 2, "Total").font = Font(bold=True)
-    ws.cell(10, 3, "=SUM(C5:C9)").font = Font(bold=True)
+    total = 5 + len(XLSX_TIER)
+    ws.cell(total, 2, "Total").font = Font(bold=True)
+    ws.cell(total, 3, f"=SUM(C5:C{total - 1})").font = Font(bold=True)
 
-    tiered = {i["v"]["uei"] for i in rows}
-    explained = sum(1 for i in items if i["wf"]["tier"] == "explained")
+    tiered = {i["v"]["uei"] for i in rows if i["wf"]["tier"] != "explained"}
+    explained = sum(1 for i in rows if i["wf"]["tier"] == "explained")
     untiered = [i for i in items if not i["wf"]["tier"] and i["v"].get("queue")]
     q = summary.get("queue_counts", {})
     notes: list[str] = []
@@ -186,9 +193,9 @@ def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) 
             f"{funnel.get('1d', {}).get('cut', 0):,} major contractors were set aside, leaving "
             f"{pool.get('vendors', 0):,} vendors in the outlier pool.")
     notes.append(
-        f"On this list: {len(tiered):,} vendors with a tier. Left off: {len(untiered):,} single-signal outliers not yet "
-        f"tiered, {q.get('watch', 0):,} watch-list vendors, and {explained:,} vendors an analyst moved to "
-        f"\"Explained by open source\".")
+        f"On this list: {len(tiered):,} vendors with a tier, and, at the end, {explained:,} vendors an analyst moved to "
+        f"\"Explained by open source\", with the analyst's reason in the disposition column. Left off: {len(untiered):,} "
+        f"single-signal outliers not yet tiered and {q.get('watch', 0):,} watch-list vendors.")
     notes.append("Tiers 1, 2 and 4 come only from analyst review, and every tier change is kept in LedgerHawk's audit "
                  "log with its reason.")
     notes.append("Limits: award timing after an exclusion has not been checked against USAspending in this run. This "
@@ -203,7 +210,8 @@ def _read_me(ws, summary: dict, items: list[dict], rows: list[dict], last: int) 
     notes.append("Sources: " + "; ".join(src) + ".")
     notes.append(FOOTER)
     for i, text in enumerate(notes):
-        cell = ws.cell(12 + i * 2, 2, text)
-        ws.merge_cells(start_row=12 + i * 2, start_column=2, end_row=12 + i * 2, end_column=4)
+        r = total + 2 + i * 2
+        cell = ws.cell(r, 2, text)
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=4)
         cell.alignment = Alignment(wrap_text=True, vertical="top")
-        ws.row_dimensions[12 + i * 2].height = 45
+        ws.row_dimensions[r].height = 45

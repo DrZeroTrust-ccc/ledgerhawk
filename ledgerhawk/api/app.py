@@ -33,7 +33,7 @@ from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_subjects_docx
 from ..exports.voi import build_voi
-from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color
+from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
@@ -1433,8 +1433,7 @@ def exclusion_check_status(run_id: str):
     rows = [r for r in _get(store.vendors, run_id)["rows"] if "EXCLUDED" in (r.get("exclusion_flags") or [])]
     awards = store.case_awards_index(run_id)
     return {"excluded": len(rows), "checked": sum(1 for r in rows if r["uei"] in awards),
-            "paid_after": sum(1 for r in rows if awards.get(r["uei"], {}).get("actions_flagged")
-                              or awards.get(r["uei"], {}).get("after_exclusion"))}
+            "paid_after": sum(1 for r in rows if paid_after_exclusion(awards.get(r["uei"])))}
 
 
 @app.post("/api/runs/{run_id}/exclusion-check")
