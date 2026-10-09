@@ -16,9 +16,11 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
 from ..pipeline.explain import QUEUE_LABELS, why_it_flagged
+from ..pipeline.far import FAR_MAP_VERSION
 from ..pipeline.normalize import money
 from ..pipeline.subjects import STATUSES, next_steps
 from ..pipeline.tiering import TIERS, category
+from .analysis import FAR_STATE
 from .case import POC_ROLE, TIE_LABEL
 from .subjects import award_line, awards_for, context_items, context_line, context_summary, note_byline, notes_for, signoff_lines
 from .voi import FOOTER, carried_note
@@ -261,6 +263,86 @@ def build_case_docx(v: dict, wf: dict, disposition: dict | None, history: list[d
     _small(doc, f"Import {meta.get('id', '')} · {policy_label(man)} · sources: " + ", ".join(src)
            + f" · generated {generated_at:%Y-%m-%d %H:%M} UTC")
     return _save(doc)
+
+
+FAR_NOT_A_FINDING = ("This memo lists FAR provisions to review, not findings that a provision was violated. LedgerHawk "
+                     "screens public federal data; each element below says whether the data shows it, an analyst "
+                     "confirmed it from a record, or it needs a record LedgerHawk does not hold.")
+
+
+def _decision_line(d: dict) -> str:
+    return f"{FAR_STATE.get(d['state'], d['state'])}: {d.get('note') or '(no note)'} ({d['analyst']}, {d['at'][:10]}{carried_note(d)})"
+
+
+def build_far_memo_docx(v: dict, far: list[dict], summary: dict, *, matter: str = "", privileged: bool = False,
+                        generated_at: datetime | None = None, usaspending_at: str = "") -> bytes:
+    """FAR referral memo for the suspension and debarment official or the OIG: each provision the vendor's evidence may
+    implicate (those an analyst marked not applicable are listed apart), element by element with its state, detail and
+    source, the analyst's notes, and the import's provenance."""
+    generated_at = generated_at or datetime.now(timezone.utc)
+    meta = summary.get("meta", {})
+    man = summary.get("manifest", {})
+    synthetic = meta.get("data_class") == "synthetic"
+    live = [p for p in far if p["status"] != "not_applicable"]
+    ruled_out = [p for p in far if p["status"] == "not_applicable"]
+    doc = _doc(f"LedgerHawk FAR referral memo: {v['name']}", privileged, generated_at)
+
+    _small(doc, ("SYNTHETIC DATA · " if synthetic else "") + "LedgerHawk FAR referral memo" + (f" · Matter: {matter}" if matter else ""))
+    doc.add_heading(f"FAR provisions to review: {v['name']}", level=1)
+    _kv(doc, [
+        ("To", "; ".join(dict.fromkeys(p["routes_to"] for p in live)) or "Suspension and debarment official or OIG"),
+        ("Vendor", f"{v['name']} (UEI {v['uei']})"),
+        ("Dollars under review", f"FY24 {money(v['fy24'])} · FY25 {money(v['fy25'])} · total {money(v['tot'])}"),
+        ("Date", f"{generated_at:%B %d, %Y}"),
+    ])
+    p = doc.add_paragraph()
+    p.add_run(FAR_NOT_A_FINDING).bold = True
+
+    doc.add_heading("Provisions at a glance", level=2)
+    _grid(doc, ["Provision", "Binds", "Routes to", "Elements"],
+          [[f"{p['cite']}: {p['title']}", p["binds"], p["routes_to"], _far_counts(p)] for p in live])
+
+    for p in live:
+        doc.add_heading(f"{p['cite']}: {p['title']}", level=2)
+        _kv(doc, [("Binds", p["binds"]), ("Routes to", p["routes_to"]),
+                  ("Status", "Every element shown in the data or confirmed by an analyst" if p["status"] == "supported"
+                   else "Some elements still need a record")])
+        _grid(doc, ["Element", "State", "Detail", "Source"],
+              [[e["text"], FAR_STATE.get(e["state"], e["state"]), e["detail"], e["source"]] for e in p["elements"]])
+        notes = [(f"{p['cite']} as a whole", p["decision"])] if p.get("decision") else []
+        notes += [(e["text"], e["decision"]) for e in p["elements"] if e.get("decision")]
+        doc.add_heading("Analyst notes", level=3)
+        if notes:
+            _bullets(doc, [f"{what}. {_decision_line(d)}" for what, d in notes])
+        else:
+            doc.add_paragraph("No analyst decisions on this provision yet.")
+
+    if ruled_out:
+        doc.add_heading("Set aside by an analyst", level=2)
+        _small(doc, "Provisions the screen raised that an analyst marked not applicable. Listed so the reader sees what was considered.")
+        _bullets(doc, [f"{p['cite']}: {p['title']}. " + (_decision_line(p["decision"]) if p.get("decision")
+                                                        else "Every element marked not applicable.") for p in ruled_out])
+
+    doc.add_heading("Provenance", level=2)
+    _kv(doc, [
+        ("Import", f"{meta.get('label', '')} ({meta.get('id', '')}), screened {meta.get('created_at', '')[:10]}"),
+        ("Rules", policy_label(man)),
+        ("Rule set fingerprint", man.get("rule_set_fingerprint")),
+        ("Vendor file", f"{man.get('input_file', '')}" + (f" (SHA-256 {man['input_sha256']})" if man.get("input_sha256") else "")),
+        ("SAM entity extract", man.get("sam_extract_date") or "Not used"),
+        ("SAM exclusions extract", man.get("exclusions_extract_date") or "Not used"),
+        ("USAspending lookup", usaspending_at[:10] if usaspending_at else "Not run for this vendor"),
+        ("FAR map", FAR_MAP_VERSION),
+    ])
+    _small(doc, "Elements marked Needs a record depend on the contract file, the firm's certifications or an SBA "
+                "determination, which LedgerHawk does not hold. Whom a provision binds matters: several duties fall on the "
+                "awarding agency, not the vendor." + f" Generated {generated_at:%Y-%m-%d %H:%M} UTC.")
+    return _save(doc)
+
+
+def _far_counts(p: dict) -> str:
+    n = {s: sum(1 for e in p["elements"] if e["state"] == s) for s in FAR_STATE}
+    return ", ".join(f"{n[s]} {FAR_STATE[s].lower()}" for s in FAR_STATE if n[s])
 
 
 def build_subjects_docx(screen: dict, generated_at: datetime | None = None) -> bytes:
