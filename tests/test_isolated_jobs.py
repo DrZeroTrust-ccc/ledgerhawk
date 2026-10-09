@@ -15,7 +15,7 @@ fork_only = pytest.mark.skipif(not hasattr(os, "fork"), reason="needs fork (Linu
 @fork_only
 def test_a_job_killed_by_the_system_raises_out_of_memory_and_the_app_carries_on(tmp_path):
     st = Store(tmp_path / "data")
-    st.isolate_jobs = True
+    st.isolate_jobs, st.jobs_inline = True, False  # the tests run jobs in place; this one needs the real thing
     assert st._isolated(lambda a, b: a + b, 2, 3) == 5
     with pytest.raises(ValueError, match="no UEI column"):
         st._isolated(lambda: (_ for _ in ()).throw(ValueError("no UEI column")))
