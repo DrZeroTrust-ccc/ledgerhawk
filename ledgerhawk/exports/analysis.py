@@ -88,6 +88,20 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
     return "unchecked", "On the SAM exclusions list; payments after the exclusion date not yet checked"
 
 
+def watchlist_reasons(v: dict) -> tuple[list[str], list[str]]:
+    """OFAC and HHS-OIG matches as reasons: (red ones, yellow ones). A same-name OFAC entry, or an HHS-OIG exclusion
+    with the same name and state, is red; an HHS-OIG exclusion matching the name alone is yellow. All need confirming."""
+    red, yellow = [], []
+    for h in v.get("watchlist") or []:
+        if h["list"] == "OFAC SDN":
+            red.append(f"Same name as an OFAC sanctions (SDN) entry: {h['name']}; confirm it's the same party")
+        elif h["match"] == "name and state":
+            red.append(f"Same name and state as an HHS-OIG exclusion: {h['name']} ({h['detail']}); confirm")
+        else:
+            yellow.append(f"Same name as an HHS-OIG exclusion: {h['name']} ({h['detail']}); confirm")
+    return red, yellow
+
+
 def color(v: dict, wf: dict, disposition: dict | None, awards: dict | None = None) -> tuple[str, list[str]]:
     """A vendor's color and the reasons for it; ("", []) when it is none of the three. `awards` is the vendor's
     USAspending lookup summary, when one was run (it settles whether an excluded vendor was paid after exclusion)."""
@@ -103,13 +117,15 @@ def color(v: dict, wf: dict, disposition: dict | None, awards: dict | None = Non
     timing, why_excl = exclusion_timing(v, awards)
     if timing in ("after", "unchecked"):
         red.append(why_excl)
+    strong_wl, weak_wl = watchlist_reasons(v)
+    red += strong_wl
     if tier == "1" and by_analyst:
         red.append("Analyst set Tier 1")
     if d == "Refer":
         red.append("Analyst decided to refer")
     if red:
         return "red", red
-    yellow = [why_excl] if timing == "cleared" else []
+    yellow = ([why_excl] if timing == "cleared" else []) + weak_wl
     q = v.get("queue")
     if q in ("strong", "relationship", "exclusion"):
         yellow.append({"strong": "One strong signal", "relationship": "Related firms in SAM",
@@ -174,6 +190,7 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "subcontracts_after_exclusion": (aw or {}).get("subawards_after", "") if aw else "",
             "subcontract_dollars_after_exclusion": (aw or {}).get("subawards_after_dollars", "") if aw else "",
             "subcontracts_ever": (aw or {}).get("subawards", "") if aw else "",
+            "watchlist_matches": "; ".join(f"{h['list']}: {h['name']} ({h['match']})" for h in v.get("watchlist") or []),
             "linked_firms": len(v.get("links") or []), "neighbors": len(v.get("neighbors") or []),
             "family_total": _family_total(v) or "",
             "ownership": "; ".join(sam.get("owner") or []), "certifications": "; ".join(sam.get("certs") or []),
@@ -242,8 +259,9 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "  its exclusion date (obligations in a fiscal year that began after it, or in USAspending a contract action",
         "  with new money, an award starting, or a subcontract under another firm's contract, strictly after that",
         "  date), or whose payments after the date have not been checked yet; an analyst's Tier 1; or a",
-        "  decision to refer.",
-        "YELLOW: an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
+        "  decision to refer; the same name as an OFAC sanctions (SDN) entry, or the same name and state as an HHS-OIG",
+        "  exclusion (LEIE) (name matches to confirm: neither list carries a UEI).",
+        "YELLOW: the same name as an HHS-OIG exclusion in another state; an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
         "  exclusion date itself and zero-dollar actions are listed, not counted as payment); one strong signal;",
         "  related firms in SAM (shared contacts, suites, a family of registrations); a tie to an excluded party; a",
         "  small vendor tied to an excluded party or sharing its suite; an analyst's Tier 2 or 3.",

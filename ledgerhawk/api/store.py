@@ -30,6 +30,7 @@ from ..pipeline import awards as awards_mod
 from ..pipeline.awards import awarded_after
 from ..pipeline import context as context_mod
 from ..pipeline import samgov
+from ..pipeline import watchlists
 from ..pipeline import summary as summary_mod
 from ..pipeline.normalize import normalize_name
 from ..pipeline.exclusions import load_exclusions
@@ -200,6 +201,9 @@ class Store:
         self.jobs_inline = os.environ.get("LEDGERHAWK_JOBS_INLINE") == "1"
         # heavy jobs (imports, previews, checks) run in a process of their own where the system allows it
         self.isolate_jobs = hasattr(os, "fork") and os.environ.get("LEDGERHAWK_JOBS_IN_PROCESS") != "1"
+        # every import is also checked against the OFAC and HHS-OIG lists (tests turn it off or swap in a fake fetch)
+        self.watchlists = os.environ.get("LEDGERHAWK_WATCHLISTS", "1") != "0"
+        self.watchlist_fetch = None
         self.alert = None  # alert(kind, title, detail, key=...) tells an Admin something went wrong; set by the app
         self._jobs_running: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
@@ -426,6 +430,10 @@ class Store:
         except Exception:
             shutil.rmtree(d, ignore_errors=True)  # no half-made run left behind
             raise
+        if self.watchlists:
+            if progress:
+                progress("Checking every vendor against the OFAC sanctions and HHS-OIG exclusion lists")
+            self._screen_watchlists(res)
         if progress:
             progress("Saving the results")
         res.manifest["data_class"] = "synthetic" if synthetic else "production"
@@ -451,6 +459,17 @@ class Store:
         what = f"Follow-up to {prev['label']} of {prev['created_at'][:10]}: " if prev else ""
         self.audit(analyst, "run_created", None, run_id, f"{what}{meta['label']} ({meta['data_class']})")
         return run_id
+
+    def _screen_watchlists(self, res) -> None:
+        """Mark each vendor's OFAC and HHS-OIG name matches on the results, and note in the manifest which lists were
+        checked, as of when, and any that couldn't be loaded."""
+        ofac, leie, errors = watchlists.load_lists(self.watchlist_fetch or context_mod._fetch, self.root / "context" / "lists")
+        df = res.vendors
+        cols = [c for c in ("uei", "name", "struct", "sam") if c in df.columns]
+        hits = watchlists.screen(df[cols].to_dict(orient="records"), ofac, leie)
+        df["watchlist"] = df["uei"].map(lambda u: hits.get(u, []))
+        res.manifest["watchlists"] = {"checked_at": _now(), "ofac_entries": len(ofac), "leie_entries": len(leie),
+                                      "vendors_matched": len(hits), "errors": errors}
 
     def follow_up_run(self, run_id: str, analyst: str, vendor_path: Path | None = None, label: str = "",
                       policy_pack: str | None = None, progress=None, auto: bool = False) -> str:

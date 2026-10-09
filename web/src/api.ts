@@ -380,6 +380,7 @@ export type VendorDetail = VendorRow & {
   psc: string
   why: string
   exclusion: ExclusionHit[]
+  watchlist?: { list: string; name: string; detail: string; date: string; match: string; url: string }[]
   history: HistoryItem[]
   case: {
     review: ScreenReview
