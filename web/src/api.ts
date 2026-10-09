@@ -42,15 +42,7 @@ export type VendorRow = {
   integrity?: Integrity | null
 }
 
-export type Integrity = {
-  tier: string
-  excluded: boolean
-  excluded_on: string
-  agency: string
-  reasons: string[]
-  second: string[]
-  after_exclusion: number
-}
+export type Integrity = { tier: string; excluded: boolean; excluded_on: string; agency: string; reasons: string[]; second: string[]; after_exclusion: number }
 
 export type IntegrityView = {
   funnel: { key: string; label: string; vendors: number; dollars: number }[]
@@ -228,17 +220,7 @@ export type PolicyDetail = Omit<PolicyPack, 'imports'> & {
   must_catch: MustCatch[]
   workload: Workload
 }
-export type PolicyMove = {
-  uei: string
-  name: string
-  fy24: number
-  fy25: number
-  tot: number
-  kind: 'in' | 'out' | 'moved'
-  from: string
-  to: string
-  because: string
-}
+export type PolicyMove = { uei: string; name: string; fy24: number; fy25: number; tot: number; kind: 'in' | 'out' | 'moved'; from: string; to: string; because: string }
 type QueueTally = { leads: number; dollars: number; by_queue: Record<string, number> }
 export type PolicyEstimate = {
   import: RunRef
@@ -286,17 +268,7 @@ export type Source = {
 
 export type GapGroup = {
   agency: string
-  vendors: {
-    uei: string
-    name: string
-    tot: number
-    lane: string
-    tie: string
-    excluded_party: string
-    type: string
-    active_date: string
-    evidence: string
-  }[]
+  vendors: { uei: string; name: string; tot: number; lane: string; tie: string; excluded_party: string; type: string; active_date: string; evidence: string }[]
 }
 
 export type ExclusionHit = {
@@ -317,15 +289,7 @@ export type ExclusionHit = {
   scope: string
 }
 
-export type HistoryItem = {
-  at: string
-  analyst: string
-  action: string
-  uei: string | null
-  run_id: string | null
-  detail: string
-  other_run?: RunRef
-}
+export type HistoryItem = { at: string; analyst: string; action: string; uei: string | null; run_id: string | null; detail: string; other_run?: RunRef }
 
 export type VendorDetail = VendorRow & {
   struct: string
@@ -334,13 +298,7 @@ export type VendorDetail = VendorRow & {
   why: string
   exclusion: ExclusionHit[]
   history: HistoryItem[]
-  case: {
-    review: ScreenReview
-    earlier_notes: CaseNote[]
-    awards: ScreenAwards | null
-    summary: CaseSummary | null
-    earlier_summary: (CaseSummary & { run: RunRef }) | null
-  }
+  case: { review: ScreenReview; earlier_notes: CaseNote[]; awards: ScreenAwards | null; summary: CaseSummary | null; earlier_summary: (CaseSummary & { run: RunRef }) | null }
   ledger: Ledger
   summary_enabled: boolean
   sam: SamCard | null
@@ -477,12 +435,7 @@ export type ChangeWhat =
   | { kind: 'signals_gone'; removed: string[] }
   | { kind: 'tier'; from: string; to: string }
   | { kind: 'dollars'; from: number; to: number }
-export type RunChanges = {
-  new: ChangeItem[]
-  dropped: ChangeItem[]
-  changed: ChangeItem[]
-  counts: { new: number; dropped: number; changed: number }
-}
+export type RunChanges = { new: ChangeItem[]; dropped: ChangeItem[]; changed: ChangeItem[]; counts: { new: number; dropped: number; changed: number } }
 
 export type QueueProgress = {
   total: number
@@ -536,16 +489,7 @@ export type SubjectEntity = {
   signals: Signal[]
 }
 
-export type RelatedEntity = {
-  uei: string
-  name: string
-  via: string[]
-  of: string[]
-  excluded: boolean
-  flags: string[]
-  exclusion: ExclusionHit[]
-  tot: number
-}
+export type RelatedEntity = { uei: string; name: string; via: string[]; of: string[]; excluded: boolean; flags: string[]; exclusion: ExclusionHit[]; tot: number }
 
 export type SubjectResult = {
   ref: number
@@ -763,15 +707,7 @@ export type WebsiteCheck = {
   errors: string[]
   findings: CheckFinding[]
 }
-export type AddressCheck = {
-  address: string
-  rdi: string
-  cmra: boolean
-  vacant: boolean
-  deliverable: boolean | null
-  errors: string[]
-  findings: CheckFinding[]
-}
+export type AddressCheck = { address: string; rdi: string; cmra: boolean; vacant: boolean; deliverable: boolean | null; errors: string[]; findings: CheckFinding[] }
 
 export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
 
@@ -813,25 +749,10 @@ export type CaseSummary = {
   stale?: boolean
 }
 
-export type LedgerRow = {
-  id: string
-  kind: string
-  lean: 'strengthens' | 'weakens' | 'context'
-  text: string
-  source: string
-  link: string
-  at: string
-  by: string
-  weight: number
-}
+export type LedgerRow = { id: string; kind: string; lean: 'strengthens' | 'weakens' | 'context'; text: string; source: string; link: string; at: string; by: string; weight: number }
 export type Ledger = {
   rows: LedgerRow[]
-  balance: {
-    for: number
-    against: number
-    lean: 'strengthens' | 'weakens' | 'mixed' | 'none'
-    counts: Record<'strengthens' | 'weakens' | 'context', number>
-  }
+  balance: { for: number; against: number; lean: 'strengthens' | 'weakens' | 'mixed' | 'none'; counts: Record<'strengthens' | 'weakens' | 'context', number> }
 }
 
 export type ScreenReview = {
@@ -903,13 +824,10 @@ export const api = {
   submitPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/submit`, { method: 'POST', body: form }),
   returnPolicy: (id: string, form: FormData) => req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/return`, { method: 'POST', body: form }),
   deployPolicy: (id: string, form: FormData) =>
-    req<{ version: PolicyVersion; follow_up: string | null; follow_up_job: ImportJob | null; follow_up_error?: string }>(
-      `/api/policies/${encodeURIComponent(id)}/deploy`,
-      {
-        method: 'POST',
-        body: form,
-      },
-    ),
+    req<{ version: PolicyVersion; follow_up: string | null; follow_up_job: ImportJob | null; follow_up_error?: string }>(`/api/policies/${encodeURIComponent(id)}/deploy`, {
+      method: 'POST',
+      body: form,
+    }),
   rollbackPolicy: (id: string, form: FormData) =>
     req<PolicyVersion>(`/api/policies/${encodeURIComponent(id)}/rollback`, { method: 'POST', body: form }),
   policy: (id: string) => req<PolicyDetail>(`/api/policies/${encodeURIComponent(id)}`),
@@ -930,22 +848,21 @@ export const api = {
   removeMustCatch: (id: string, form: FormData) =>
     req<{ must_catch: MustCatch[] }>(`/api/policies/${encodeURIComponent(id)}/must-catch/remove`, { method: 'POST', body: form }),
   setWorkload: (id: string, form: FormData) => req<Workload>(`/api/policies/${encodeURIComponent(id)}/workload`, { method: 'POST', body: form }),
-  describePolicy: (id: string, form: FormData) => req<PolicyPack>(`/api/policies/${encodeURIComponent(id)}/describe`, { method: 'POST', body: form }),
+  describePolicy: (id: string, form: FormData) =>
+    req<PolicyPack>(`/api/policies/${encodeURIComponent(id)}/describe`, { method: 'POST', body: form }),
   runs: () => req<RunMeta[]>('/api/runs'),
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
   createRun: (form: FormData) => req<ImportStart>('/api/runs', { method: 'POST', body: form }),
   importJobs: (active: boolean) => req<{ jobs: ImportJob[] }>(`/api/import-jobs${active ? '?active=true' : ''}`),
   importJob: (id: string) => req<ImportJob>(`/api/import-jobs/${encodeURIComponent(id)}`),
   exclusionCheck: (id: string) => req<{ excluded: number; checked: number; paid_after: number }>(`/api/runs/${id}/exclusion-check`),
-  startExclusionCheck: (id: string, form: FormData) => req<{ job: ImportJob }>(`/api/runs/${id}/exclusion-check`, { method: 'POST', body: form }),
+  startExclusionCheck: (id: string, form: FormData) =>
+    req<{ job: ImportJob }>(`/api/runs/${id}/exclusion-check`, { method: 'POST', body: form }),
   vendors: (id: string, params: Record<string, string>) =>
     req<{ total: number; dollars: number; rows: VendorRow[] }>(`/api/runs/${id}/vendors?${new URLSearchParams(params)}`),
   far: (id: string) => req<FarSummary>(`/api/runs/${id}/far`),
-  setFar: (
-    id: string,
-    uei: string,
-    body: { provision: string; element: string; state: '' | 'confirmed' | 'not_applicable'; note: string; analyst: string },
-  ) => req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/far`, json(body)),
+  setFar: (id: string, uei: string, body: { provision: string; element: string; state: '' | 'confirmed' | 'not_applicable'; note: string; analyst: string }) =>
+    req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/far`, json(body)),
   histogram: (id: string) => req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),
   vendor: (id: string, uei: string) => req<VendorDetail>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}`),
   setDisposition: (id: string, uei: string, body: { value: string; note: string; analyst: string }) =>
@@ -977,11 +894,7 @@ export const api = {
     req<unknown>(`/api/subject-screens/${encodeURIComponent(id)}/notes/${nid}/delete`, { method: 'POST', body: form }),
   context: (q: { uei?: string; name?: string; person?: boolean }) =>
     req<{ context: OutsideContext | null }>(
-      `/api/context?${new URLSearchParams(
-        Object.entries(q)
-          .filter(([, v]) => v)
-          .map(([k, v]) => [k, String(v)]),
-      )}`,
+      `/api/context?${new URLSearchParams(Object.entries(q).filter(([, v]) => v).map(([k, v]) => [k, String(v)]))}`,
     ),
   lookupContext: (form: FormData) => req<OutsideContext>('/api/context', { method: 'POST', body: form }),
   contextVerdict: (form: FormData) => req<OutsideContext>('/api/context/verdict', { method: 'POST', body: form }),
@@ -1014,15 +927,15 @@ export const api = {
   searchVendors: (q: string) => req<{ rows: VendorSearchRow[] }>(`/api/vendors?${new URLSearchParams({ q })}`),
   bulkTier: (id: string, body: { ueis: string[]; tier: string; reason: string; analyst: string }) =>
     req<{ changed: number }>(`/api/runs/${id}/tiers`, json(body)),
-  importDecisions: (id: string, form: FormData) => req<DecisionImport>(`/api/runs/${id}/import-decisions`, { method: 'POST', body: form }),
+  importDecisions: (id: string, form: FormData) =>
+    req<DecisionImport>(`/api/runs/${id}/import-decisions`, { method: 'POST', body: form }),
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),
   myCases: (analyst: string) => req<{ rows: (VendorRow & { run: RunRef })[] }>(`/api/my-cases?${new URLSearchParams({ analyst })}`),
   record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
   followUp: (id: string, form: FormData) => req<ImportStart>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
   confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>
     req<{ confirmed: number }>(`/api/runs/${id}/confirm-carried`, json(body)),
-  assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) =>
-    req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
+  assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) => req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 
 export type DecisionImport = {
@@ -1070,8 +983,7 @@ export const FLAG_LABEL: Record<string, string> = {
   R_EXPOC: 'Shares contact with excluded party',
 }
 
-export const queueTotal = (q: QueueCounts) =>
-  (q.priority ?? 0) + (q.relationship ?? 0) + (q.strong ?? 0) + (q.exclusion ?? 0) + (q.integrity_leads ?? 0)
+export const queueTotal = (q: QueueCounts) => (q.priority ?? 0) + (q.relationship ?? 0) + (q.strong ?? 0) + (q.exclusion ?? 0) + (q.integrity_leads ?? 0)
 
 export const REASON_LABEL: Record<string, string> = {
   NONCOMMERCIAL: 'Not a commercial vendor',

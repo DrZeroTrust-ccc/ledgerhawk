@@ -5,22 +5,7 @@ import { api, LANE_LABEL, money, num, REASON_LABEL, type DecisionImport, type Ve
 import { useAnalystName } from '../App'
 import { KEYS, Progress, TriagePane } from '../Triage'
 import { ExclusionCheck } from '../imports'
-import {
-  Button,
-  Card,
-  ColorChip,
-  DataClassBadge,
-  DownloadMenu,
-  ErrorNote,
-  FlagChip,
-  LeadLine,
-  Loading,
-  QueueChip,
-  SignalChip,
-  TierChip,
-  TIER_SHORT,
-  useAsync,
-} from '../ui'
+import { Button, Card, ColorChip, DataClassBadge, DownloadMenu, ErrorNote, FlagChip, LeadLine, Loading, QueueChip, SignalChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
 const TABS: [string, string][] = [
   ['any', 'All in queue'],
@@ -50,9 +35,7 @@ function TierStrip({ runId, active, onPick, version }: { runId: string; active: 
         >
           <div className="text-xs font-medium text-slate-500">{TIER_SHORT[t.tier]}</div>
           <div className="tabular mt-0.5 text-lg font-semibold">{num(t.vendors)}</div>
-          <div className="tabular text-xs text-slate-500">
-            {t.vendors === 0 && REVIEW_ONLY.has(t.tier) ? 'Set by analysts at review' : money(t.dollars)}
-          </div>
+          <div className="tabular text-xs text-slate-500">{t.vendors === 0 && REVIEW_ONLY.has(t.tier) ? 'Set by analysts at review' : money(t.dollars)}</div>
         </button>
       ))}
     </div>
@@ -113,12 +96,7 @@ function BulkAssign({
     <div className="space-y-2 rounded-md bg-navy-50 px-3 py-3 text-sm" aria-label="Selected leads">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-navy">Decide {n} selected:</span>
-        <select
-          value={tier}
-          onChange={(e) => setTier(e.target.value)}
-          aria-label="Tier"
-          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-        >
+        <select value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Tier" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">
           <option value="">Tier unchanged</option>
           {Object.entries(tiers).map(([k, label]) => (
             <option key={k} value={k}>
@@ -126,12 +104,7 @@ function BulkAssign({
             </option>
           ))}
         </select>
-        <select
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          aria-label="Disposition"
-          className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm"
-        >
+        <select value={value} onChange={(e) => setValue(e.target.value)} aria-label="Disposition" className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm">
           <option value="">Disposition unchanged</option>
           {dispositions.map((d) => (
             <option key={d}>{d}</option>
@@ -198,18 +171,11 @@ function ImportDecisions({ runId, onClose, onApplied }: { runId: string; onClose
   const tiers = preview?.changes.filter((c) => c.tier_to).length ?? 0
   const disps = preview?.changes.filter((c) => c.disposition_to).length ?? 0
   return (
-    <Card
-      title="Import decisions from a workbook"
-      action={
-        <button onClick={onClose} className="text-xs text-navy hover:underline">
-          Close
-        </button>
-      }
-    >
+    <Card title="Import decisions from a workbook" action={<button onClick={onClose} className="text-xs text-navy hover:underline">Close</button>}>
       <div className="space-y-3 text-sm">
         <p className="text-slate-600">
-          Reads the Tier and Analyst Disposition columns of a Vendors of Interest workbook, matched by UEI. Category, Routes To and Recommended Next
-          Step become the note. You see what would change before anything is recorded.
+          Reads the Tier and Analyst Disposition columns of a Vendors of Interest workbook, matched by UEI. Category, Routes To and Recommended Next Step become the
+          note. You see what would change before anything is recorded.
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <input
@@ -251,9 +217,7 @@ function ImportDecisions({ runId, onClose, onApplied }: { runId: string; onClose
                         <td className="px-2 py-1.5">
                           {c.name} <span className="font-mono text-slate-400">{c.uei}</span>
                         </td>
-                        <td className="px-2 py-1.5">
-                          {c.tier_to ? `${TIER_SHORT[c.tier_from] ?? 'none'} → ${TIER_SHORT[c.tier_to] ?? c.tier_to}` : 'unchanged'}
-                        </td>
+                        <td className="px-2 py-1.5">{c.tier_to ? `${TIER_SHORT[c.tier_from] ?? 'none'} → ${TIER_SHORT[c.tier_to] ?? c.tier_to}` : 'unchanged'}</td>
                         <td className="px-2 py-1.5">{c.disposition_to ? `${c.disposition_from || 'none'} → ${c.disposition_to}` : 'unchanged'}</td>
                       </tr>
                     ))}
@@ -308,10 +272,7 @@ function HawkProgress({ done, total, elapsed }: { done: number; total: number; e
         aria-valuemax={total}
         aria-valuenow={done}
       >
-        <div
-          className={`h-full rounded-full bg-violet-600 transition-all duration-700 ${done === 0 ? 'animate-pulse w-1/12' : ''}`}
-          style={done ? { width: `${Math.max(pct, 2)}%` } : undefined}
-        />
+        <div className={`h-full rounded-full bg-violet-600 transition-all duration-700 ${done === 0 ? 'animate-pulse w-1/12' : ''}`} style={done ? { width: `${Math.max(pct, 2)}%` } : undefined} />
       </div>
       <div className="mt-1 text-xs text-slate-500">You can keep working; reasons appear on the rows as each batch finishes.</div>
     </div>
@@ -355,19 +316,10 @@ function HawkReasons({ runId, onWritten }: { runId: string; onWritten: () => voi
         <HawkProgress done={data.done ?? 0} total={data.total ?? 0} elapsed={data.elapsed_s} />
       ) : (
         <>
-          <Button
-            variant="secondary"
-            disabled={!analyst.trim()}
-            onClick={start}
-            title={analyst.trim() ? undefined : 'Enter your name in the header first'}
-          >
+          <Button variant="secondary" disabled={!analyst.trim()} onClick={start} title={analyst.trim() ? undefined : 'Enter your name in the header first'}>
             {data.written ? 'Have the Hawk fill in missing reasons' : 'Have the Hawk write a reason for each lead'}
           </Button>
-          {data.written > 0 && (
-            <span className="text-xs text-slate-500">
-              {num(data.written)} reasons written by the Hawk (AI). Check them against the case before relying on them.
-            </span>
-          )}
+          {data.written > 0 && <span className="text-xs text-slate-500">{num(data.written)} reasons written by the Hawk (AI). Check them against the case before relying on them.</span>}
         </>
       )}
       {data.state === 'error' && data.error && <span className="text-xs text-crimson">{data.error}</span>}
@@ -414,7 +366,17 @@ function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]
 const FILTER_KEYS = ['color', 'tier', 'signal', 'far', 'disposition', 'owner', 'assignee', 'q'] as const
 
 // An empty list under a tab that says it has vendors: say which filters hid them, and clear them in one click.
-function HiddenByFilters({ runId, base, active, onClear }: { runId: string; base: Record<string, string>; active: string[]; onClear: () => void }) {
+function HiddenByFilters({
+  runId,
+  base,
+  active,
+  onClear,
+}: {
+  runId: string
+  base: Record<string, string>
+  active: string[]
+  onClear: () => void
+}) {
   const { data } = useAsync(() => api.vendors(runId, { ...base, limit: '1' }), [runId, JSON.stringify(base)])
   if (!data) return <p className="py-6 text-center text-sm text-slate-500">No vendors match these filters.</p>
   return (
@@ -512,7 +474,7 @@ export default function QueuePage() {
 
   // After a decision, refresh the list and move to the next lead that is still in it.
   const decided = () => {
-    const next = at >= 0 ? (rows[at + 1]?.uei ?? null) : null
+    const next = at >= 0 ? rows[at + 1]?.uei ?? null : null
     setVersion((v) => v + 1)
     setFocus(next)
     if (next) document.getElementById(`row-${next}`)?.scrollIntoView({ block: 'nearest' })
@@ -557,7 +519,7 @@ export default function QueuePage() {
     })
   const filterLabel = (k: string, v: string) => {
     if (k === 'color') return v === 'red,yellow' ? 'Red and yellow' : v.charAt(0).toUpperCase() + v.slice(1)
-    if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : (meta.data?.tiers[v] ?? `Tier ${v}`)
+    if (k === 'tier') return v === 'any' ? 'Any tier set' : v === 'none' ? 'No tier' : meta.data?.tiers[v] ?? `Tier ${v}`
     if (k === 'signal') return `Signal ${meta.data?.signals[v] ? `${v} · ${meta.data.signals[v]}` : v}`
     if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier import' : v
     if (k === 'owner') return `Owner: ${v}`
@@ -597,16 +559,8 @@ export default function QueuePage() {
                 href: `/api/runs/${id}/exports/analysis.zip`,
                 hint: 'Zip: vendors, evidence and links as CSV and Excel, with a read-me',
               },
-              {
-                label: 'Vendors of Interest (Excel)',
-                href: `/api/runs/${id}/exports/vendors-of-interest.xlsx`,
-                hint: 'Tiered vendors in the hand-built list layout',
-              },
-              {
-                label: 'Small-vendor screen (Excel)',
-                href: `/api/runs/${id}/exports/small-vendor-screen.xlsx`,
-                hint: 'Integrity lane: vendors under $250K',
-              },
+              { label: 'Vendors of Interest (Excel)', href: `/api/runs/${id}/exports/vendors-of-interest.xlsx`, hint: 'Tiered vendors in the hand-built list layout' },
+              { label: 'Small-vendor screen (Excel)', href: `/api/runs/${id}/exports/small-vendor-screen.xlsx`, hint: 'Integrity lane: vendors under $250K' },
             ]}
           />
         </span>
@@ -618,7 +572,13 @@ export default function QueuePage() {
         <ExclusionCheck runId={id} onDone={() => setVersion((n) => n + 1)} />
       </div>
 
-      {importing && <ImportDecisions runId={id} onClose={() => setImporting(false)} onApplied={() => setVersion((v) => v + 1)} />}
+      {importing && (
+        <ImportDecisions
+          runId={id}
+          onClose={() => setImporting(false)}
+          onApplied={() => setVersion((v) => v + 1)}
+        />
+      )}
       {progress.data && <Progress p={progress.data} />}
       <HawkReasons runId={id} onWritten={() => setVersion((n) => n + 1)} />
       <TierStrip runId={id} active={tier} onPick={openTier} version={version} />
@@ -632,9 +592,7 @@ export default function QueuePage() {
           >
             {label}
             {run.data && k !== 'any' && (
-              <span className="tabular ml-1.5 text-xs text-slate-400">
-                {num(run.data.queue_counts[k === 'integrity' ? 'integrity_leads' : k] ?? 0)}
-              </span>
+              <span className="tabular ml-1.5 text-xs text-slate-400">{num(run.data.queue_counts[k === 'integrity' ? 'integrity_leads' : k] ?? 0)}</span>
             )}
           </button>
         ))}
@@ -689,23 +647,14 @@ export default function QueuePage() {
             ))}
           {signal && !meta.data?.signals[signal] && <option value={signal}>{signal}</option>}
         </select>
-        <select
-          value={colorFilter}
-          onChange={(e) => set('color', e.target.value)}
-          aria-label="Color"
-          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-        >
+        <select value={colorFilter} onChange={(e) => set('color', e.target.value)} aria-label="Color" className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any color</option>
           <option value="red">Red</option>
           <option value="yellow">Yellow</option>
           <option value="red,yellow">Red and yellow</option>
           <option value="green">Green</option>
         </select>
-        <select
-          value={disposition}
-          onChange={(e) => set('disposition', e.target.value)}
-          className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-        >
+        <select value={disposition} onChange={(e) => set('disposition', e.target.value)} className="rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any disposition</option>
           <option value="none">Not yet dispositioned</option>
           <option value="carried">Carried from an earlier import</option>
@@ -715,11 +664,7 @@ export default function QueuePage() {
             </option>
           ))}
         </select>
-        <select
-          value={owner}
-          onChange={(e) => set('owner', e.target.value)}
-          className="max-w-[16rem] rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-        >
+        <select value={owner} onChange={(e) => set('owner', e.target.value)} className="max-w-[16rem] rounded-md border border-slate-300 px-2 py-1.5 text-sm">
           <option value="">Any owner</option>
           {meta.data?.owners.map((o) => (
             <option key={o} value={o}>
@@ -796,134 +741,133 @@ export default function QueuePage() {
         </>
       ) : (
         <div className={focus ? 'grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_26rem]' : ''}>
-          <Card>
-            <ErrorNote error={error} />
-            {!data && !error && <Loading />}
-            {data &&
-              data.total === 0 &&
-              (activeFilters.length ? (
-                <HiddenByFilters key={sp.toString()} runId={id} base={tabOnly} active={activeFilters} onClear={clearFilters} />
-              ) : (
-                <p className="py-6 text-center text-sm text-slate-500">No vendors in this tab.</p>
-              ))}
-            {data && data.total > 0 && (
-              <div className="-mx-5 -my-5 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50 text-left text-xs text-slate-500">
-                    <tr>
-                      <th className="w-8 py-2 pl-5">
-                        <input
-                          type="checkbox"
-                          aria-label="Select all on this page"
-                          checked={allOnPage}
-                          onChange={() => setSelected(allOnPage ? new Set() : new Set(data.rows.map((r) => r.uei)))}
-                        />
-                      </th>
-                      <th className="px-3 py-2 font-medium">Vendor</th>
-                      <th className="px-3 py-2 font-medium">Queue and tier</th>
-                      {!focus && <th className="px-3 py-2 font-medium">Signals</th>}
-                      {!focus && <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>}
-                      <th className="px-3 py-2 text-right font-medium">Total</th>
-                      {!focus && <th className="px-3 py-2 font-medium">Owner</th>}
-                      <th className="px-5 py-2 font-medium">Disposition</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {data.rows.map((r) => (
-                      <tr
-                        key={r.uei}
-                        id={`row-${r.uei}`}
-                        onClick={(e) => {
-                          if (!(e.target as HTMLElement).closest('a, input, button')) setFocus(r.uei)
-                        }}
-                        className={`cursor-pointer align-top hover:bg-slate-50 ${
-                          focus === r.uei ? 'bg-navy-50 outline outline-2 -outline-offset-2 outline-navy' : selected.has(r.uei) ? 'bg-navy-50/50' : ''
-                        }`}
-                      >
-                        <td className="py-2.5 pl-5">
-                          <input type="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.uei)} onChange={() => toggle(r.uei)} />
-                        </td>
+        <Card>
+          <ErrorNote error={error} />
+          {!data && !error && <Loading />}
+          {data && data.total === 0 &&
+            (activeFilters.length ? (
+              <HiddenByFilters key={sp.toString()} runId={id} base={tabOnly} active={activeFilters} onClear={clearFilters} />
+            ) : (
+              <p className="py-6 text-center text-sm text-slate-500">No vendors in this tab.</p>
+            ))}
+          {data && data.total > 0 && (
+            <div className="-mx-5 -my-5 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                  <tr>
+                    <th className="w-8 py-2 pl-5">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all on this page"
+                        checked={allOnPage}
+                        onChange={() => setSelected(allOnPage ? new Set() : new Set(data.rows.map((r) => r.uei)))}
+                      />
+                    </th>
+                    <th className="px-3 py-2 font-medium">Vendor</th>
+                    <th className="px-3 py-2 font-medium">Queue and tier</th>
+                    {!focus && <th className="px-3 py-2 font-medium">Signals</th>}
+                    {!focus && <th className="px-3 py-2 text-right font-medium">FY24 → FY25</th>}
+                    <th className="px-3 py-2 text-right font-medium">Total</th>
+                    {!focus && <th className="px-3 py-2 font-medium">Owner</th>}
+                    <th className="px-5 py-2 font-medium">Disposition</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {data.rows.map((r) => (
+                    <tr
+                      key={r.uei}
+                      id={`row-${r.uei}`}
+                      onClick={(e) => {
+                        if (!(e.target as HTMLElement).closest('a, input, button')) setFocus(r.uei)
+                      }}
+                      className={`cursor-pointer align-top hover:bg-slate-50 ${
+                        focus === r.uei ? 'bg-navy-50 outline outline-2 -outline-offset-2 outline-navy' : selected.has(r.uei) ? 'bg-navy-50/50' : ''
+                      }`}
+                    >
+                      <td className="py-2.5 pl-5">
+                        <input type="checkbox" aria-label={`Select ${r.name}`} checked={selected.has(r.uei)} onChange={() => toggle(r.uei)} />
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
+                          {r.name}
+                        </Link>
+                        <LeadLine hawk={r.hawk} headline={r.headline} className="mt-0.5 max-w-md text-xs text-ink" />
+                        <div className="font-mono text-xs text-slate-400">{r.uei}</div>
+                        {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
+                        {r.lane !== 'outlier' && r.reason_code && (
+                          <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>
+                        )}
+                      </td>
+                      <td className="space-y-1 px-3 py-2.5">
+                        <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />
+                        <div className="flex flex-wrap gap-1">
+                          <ColorChip color={r.color} why={r.color_why} />
+                          <TierChip tier={r.tier} changed={!!r.tier_change} />
+                        </div>
+                      </td>
+                      {!focus && (
                         <td className="px-3 py-2.5">
-                          <Link to={`/runs/${id}/vendors/${r.uei}`} className="font-medium text-navy hover:underline">
-                            {r.name}
-                          </Link>
-                          <LeadLine hawk={r.hawk} headline={r.headline} className="mt-0.5 max-w-md text-xs text-ink" />
-                          <div className="font-mono text-xs text-slate-400">{r.uei}</div>
-                          {r.suppression && <div className="mt-0.5 text-xs text-slate-500">Lawful pattern: {r.suppression}</div>}
-                          {r.lane !== 'outlier' && r.reason_code && (
-                            <div className="mt-0.5 text-xs text-slate-500">{REASON_LABEL[r.reason_code] ?? r.reason_code}</div>
-                          )}
-                        </td>
-                        <td className="space-y-1 px-3 py-2.5">
-                          <QueueChip queue={r.queue || (r.bucket === 'watch' ? 'watch' : '')} />
-                          <div className="flex flex-wrap gap-1">
-                            <ColorChip color={r.color} why={r.color_why} />
-                            <TierChip tier={r.tier} changed={!!r.tier_change} />
+                          <div className="flex max-w-xs flex-wrap gap-1">
+                            {r.signals.map((s, i) => (
+                              <SignalChip key={i} s={s} />
+                            ))}
+                            {r.exclusion_flags.map((f) => (
+                              <FlagChip key={f} flag={f} />
+                            ))}
                           </div>
                         </td>
-                        {!focus && (
-                          <td className="px-3 py-2.5">
-                            <div className="flex max-w-xs flex-wrap gap-1">
-                              {r.signals.map((s, i) => (
-                                <SignalChip key={i} s={s} />
-                              ))}
-                              {r.exclusion_flags.map((f) => (
-                                <FlagChip key={f} flag={f} />
-                              ))}
-                            </div>
-                          </td>
-                        )}
-                        {!focus && (
-                          <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
-                            {money(r.fy24)} → {money(r.fy25)}
-                          </td>
-                        )}
-                        <td className="tabular px-3 py-2.5 text-right font-medium">{money(r.tot)}</td>
-                        {!focus && (
-                          <td className="max-w-[14rem] px-3 py-2.5 text-xs text-slate-600">
-                            {r.owner}
-                            {r.assignee && <div className="mt-0.5 text-slate-500">Assigned to {r.assignee}</div>}
-                          </td>
-                        )}
-                        <td className="px-5 py-2.5 text-xs">
-                          {r.disposition ? (
-                            <>
-                              <div className={`font-medium ${r.disposition.carried_from ? 'text-amber-800' : ''}`}>{r.disposition.value}</div>
-                              <div className="text-slate-500">
-                                {r.disposition.carried_from ? `Carried from ${r.disposition.carried_from.created_at.slice(0, 10)} import · ` : ''}
-                                {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
-                              </div>
-                            </>
-                          ) : (
-                            <span className="text-slate-400">Not yet reviewed</span>
-                          )}
-                          {r.last_touched && <div className="mt-0.5 text-slate-400">Touched {new Date(r.last_touched).toLocaleDateString()}</div>}
+                      )}
+                      {!focus && (
+                        <td className="tabular whitespace-nowrap px-3 py-2.5 text-right text-slate-600">
+                          {money(r.fy24)} → {money(r.fy25)}
                         </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {data.total > data.rows.length && (
-                  <div className="border-t border-slate-100 p-3 text-center">
-                    <Button variant="secondary" onClick={() => setLimit(limit + PAGE)}>
-                      Show more ({num(data.total - data.rows.length)} left)
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
-          </Card>
-          {focus && (
-            <TriagePane
-              runId={id}
-              uei={focus}
-              dispositions={meta.data?.dispositions ?? []}
-              pick={pick}
-              onDecided={decided}
-              onClose={() => setFocus(null)}
-              position={at >= 0 ? `Lead ${num(at + 1)} of ${num(data?.total ?? 0)}` : ''}
-            />
+                      )}
+                      <td className="tabular px-3 py-2.5 text-right font-medium">{money(r.tot)}</td>
+                      {!focus && (
+                        <td className="max-w-[14rem] px-3 py-2.5 text-xs text-slate-600">
+                          {r.owner}
+                          {r.assignee && <div className="mt-0.5 text-slate-500">Assigned to {r.assignee}</div>}
+                        </td>
+                      )}
+                      <td className="px-5 py-2.5 text-xs">
+                        {r.disposition ? (
+                          <>
+                            <div className={`font-medium ${r.disposition.carried_from ? 'text-amber-800' : ''}`}>{r.disposition.value}</div>
+                            <div className="text-slate-500">
+                              {r.disposition.carried_from ? `Carried from ${r.disposition.carried_from.created_at.slice(0, 10)} import · ` : ''}
+                              {r.disposition.analyst} · {new Date(r.disposition.at).toLocaleDateString()}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-slate-400">Not yet reviewed</span>
+                        )}
+                        {r.last_touched && <div className="mt-0.5 text-slate-400">Touched {new Date(r.last_touched).toLocaleDateString()}</div>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {data.total > data.rows.length && (
+                <div className="border-t border-slate-100 p-3 text-center">
+                  <Button variant="secondary" onClick={() => setLimit(limit + PAGE)}>
+                    Show more ({num(data.total - data.rows.length)} left)
+                  </Button>
+                </div>
+              )}
+            </div>
           )}
+        </Card>
+        {focus && (
+          <TriagePane
+            runId={id}
+            uei={focus}
+            dispositions={meta.data?.dispositions ?? []}
+            pick={pick}
+            onDecided={decided}
+            onClose={() => setFocus(null)}
+            position={at >= 0 ? `Lead ${num(at + 1)} of ${num(data?.total ?? 0)}` : ''}
+          />
+        )}
         </div>
       )}
       {view !== 'board' && (
