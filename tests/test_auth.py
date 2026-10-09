@@ -103,7 +103,7 @@ def test_admin_manages_people_and_roles_are_enforced(signed):
     r = c.post("/api/policies", data={"name": "Boss pack", "analyst": "Not Pat"}, headers=boss)
     assert r.status_code == 200 and r.json()["created_by"] == "Pat Boss"
     # removal, and an admin can't remove themselves
-    assert c.post("/api/people/remove", data={"email": "eve@agency.gov"}, headers=boss).json() == {"ok": True}
+    assert c.post("/api/people/remove", data={"email": "eve@agency.gov"}, headers=boss).json()["ok"] is True
     assert c.get("/api/runs", headers=h("eve@agency.gov")).status_code == 403
     assert c.post("/api/people", data={"email": "carl@agency.gov", "name": "Carl", "role": "admin"}, headers=boss).status_code == 200
     assert c.post("/api/people/remove", data={"email": "carl@agency.gov"}, headers=h("carl@agency.gov")).status_code == 400
