@@ -6,6 +6,7 @@ import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, FlagChip, Loading, Stat, useAsync } from '../ui'
 import { FollowUpButton } from './RunRecordPage'
+import { FarPanel } from '../Far'
 
 const STAGE_FILTER: Record<string, string> = { '1a': '1a', '1b': '1b,1c', '1d': '1d' }
 
@@ -488,6 +489,7 @@ export default function RunDashboard() {
         </div>
         <Histogram runId={id} />
       </div>
+      <FarPanel runId={id} />
       <RoiPanel run={run} />
       <Inputs run={run} />
     </div>

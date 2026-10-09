@@ -363,7 +363,7 @@ function Board({ runId, rows, dispositions }: { runId: string; rows: VendorRow[]
   )
 }
 
-const FILTER_KEYS = ['color', 'tier', 'signal', 'disposition', 'owner', 'assignee', 'q'] as const
+const FILTER_KEYS = ['color', 'tier', 'signal', 'far', 'disposition', 'owner', 'assignee', 'q'] as const
 
 // An empty list under a tab that says it has vendors: say which filters hid them, and clear them in one click.
 function HiddenByFilters({
@@ -420,6 +420,7 @@ export default function QueuePage() {
   const view = sp.get('view') ?? 'list'
   const q = sp.get('q') ?? ''
   const colorFilter = sp.get('color') ?? ''
+  const far = sp.get('far') ?? ''
 
   const params: Record<string, string> = { limit: String(view === 'board' ? 500 : limit) }
   if (queue === 'watch') params.bucket = 'watch'
@@ -432,6 +433,7 @@ export default function QueuePage() {
   if (assignee) params.assignee = assignee
   if (q) params.q = q
   if (colorFilter) params.color = colorFilter
+  if (far) params.far = far
 
   const tabOnly: Record<string, string> = {}
   for (const k of ['bucket', 'queue', 'lane']) if (params[k]) tabOnly[k] = params[k]
@@ -521,6 +523,7 @@ export default function QueuePage() {
     if (k === 'signal') return `Signal ${meta.data?.signals[v] ? `${v} · ${meta.data.signals[v]}` : v}`
     if (k === 'disposition') return v === 'none' ? 'Not yet dispositioned' : v === 'carried' ? 'Carried from an earlier import' : v
     if (k === 'owner') return `Owner: ${v}`
+    if (k === 'far') return `FAR ${v} to review`
     if (k === 'assignee') return `Assigned to ${v}`
     return `Search "${v}"`
   }

@@ -6,6 +6,7 @@ import { useAnalystName } from '../App'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkMap from '../LinkMap'
+import { FarCard } from '../Far'
 import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
 import { Button, Card, ColorChip, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
 
@@ -90,6 +91,7 @@ const HISTORY_LABEL: Record<string, string> = {
   case_approve: 'Approved',
   case_return: 'Returned',
   case_reopen: 'Reopened',
+  far: 'FAR review',
 }
 
 const ROLE: Record<string, string> = {
@@ -583,6 +585,8 @@ export default function VendorPage() {
               <p className="text-sm leading-relaxed text-slate-700">{v.why}</p>
             </div>
           </Card>
+
+          <FarCard runId={id} uei={v.uei} far={v.far} onSaved={reload} />
 
           <LedgerCard
             ledger={v.ledger}

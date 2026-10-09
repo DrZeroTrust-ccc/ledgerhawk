@@ -31,6 +31,8 @@ from ..pipeline import samgov
 from ..pipeline import summary as summary_mod
 from ..pipeline.normalize import normalize_name
 from ..pipeline.exclusions import load_exclusions
+from ..pipeline.far import ANALYST_STATES as FAR_ANALYST_STATES, CONFIRMED as FAR_CONFIRMED, NOT_APPLICABLE as FAR_NOT_APPLICABLE
+from ..pipeline.far import PROVISIONS as FAR_PROVISIONS, element_label as far_element_label
 from ..pipeline.ingest import file_sha256
 from ..pipeline.run import run_pipeline
 from ..pipeline.rules import RuleSet
@@ -186,6 +188,10 @@ class Store:
                 CREATE TABLE IF NOT EXISTS run_assignment (
                     run_id TEXT NOT NULL, uei TEXT NOT NULL, assignee TEXT NOT NULL, analyst TEXT NOT NULL,
                     at TEXT NOT NULL, PRIMARY KEY (run_id, uei));
+                CREATE TABLE IF NOT EXISTS run_far (
+                    run_id TEXT NOT NULL, uei TEXT NOT NULL, provision TEXT NOT NULL, element TEXT NOT NULL,
+                    state TEXT NOT NULL, note TEXT NOT NULL, analyst TEXT NOT NULL, at TEXT NOT NULL,
+                    PRIMARY KEY (run_id, uei, provision, element));
                 CREATE TABLE IF NOT EXISTS migration (name TEXT PRIMARY KEY, at TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS person (
                     email TEXT PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, added_by TEXT NOT NULL,
@@ -1758,6 +1764,53 @@ class Store:
                               "ORDER BY at", ids).fetchall()
         return self._pick(run_id, ((r[0], r[1], {"uei": r[1], "value": r[2], "note": r[3], "analyst": r[4], "at": r[5]})
                                    for r in rows))
+
+    def set_far(self, run_id: str, uei: str, provision: str, element: str, state: str, note: str, analyst: str) -> dict:
+        """An analyst's decision on one element of a FAR provision (or the whole provision, element "*"): confirmed from
+        a record, not applicable, or "" to take a decision back. Every one is logged with its note."""
+        if provision not in FAR_PROVISIONS or (element != "*" and element not in FAR_PROVISIONS[provision]["elements"]):
+            raise ValueError(f"Unknown FAR element: {provision} {element}")
+        if state not in FAR_ANALYST_STATES and state != "":
+            raise ValueError(f"Unknown state: {state}")
+        if element == "*" and state == FAR_CONFIRMED:
+            raise ValueError("Confirm a provision element by element.")
+        if not note.strip():
+            raise ValueError("A note is required: what record you checked, or why it doesn't apply.")
+        if not analyst.strip():
+            raise ValueError("An analyst name is required.")
+        at = _now()
+        with self._db() as db:
+            db.execute("INSERT OR REPLACE INTO run_far VALUES (?,?,?,?,?,?,?,?)", (run_id, uei, provision, element, state, note, analyst, at))
+        what = {FAR_CONFIRMED: "Confirmed", FAR_NOT_APPLICABLE: "Not applicable", "": "Cleared decision on"}[state]
+        self.audit(analyst, "far", uei, run_id, f"{what} {far_element_label(provision, element)}: {note}")
+        return {"uei": uei, "provision": provision, "element": element, "state": state, "note": note, "analyst": analyst, "at": at}
+
+    def far_decisions(self, run_id: str) -> dict[str, dict[str, dict]]:
+        """UEI -> {"provision|element": decision} as this run sees them (carried from earlier runs like dispositions).
+        A cleared decision ("" state) hides one carried from an earlier run."""
+        ids = [r for r, _ in self.lineage(run_id)]
+        with self._db() as db:
+            rows = db.execute(f"SELECT run_id, uei, provision, element, state, note, analyst, at FROM run_far "
+                              f"WHERE run_id IN ({self._in(ids)}) ORDER BY at", ids).fetchall()
+        picked = self._pick(run_id, ((r[0], f"{r[1]}|{r[2]}|{r[3]}", {"state": r[4], "note": r[5], "analyst": r[6], "at": r[7]})
+                                     for r in rows))
+        out: dict[str, dict[str, dict]] = {}
+        for key, rec in picked.items():
+            if rec["state"]:
+                uei, rest = key.split("|", 1)
+                out.setdefault(uei, {})[rest] = rec
+        return out
+
+    def case_awards_entities(self, run_id: str) -> dict[str, dict]:
+        """UEI -> the vendor's own entity from its USAspending lookup in this import (awards and actions in full)."""
+        out = {}
+        for f in (self.root / "cases" / run_id).glob("*/awards.json"):
+            try:
+                res = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            out[f.parent.name] = (res.get("entities") or [{}])[0]
+        return out
 
     def run_log(self, run_id: str, limit: int = 1000) -> list[dict]:
         """Everything done in this run (and the runs it was restored from), newest first."""

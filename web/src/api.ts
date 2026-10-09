@@ -304,6 +304,28 @@ export type VendorDetail = VendorRow & {
   sam: SamCard | null
   links: LinkedVendor[]
   screens: VendorScreen[]
+  far: FarProvision[]
+}
+
+// A FAR provision a vendor's evidence may implicate, element by element. Not a finding that it was violated.
+export type FarState = 'shown' | 'needs_record' | 'confirmed' | 'not_applicable'
+export type FarDecision = { state: FarState; note: string; analyst: string; at: string; carried_from?: RunRef }
+export type FarElement = { id: string; text: string; state: FarState; detail: string; source: string; decision: FarDecision | null }
+export type FarProvision = {
+  id: string
+  cite: string
+  title: string
+  binds: string
+  routes_to: string
+  status: 'supported' | 'partial' | 'not_applicable'
+  shown: number
+  confirmed: number
+  decision: FarDecision | null
+  elements: FarElement[]
+}
+export type FarSummary = {
+  version: string
+  provisions: { id: string; cite: string; title: string; binds: string; vendors: number; supported: number; dollars: number }[]
 }
 
 // What a subject screen found about one vendor, for the vendor record.
@@ -838,6 +860,9 @@ export const api = {
     req<{ job: ImportJob }>(`/api/runs/${id}/exclusion-check`, { method: 'POST', body: form }),
   vendors: (id: string, params: Record<string, string>) =>
     req<{ total: number; dollars: number; rows: VendorRow[] }>(`/api/runs/${id}/vendors?${new URLSearchParams(params)}`),
+  far: (id: string) => req<FarSummary>(`/api/runs/${id}/far`),
+  setFar: (id: string, uei: string, body: { provision: string; element: string; state: '' | 'confirmed' | 'not_applicable'; note: string; analyst: string }) =>
+    req<unknown>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/far`, json(body)),
   histogram: (id: string) => req<{ signals: Record<string, number>; combinations: Record<string, number> }>(`/api/runs/${id}/signal-histogram`),
   vendor: (id: string, uei: string) => req<VendorDetail>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}`),
   setDisposition: (id: string, uei: string, body: { value: string; note: string; analyst: string }) =>
