@@ -182,4 +182,4 @@ def openpyxl_sheets(z):
     return openpyxl.load_workbook(io.BytesIO(z.read("LedgerHawk analysis export.xlsx"))).sheetnames
 
 
-from tests.test_analysis_export import sam_ctx_export  # noqa: E402,F401  (the same synthetic import)
+from test_analysis_export import sam_ctx_export  # noqa: E402,F401  (the same synthetic import)
