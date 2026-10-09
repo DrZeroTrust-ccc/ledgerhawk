@@ -35,6 +35,7 @@ from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_far_memo_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
+from .backup import Backups, config_from_env as backup_config, stream_archive
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
@@ -55,6 +56,9 @@ app = FastAPI(title="LedgerHawk", version="0.2.0")
 # Sign-in: Cloudflare Access when configured (see auth.py), else the old shared password, else open.
 VERIFIER = verifier_from_env()
 ADMINS = bootstrap_admins()
+backups = Backups(DATA_DIR, backup_config(), busy=store.heavy_job_running)
+if backups.cfg:
+    backups.start_nightly()
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
@@ -147,6 +151,43 @@ def save_person(email: str = Form(""), name: str = Form(""), role: str = Form(""
         return store.set_person(email, name, role, u.name)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+@app.get("/api/admin/backups")
+def backup_status():
+    """When the data was last backed up, and the backups in the bucket."""
+    _admin()
+    out = backups.status() | {"remote": [], "remote_error": None}
+    if backups.cfg:
+        try:
+            out["remote"] = backups.remote()
+        except Exception as exc:
+            out["remote_error"] = f"Couldn't list the bucket: {type(exc).__name__}: {exc}"[:300]
+    return out
+
+
+@app.post("/api/admin/backups")
+def backup_now():
+    u = _admin()
+    try:
+        backups.start(u.name)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc))
+    store.audit(u.name, "backup", None, None, f"Backup to {backups.cfg.bucket if backups.cfg else '?'} started")
+    return {"ok": True}
+
+
+@app.get("/api/admin/export-all")
+def export_all():
+    """Everything LedgerHawk holds (imports, sources, decisions, policy packs, case lookups) as one .tar.gz, the same
+    file a nightly backup sends to the bucket. Restores with `python -m ledgerhawk.api.backup restore <file>`."""
+    from fastapi.responses import StreamingResponse
+    u = _admin()
+    name = f"LedgerHawk-data-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.tar.gz"
+    store.audit(u.name, "export", None, None, "Downloaded all data")
+    # streamed as it's built: a large archive would otherwise outlast Cloudflare's 100-second wait for a first byte
+    return StreamingResponse(stream_archive(DATA_DIR), media_type="application/gzip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/api/people/remove")
