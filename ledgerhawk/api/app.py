@@ -36,6 +36,7 @@ from ..exports.word import build_case_docx, build_far_memo_docx, build_subjects_
 from ..exports.voi import build_voi
 from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
 from .alerts import Alerts, channels_from_env as alert_channels
+from .weekly import Weekly
 from .backup import Backups, config_from_env as backup_config, stream_archive
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
@@ -688,6 +689,45 @@ def _index_newest_sam() -> None:
 threading.Thread(target=_index_newest_sam, daemon=True).start()
 if samgov.api_key():
     threading.Thread(target=_sam_gov_loop, daemon=True).start()
+
+
+def _money(x: float) -> str:
+    return f"${x / 1e6:.1f}M" if abs(x) >= 1e6 else f"${x:,.0f}"
+
+
+def weekly_digest(run_id: str) -> str:
+    """What a weekly re-screen found, in a few lines: new in the queue, gone from it, changed, and excluded vendors
+    paid after their exclusion."""
+    s = store.summary(run_id)
+    ch = s.get("changes") or {"counts": {"new": 0, "dropped": 0, "changed": 0}, "new": []}
+    c = ch["counts"]
+    lines = [f"{c['new']} new in the queue, {c['dropped']} left it, {c['changed']} changed since "
+             f"{(s.get('follows') or {}).get('created_at', '')[:10] or 'the last import'}."]
+    for v in ch.get("new", [])[:5]:
+        lines.append(f"  New: {v.get('name', v.get('uei'))} ({_money(float(v.get('tot') or 0))})")
+    rows = [r for r in store.vendors(run_id)["rows"] if "EXCLUDED" in (r.get("exclusion_flags") or [])]
+    awards = store.case_awards_index(run_id)
+    paid = sum(1 for r in rows if paid_after_exclusion(awards.get(r["uei"])))
+    lines.append(f"{len(rows)} on the exclusions list; {sum(1 for r in rows if r['uei'] in awards)} checked in "
+                 f"USAspending, {paid} paid after their exclusion.")
+    return "\n".join(lines)
+
+
+def _weekly_done(run_id: str) -> None:
+    alerts.raise_alert("digest", f"Weekly re-screen: {store.run_ref(run_id)['label']}", weekly_digest(run_id),
+                       key=f"digest:{run_id}")
+
+
+weekly = Weekly(store, digest=_weekly_done,
+                refresh=(lambda: store.refresh_sam_gov(samgov.api_key())) if samgov.api_key() else None)
+if weekly.enabled:
+    weekly.start_loop()
+
+
+@app.get("/api/weekly")
+def weekly_status():
+    """The weekly re-screen: when it runs next, what it follows up, and how the last one went."""
+    return weekly.status()
 
 
 @app.post("/api/sources")
