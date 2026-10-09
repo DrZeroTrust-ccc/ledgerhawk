@@ -34,7 +34,8 @@ def test_excluded_vendor_with_new_orders_and_options():
     assert set(p) == {"9.405", "9.405-1", "52.209-5"}
     el = {e["id"]: e for e in p["9.405"]["elements"]}
     assert el["excluded"]["state"] == "shown" and "GSA" in el["excluded"]["detail"]
-    assert el["new_award"]["state"] == "shown" and el["new_award"]["detail"].startswith("2 new contracts or orders")
+    # A2's order counts; A9 only starts after the exclusion, with no award action after it
+    assert el["new_award"]["state"] == "shown" and el["new_award"]["detail"].startswith("1 new contract or order")
     assert "Jul 01, 2025" in el["new_award"]["detail"] and el["determination"]["state"] == "needs_record"
     assert p["9.405"]["binds"] == "Awarding agency" and "GSA suspension and debarment official" in p["9.405"]["routes_to"]
     work = p["9.405-1"]["elements"][1]
@@ -50,6 +51,34 @@ def test_zero_dollar_changes_need_a_record():
     assert set(p) == {"9.405-1"}
     work = p["9.405-1"]["elements"][1]
     assert work["state"] == "needs_record" and work["detail"].startswith("2 zero-dollar actions after the exclusion date")
+
+
+def test_an_award_that_only_starts_after_the_exclusion_is_not_a_new_award():
+    """USAspending's start date is when performance begins. An award signed before the exclusion and starting after it
+    has no award action after the exclusion date: it's a continuing contract, not a new award."""
+    v = _v(exclusion_flags=["EXCLUDED"], exclusion=[EXCL])
+    signed_before = {"award_id": "A7", "start": "2027-06-29", "amount": 3.7e6}
+    assert evaluate(v, {"awards": [signed_before], "actions": []}) == []
+    assert evaluate(v, {"awards": [signed_before], "actions": [_act("2025-07-01", "funding", 5e3, "A7")]}) == []
+    p = _by(evaluate(v, {"awards": [signed_before], "actions": [_act("2025-07-01", "new", 3.7e6, "A7")]}))
+    assert p["9.405"]["elements"][1]["detail"].startswith("1 new contract or order")
+    # without the itemised actions (an older lookup, or the search failed) the start date is all there is
+    assert "9.405" in _by(evaluate(v, {"awards": [signed_before]}))
+    assert "9.405" in _by(evaluate(v, {"awards": [signed_before], "actions": [], "actions_error": "did not answer"}))
+
+
+def test_paid_after_count_needs_the_award_action(sam_ctx_export):
+    import ledgerhawk.api.app as appmod
+    client, run_id = sam_ctx_export
+    st = appmod.store
+    u = next(r["uei"] for r in st.vendors(run_id)["rows"] if "EXCLUDED" in r["exclusion_flags"])
+    d = st._case_dir(run_id, u)
+    d.mkdir(parents=True, exist_ok=True)
+    award = {"award_id": "A7", "start": "2027-06-29", "amount": 3.7e6}
+    for actions, want in (([], 0), ([_act("2026-07-01", "new", 0.0, "A7")], 1)):
+        e = {"excluded_since": "2026-06-01", "awards": [award], "actions": actions}
+        (d / "awards.json").write_text(json.dumps({"fetched_at": "2026-10-09", "entities": [e]}))
+        assert st.case_awards_index(run_id)[u]["new_awards_after"] == want
 
 
 def test_ended_exclusion_and_unchecked_vendor():

@@ -145,6 +145,18 @@ def _action_kind(mod: str, action_type: str, amount: float, award_id: str) -> st
     return kind
 
 
+def awarded_after(award: dict, actions: list[dict] | None, since: str) -> bool:
+    """Whether an award was made after `since`. Its start date is when performance begins, not when it was signed: an
+    award signed before the exclusion can start after it. So one that starts after it counts only when USAspending
+    also has its award action (modification 0) dated after it. Without the actions (not fetched, or the search
+    failed), the start date is all there is."""
+    if not since or (award.get("start") or "") <= since:
+        return False
+    if actions is None:
+        return True
+    return any(a.get("award_id") == award.get("award_id") and a.get("kind") == "new" and (a.get("date") or "") > since for a in actions)
+
+
 def _schedule(award_id: str) -> bool:
     """GSA Multiple Award Schedule and other GSA vehicles: 47Q... (current) or GS-... (legacy) contract numbers."""
     a = (award_id or "").upper().replace("-", "")
@@ -418,9 +430,12 @@ def screen_awards(screen: dict, post: Post = _post, today: date | None = None,
     for res in found:
         t = targets[res["uei"]]
         since = t["excluded_since"]
-        for a in res["awards"]:
-            a["after_exclusion"] = bool(since and a["start"] and a["start"] >= since)
         act = acts.get(res["uei"]) or {"actions": [], "truncated": False, "error": ""}
+        known = None if act["error"] or act["truncated"] else act["actions"]
+        for a in res["awards"]:
+            # on or after the exclusion date, and (when the actions are there) awarded then, not only starting then
+            a["after_exclusion"] = bool(since and a["start"] and a["start"] >= since and (
+                known is None or any(x["award_id"] == a["award_id"] and x["kind"] == "new" and x["date"] >= since for x in known)))
         flagged = [a for a in act["actions"] if a["flagged"]]
         h = hist.get(res["uei"]) or {"by_fy": {}, "error": ""}
         by_fy = {str(y): a for y, a in sorted(h["by_fy"].items())}
