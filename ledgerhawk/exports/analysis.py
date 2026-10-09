@@ -88,6 +88,22 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
     return "unchecked", "On the SAM exclusions list; payments after the exclusion date not yet checked"
 
 
+MAILBOX_SUITE = 25  # SAM registrations at one suite: a registered agent or virtual office, not an operating business
+MAILBOX_ALONE = 5_000_000  # paid at least this much while registered at one is a lead by itself
+
+
+def mailbox_address(v: dict) -> str:
+    """Why the vendor's SAM address looks like a mailbox rather than a place of business, or ""."""
+    card = v.get("sam") or {}
+    if card.get("virtual"):
+        return f"SAM address is a mailbox or virtual office ({card.get('address', '')})"
+    n = int(card.get("suite_count") or 0)
+    if n >= MAILBOX_SUITE:
+        return (f"SAM address is shared by {n:,} registrations, which looks like a registered agent or virtual office "
+                f"({card.get('address', '')})")
+    return ""
+
+
 def watchlist_reasons(v: dict) -> tuple[list[str], list[str]]:
     """OFAC and HHS-OIG matches as reasons: (red ones, yellow ones). A same-name OFAC entry, or an HHS-OIG exclusion
     with the same name and state, is red; an HHS-OIG exclusion matching the name alone is yellow. All need confirming."""
@@ -123,8 +139,9 @@ def color(v: dict, wf: dict, disposition: dict | None, awards: dict | None = Non
         red.append("Analyst set Tier 1")
     if d == "Refer":
         red.append("Analyst decided to refer")
+    mailbox = mailbox_address(v)
     if red:
-        return "red", red
+        return "red", red + ([mailbox] if mailbox else [])
     yellow = ([why_excl] if timing == "cleared" else []) + weak_wl
     q = v.get("queue")
     if q in ("strong", "relationship", "exclusion"):
@@ -134,6 +151,8 @@ def color(v: dict, wf: dict, disposition: dict | None, awards: dict | None = Non
         yellow.append(INTEGRITY_MEANING[integ["tier"]])
     if tier in ("2", "3") and by_analyst:
         yellow.append(f"Analyst set Tier {tier}")
+    if mailbox and (yellow or float(v.get("tot") or 0) >= MAILBOX_ALONE):
+        yellow.append(mailbox if yellow else f"Paid ${float(v['tot']) / 1e6:.1f}M while registered at a mailbox: {mailbox}")
     if yellow:
         return "yellow", yellow
     if v.get("bucket") == "watch":
@@ -190,6 +209,8 @@ def rows_for(items: list[dict], colors: set[str]) -> tuple[list[dict], list[dict
             "subcontracts_after_exclusion": (aw or {}).get("subawards_after", "") if aw else "",
             "subcontract_dollars_after_exclusion": (aw or {}).get("subawards_after_dollars", "") if aw else "",
             "subcontracts_ever": (aw or {}).get("subawards", "") if aw else "",
+            "mailbox_address": mailbox_address(v),
+            "registrations_at_suite": int((v.get("sam") or {}).get("suite_count") or 0) or "",
             "watchlist_matches": "; ".join(f"{h['list']}: {h['name']} ({h['match']})" for h in v.get("watchlist") or []),
             "linked_firms": len(v.get("links") or []), "neighbors": len(v.get("neighbors") or []),
             "family_total": _family_total(v) or "",
@@ -261,7 +282,9 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "  date), or whose payments after the date have not been checked yet; an analyst's Tier 1; or a",
         "  decision to refer; the same name as an OFAC sanctions (SDN) entry, or the same name and state as an HHS-OIG",
         "  exclusion (LEIE) (name matches to confirm: neither list carries a UEI).",
-        "YELLOW: the same name as an HHS-OIG exclusion in another state; an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
+        "YELLOW: paid $5M or more while registered at a mailbox (a PMB or virtual office, or a suite shared by 25 or",
+        "  more SAM registrations; on other red and yellow vendors this is listed as an added reason); the same name as",
+        "  an HHS-OIG exclusion in another state; an excluded vendor that USAspending shows was not paid after its exclusion date (orders dated on the",
         "  exclusion date itself and zero-dollar actions are listed, not counted as payment); one strong signal;",
         "  related firms in SAM (shared contacts, suites, a family of registrations); a tie to an excluded party; a",
         "  small vendor tied to an excluded party or sharing its suite; an analyst's Tier 2 or 3.",
