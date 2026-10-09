@@ -80,7 +80,7 @@ NEW_KINDS, OPTION_KINDS = {"new"}, {"option", "work"}
 
 
 def _money(x: float) -> str:
-    return f"${x / 1e6:.1f}M" if abs(x) >= 50_000 else f"${x:,.0f}"
+    return f"${x:,.0f}"  # exact dollars: these details go into referrals
 
 
 def _el(state: str, detail: str, source: str = "") -> dict:

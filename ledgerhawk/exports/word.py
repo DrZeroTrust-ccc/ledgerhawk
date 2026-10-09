@@ -308,7 +308,7 @@ def build_far_memo_docx(v: dict, far: list[dict], summary: dict, *, matter: str 
                   ("Status", "Every element shown in the data or confirmed by an analyst" if p["status"] == "supported"
                    else "Some elements still need a record")])
         _grid(doc, ["Element", "State", "Detail", "Source"],
-              [[e["text"], FAR_STATE.get(e["state"], e["state"]), e["detail"], e["source"]] for e in p["elements"]])
+              [[e["text"], FAR_STATE.get(e["state"], e["state"]), *_far_detail(e)] for e in p["elements"]])
         notes = [(f"{p['cite']} as a whole", p["decision"])] if p.get("decision") else []
         notes += [(e["text"], e["decision"]) for e in p["elements"] if e.get("decision")]
         doc.add_heading("Analyst notes", level=3)
@@ -338,6 +338,14 @@ def build_far_memo_docx(v: dict, far: list[dict], summary: dict, *, matter: str 
                 "determination, which LedgerHawk does not hold. Whom a provision binds matters: several duties fall on the "
                 "awarding agency, not the vendor." + f" Generated {generated_at:%Y-%m-%d %H:%M} UTC.")
     return _save(doc)
+
+
+def _far_detail(e: dict) -> tuple[str, str]:
+    """Detail and source for an element. An analyst's decision replaces the screen's prompt with the analyst's note."""
+    d = e.get("decision")
+    if not d:
+        return e["detail"], e["source"]
+    return d.get("note") or "(no note)", f"Analyst ({d['analyst']}, {d['at'][:10]}{carried_note(d)})"
 
 
 def _far_counts(p: dict) -> str:

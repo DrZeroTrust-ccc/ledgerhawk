@@ -49,7 +49,10 @@ def test_memo_lists_provisions_elements_notes_and_provenance():
     assert rows["A new contract or order dated after the exclusion date"][1:] == [
         "Data shows", rows["A new contract or order dated after the exclusion date"][2], "USAspending"]
     assert rows["A new contract or order dated after the exclusion date"][2].startswith("1 new contract or order")
-    assert rows["No written compelling-reason determination by the agency head (FAR 9.405(a))"][1] == "Analyst confirmed"
+    assert rows["A new contract or order dated after the exclusion date"][2].endswith("($20,000 obligated at award)")  # exact dollars
+    # a decided element carries the analyst's note and byline in place of the screen's prompt
+    assert rows["No written compelling-reason determination by the agency head (FAR 9.405(a))"][1:] == [
+        "Analyst confirmed", "No D&F in the contract file", "Analyst (Pat, 2026-10-08)"]
     assert rows["What the firm certified about its debarment or suspension, in the offer or SAM reps and certs"][1] == "Not applicable"
     # the analyst's notes, and the set-aside provision with its reason
     assert "Analyst confirmed: No D&F in the contract file (Pat, 2026-10-08)" in text
