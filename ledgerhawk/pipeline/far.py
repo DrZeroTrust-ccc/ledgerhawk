@@ -16,7 +16,7 @@ from .integrity import FY_START, _parse_date
 from .stages import SIGNAL_LABELS
 from .tiering import _sdo
 
-FAR_MAP_VERSION = "2026.10-1"
+FAR_MAP_VERSION = "2026.10-2"
 
 SHOWN, NEEDS_RECORD, CONFIRMED, NOT_APPLICABLE = "shown", "needs_record", "confirmed", "not_applicable"
 ANALYST_STATES = {CONFIRMED, NOT_APPLICABLE}
@@ -77,6 +77,7 @@ TIE_KINDS = {"alias": "Named as an alias or affiliate in the exclusion record", 
              "address": "Same suite as the excluded party", "person": "Shares a contact with the excluded party",
              "name_match": "Same name as the excluded firm, in the same city or state"}
 NEW_KINDS, OPTION_KINDS = {"new"}, {"option", "work"}
+TRIBAL = "Tribal, ANC or NHO family entity"  # the pipeline's suppression label (13 CFR 121.103(b)(2))
 
 
 def _money(x: float) -> str:
@@ -143,12 +144,20 @@ def evaluate(v: dict, entity: dict | None = None) -> list[dict]:
                 "determination": _el(NEEDS_RECORD, "Check the contract file for the agency head's determination"),
             }))
         if opts:
-            dollars = sum(max(a.get("amount") or 0, 0) for a in opts)
+            paid = [a for a in opts if (a.get("amount") or 0) > 0]
+            zero = len(opts) - len(paid)
             kinds = sorted({a.get("label") or a.get("kind", "") for a in opts})
+            if paid:
+                detail = (f"{len(paid)} action{'s' if len(paid) != 1 else ''} with new money after the exclusion date "
+                          f"({', '.join(kinds)}; {_money(sum(a['amount'] for a in paid))})"
+                          + (f", and {zero} zero-dollar" if zero else ""))
+                work = _el(SHOWN, detail, "USAspending")
+            else:  # a zero-dollar change can still extend the term or add work, but often it's administrative
+                work = _el(NEEDS_RECORD, f"{zero} zero-dollar action{'s' if zero != 1 else ''} after the exclusion date ({', '.join(kinds)}); "
+                                         "check whether any added work or extended the term", "USAspending")
             out.append(_provision("9.405-1", f"Awarding agency contracting officer; {sdo}", {
                 "excluded": _excluded_element(since, until, rec),
-                "option_or_work": _el(SHOWN, f"{len(opts)} action{'s' if len(opts) != 1 else ''} after the exclusion date "
-                                             f"({', '.join(kinds)}; {_money(dollars)})", "USAspending"),
+                "option_or_work": work,
                 "determination": _el(NEEDS_RECORD, "Check the contract file for the agency head's determination"),
             }))
         if award and award["state"] == SHOWN:
@@ -169,10 +178,11 @@ def evaluate(v: dict, entity: dict | None = None) -> list[dict]:
 
     certs = sorted(set((v.get("sam") or {}).get("certs") or []))
     sigs = {s["id"]: s for s in v.get("signals") or []}
+    suppression = v.get("suppression") or ""
     if certs:
         status = _el(SHOWN, ", ".join(certs), "SAM entity extract")
         affil = [sigs[k] for k in ("L_affil_cert", "R_split_cert", "R_split") if k in sigs]
-        if affil:
+        if affil and TRIBAL not in suppression:  # SBA doesn't treat a tribe's, ANC's or NHO's firms as affiliates for that reason
             parts = sorted({CERT_PART[c] for c in certs if c in CERT_PART})
             p = _provision("19.301", "SBA 8(a) continuing-eligibility review" if "8(a)" in certs else "SBA size and status (OHA)", {
                 "status": status,
@@ -183,7 +193,7 @@ def evaluate(v: dict, entity: dict | None = None) -> list[dict]:
                 p["cite"] = f"{p['cite']}; {', '.join(parts)}"
             out.append(p)
         growth = [sigs[k] for k in ("S2", "S3") if k in sigs]
-        if growth:
+        if growth and not suppression:  # growth signals are already discounted for lawful patterns
             out.append(_provision("52.219-14", "SBA limitations on subcontracting", {
                 "status": status,
                 "growth": _el(SHOWN, "; ".join(f"{_label(s)}: {s.get('detail', '')}" for s in growth), "Vendor file (FY24, FY25)"),

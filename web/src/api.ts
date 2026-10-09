@@ -325,7 +325,7 @@ export type FarProvision = {
 }
 export type FarSummary = {
   version: string
-  provisions: { id: string; cite: string; title: string; binds: string; vendors: number; supported: number; dollars: number }[]
+  provisions: { id: string; cite: string; title: string; binds: string; vendors: number; supported: number; dollars: number; green: number }[]
 }
 
 // What a subject screen found about one vendor, for the vendor record.
