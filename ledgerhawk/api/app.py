@@ -32,7 +32,7 @@ from ..exports.case import build_case
 from ..exports.small import build_small
 from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
-from ..exports.word import build_case_docx, build_subjects_docx
+from ..exports.word import build_case_docx, build_far_memo_docx, build_subjects_docx
 from ..exports.voi import build_voi
 from ..exports.analysis import COLORS, build_analysis_zip, color as vendor_color, paid_after_exclusion
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
@@ -1506,6 +1506,25 @@ def export_case_docx(run_id: str, uei: str, matter: str = "", privileged: bool =
                            matter=matter.strip(), privileged=privileged, context=store.context(uei=uei), case=(cs := store.case(run_id, uei)),
                            ledger=_ledger(v, cs))
     return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk case {uei}.docx"'})
+
+
+@app.get("/api/runs/{run_id}/vendors/{uei}/far-memo.docx")
+def export_far_memo(run_id: str, uei: str, matter: str = "", privileged: bool = False):
+    """FAR referral memo: the provisions this vendor's evidence may implicate, element by element, for the suspension
+    and debarment official or the OIG."""
+    data = _get(store.vendors, run_id)
+    v = data["by_uei"].get(uei)
+    if not v:
+        raise HTTPException(404, "Vendor not in this import")
+    far = _far_lens(run_id)(v)
+    live = [p["cite"] for p in far if p["status"] != "not_applicable"]
+    if not live:
+        raise HTTPException(404, "No FAR provisions to refer for this vendor")
+    body = build_far_memo_docx(v, far, store.summary(run_id), matter=matter.strip(), privileged=privileged,
+                               usaspending_at=(store.case_awards_index(run_id).get(uei) or {}).get("fetched_at", ""))
+    u = CURRENT_USER.get()
+    store.audit(u.name if u else "", "export", uei, run_id, "FAR referral memo: " + "; ".join(live))
+    return Response(body, media_type=DOCX, headers={"Content-Disposition": f'attachment; filename="LedgerHawk FAR memo {uei}.docx"'})
 
 
 @app.get("/api/runs/{run_id}/vendors/{uei}/graph")
