@@ -21,6 +21,7 @@ ALIASES = {
     "next": ["recommended next step", "next step"],
 }
 UEI_RE = re.compile(r"^[A-Z0-9]{12}$")
+EXPLAINED = "explained by open source"
 
 
 def _key(s: str) -> str:
@@ -83,6 +84,10 @@ def parse_decisions(path: str | Path, dispositions: list[str]) -> tuple[list[dic
         tier = tier_of(get("tier")) if "tier" in cols else ""
         disp_cell = get("disposition")
         disp = disposition_of(disp_cell, dispositions) if disp_cell else ""
+        explained_note = ""
+        if disp_cell and not disp and _norm(disp_cell).startswith(EXPLAINED + ":"):
+            # LedgerHawk's workbook marks an explained vendor's tier change in the disposition column; it is not a disposition
+            tier, explained_note, disp_cell = tier or "explained", disp_cell.split(":", 1)[1].strip(), ""
         if disp_cell and not disp:
             problems.append(f"Row {i} ({uei}): disposition \"{disp_cell}\" is not one of LedgerHawk's")
         if "tier" in cols and get("tier") and not tier:
@@ -93,7 +98,7 @@ def parse_decisions(path: str | Path, dispositions: list[str]) -> tuple[list[dic
                 f"Routes to: {get('routes')}." if get("routes") else "",
                 f"Next step: {get('next')}" if get("next") else ""]
         # the analyst's own note, when the workbook carries it, says it best
-        detail = note_of(disp_cell, disp) or " ".join(b for b in bits if b).strip()
+        detail = note_of(disp_cell, disp) or explained_note or " ".join(b for b in bits if b).strip()
         row = {"uei": uei, "name": get("name"), "tier": tier, "disposition": disp, "detail": detail}
         if uei in seen:  # listed twice: a later non-empty value wins, field by field
             problems.append(f"Row {i} ({uei}): listed more than once; merged with the earlier row")

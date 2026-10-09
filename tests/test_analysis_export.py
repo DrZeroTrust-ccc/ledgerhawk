@@ -209,3 +209,71 @@ def test_same_day_and_zero_dollar_actions_are_not_paid_after():
     small = {**timing, "paid_actions": 1, "paid_dollars": 223, "same_day": 0, "zero_dollar": 0}
     c, why = color(v, {}, None, small)
     assert c == "red" and "1 paid contract action ($223)" in why[0]
+
+
+def test_status_counts_paid_after_like_the_export(sam_ctx_export):
+    """The Imports page's "paid after exclusion" count uses the export's strict rule: new money strictly after the
+    exclusion date (a paid action or a new award), with the raw counts only for a lookup from before the strict count."""
+    import json as _json
+
+    import ledgerhawk.api.app as appmod
+    from ledgerhawk.exports.analysis import paid_after_exclusion
+    client, run_id = sam_ctx_export
+    st = appmod.store
+    excluded = [r["uei"] for r in st.vendors(run_id)["rows"] if "EXCLUDED" in r["exclusion_flags"]]
+    assert len(excluded) >= 4
+    for u in excluded:
+        f = st._case_dir(run_id, u) / "awards.json"
+        if f.exists():
+            f.unlink()
+    since = "2025-06-01"
+    act = lambda date, amount: {"flagged": True, "date": date, "amount": amount}  # noqa: E731
+    entities = {
+        excluded[0]: {"excluded_since": since, "actions_flagged": 1, "actions": [act("2025-07-01", 5000)]},  # paid
+        excluded[1]: {"excluded_since": since, "actions_flagged": 1, "actions": [act(since, 5000)]},  # same day only
+        excluded[2]: {"excluded_since": since, "actions_flagged": 1, "actions": [act("2025-07-01", 0)]},  # zero-dollar only
+        excluded[3]: {"actions_flagged": 2, "actions_dollars": 1e4, "after_exclusion": 0},  # a lookup from before the strict count
+    }
+    for u, e in entities.items():
+        d = st._case_dir(run_id, u)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "awards.json").write_text(_json.dumps({"fetched_at": "2026-10-08", "entities": [e]}))
+    idx = st.case_awards_index(run_id)
+    assert [paid_after_exclusion(idx[u]) for u in excluded[:4]] == [True, False, False, True]
+    status = client.get(f"/api/runs/{run_id}/exclusion-check").json()
+    assert status["checked"] == 4 and status["paid_after"] == 2  # the old rule counted the same-day and zero-dollar ones
+    new_award = {"excluded_since": since, "actions_flagged": 0, "after_exclusion": 0, "paid_actions": 0, "new_awards_after": 1}
+    assert paid_after_exclusion(new_award) and not paid_after_exclusion(None) and not paid_after_exclusion({})
+
+
+def test_vendors_of_interest_keeps_explained_vendors(sam_ctx_export, tmp_path):
+    """Vendors an analyst moved to "Explained by open source" are on the workbook, last, with the reason in the
+    disposition column, and the workbook still imports cleanly."""
+    import openpyxl
+
+    from ledgerhawk.api.store import DISPOSITIONS
+    from ledgerhawk.pipeline.decisions import parse_decisions
+    client, run_id = sam_ctx_export
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"queue": "any", "limit": 500}).json()["rows"]
+    a, b = [r for r in rows if r["tier"] != "explained" and not r["disposition"]][-2:]
+    for r in (a, b):
+        client.post(f"/api/runs/{run_id}/vendors/{r['uei']}/tier", json={"tier": "explained", "reason": "Public filings explain it", "analyst": "A"})
+    client.post(f"/api/runs/{run_id}/vendors/{b['uei']}/disposition",
+                json={"value": "Clear – lawful explanation", "note": "Checked.", "analyst": "A"})
+    body = client.get(f"/api/runs/{run_id}/exports/vendors-of-interest.xlsx").content
+    wb = openpyxl.load_workbook(io.BytesIO(body))
+    got = [[c.value for c in row][1:] for row in wb["Vendors of Interest"].iter_rows(min_row=6) if row[1].value]
+    by = {r[3]: r for r in got}
+    assert by[a["uei"]][1] == by[b["uei"]][1] == "Explained by open source"
+    assert by[a["uei"]][11].startswith("Explained by open source: Public filings explain it (A, ")
+    assert by[b["uei"]][11].startswith("Clear – lawful explanation: Checked. (A, ")  # a real disposition wins
+    tiers = [r[1] for r in got]
+    assert tiers == sorted(tiers, key=lambda t: t.startswith("Explained"))  # explained vendors come last
+    readme = " ".join(str(c.value) for row in wb["Read Me"].iter_rows() for c in row if c.value)
+    assert "Explained by open source" in readme
+    f = tmp_path / "voi.xlsx"
+    f.write_bytes(body)
+    parsed, problems = parse_decisions(f, DISPOSITIONS)
+    assert not [p for p in problems if a["uei"] in p or b["uei"] in p], problems
+    pa = next(r for r in parsed if r["uei"] == a["uei"])
+    assert pa["tier"] == "explained" and pa["disposition"] == "" and pa["detail"].startswith("Public filings explain it")
