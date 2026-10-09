@@ -66,17 +66,26 @@ class Weekly:
         now = now or datetime.now(timezone.utc)
         s = self._read()
         nxt = self.slot(now)
-        if now >= nxt and s.get("last_week") == _week(now):
-            nxt += timedelta(days=7)
+        if now >= nxt:
+            # done this week (or this week's slot came before the schedule existed): next week; else it's overdue
+            # (the server was down at the slot) and starts within the next check
+            nxt = nxt + timedelta(days=7) if s.get("last_week", _week(now)) == _week(now) else now
         return {"enabled": self.enabled, "when": f"{DAYS[self.day]}s after {self.hour:02d}:00 UTC", "keep": self.keep,
                 "next": nxt.isoformat(timespec="minutes") if self.enabled else None,
                 "targets": [self.store.run_ref(r) for r in self.store.weekly_targets(self.packs)],
                 "last": s.get("last")}
 
     # -- running ---------------------------------------------------------------------------------------------------
+    def baseline(self, now: datetime | None = None) -> None:
+        """The first time the schedule runs, count a slot already past this week as done, so turning it on (or
+        deploying it) midweek doesn't start a re-screen right away; the first one is the next slot."""
+        now = now or datetime.now(timezone.utc)
+        if "last_week" not in self._read():
+            self._write(last_week=_week(now if now >= self.slot(now) else now - timedelta(days=7)))
+
     def due(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(timezone.utc)
-        return (self.enabled and now >= self.slot(now) and self._read().get("last_week") != _week(now)
+        return (self.enabled and now >= self.slot(now) and self._read().get("last_week", _week(now)) != _week(now)
                 and not self.store.heavy_job_running() and bool(self.store.weekly_targets(self.packs)))
 
     def run(self, now: datetime | None = None) -> list[dict]:
@@ -109,6 +118,8 @@ class Weekly:
             self.digest(rid)
 
     def start_loop(self, every: float = 900) -> None:
+        self.baseline()
+
         def loop():
             while True:
                 time.sleep(every)
