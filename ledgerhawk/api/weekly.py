@@ -6,6 +6,7 @@ note goes out as an alert. Older automatic follow-ups are removed so the disk do
   LEDGERHAWK_WEEKLY_DAY      0 = Monday (default) ... 6 = Sunday
   LEDGERHAWK_WEEKLY_HOUR     the hour (UTC) it starts after (default 11, 7am Eastern)
   LEDGERHAWK_WEEKLY_KEEP     how many automatic follow-ups to keep (default 4)
+  LEDGERHAWK_WEEKLY_PACKS    policy pack ids to re-screen, comma-separated (default: every pack)
 """
 from __future__ import annotations
 
@@ -30,7 +31,8 @@ def _week(d: datetime) -> str:
 
 class Weekly:
     def __init__(self, store, digest: Callable[[str], None] | None = None, refresh: Callable[[], None] | None = None,
-                 enabled: bool | None = None, day: int | None = None, hour: int | None = None, keep: int | None = None):
+                 enabled: bool | None = None, day: int | None = None, hour: int | None = None, keep: int | None = None,
+                 packs: list[str] | None = None):
         e = os.environ.get
         self.store = store
         self.digest = digest  # digest(run_id): tell people what's new; called once the re-screen finishes
@@ -39,6 +41,8 @@ class Weekly:
         self.day = int(e("LEDGERHAWK_WEEKLY_DAY") or 0) if day is None else day
         self.hour = int(e("LEDGERHAWK_WEEKLY_HOUR") or 11) if hour is None else hour
         self.keep = max(1, int(e("LEDGERHAWK_WEEKLY_KEEP") or 4)) if keep is None else keep
+        self.packs = ([p.strip() for p in e("LEDGERHAWK_WEEKLY_PACKS", "").split(",") if p.strip()] or None) \
+            if packs is None else packs
 
     # -- status --------------------------------------------------------------------------------------------------
     def _path(self) -> Path:
@@ -66,21 +70,21 @@ class Weekly:
             nxt += timedelta(days=7)
         return {"enabled": self.enabled, "when": f"{DAYS[self.day]}s after {self.hour:02d}:00 UTC", "keep": self.keep,
                 "next": nxt.isoformat(timespec="minutes") if self.enabled else None,
-                "targets": [self.store.run_ref(r) for r in self.store.weekly_targets()],
+                "targets": [self.store.run_ref(r) for r in self.store.weekly_targets(self.packs)],
                 "last": s.get("last")}
 
     # -- running ---------------------------------------------------------------------------------------------------
     def due(self, now: datetime | None = None) -> bool:
         now = now or datetime.now(timezone.utc)
         return (self.enabled and now >= self.slot(now) and self._read().get("last_week") != _week(now)
-                and not self.store.heavy_job_running() and bool(self.store.weekly_targets()))
+                and not self.store.heavy_job_running() and bool(self.store.weekly_targets(self.packs)))
 
     def run(self, now: datetime | None = None) -> list[dict]:
         """Start this week's re-screens (they queue behind each other and any import already running)."""
         now = now or datetime.now(timezone.utc)
         self._write(last_week=_week(now))
         jobs = []
-        for i, target in enumerate(self.store.weekly_targets()):
+        for i, target in enumerate(self.store.weekly_targets(self.packs)):
             label = self.store.run_ref(target)["label"]
             refresh = self.refresh if i == 0 else None
 

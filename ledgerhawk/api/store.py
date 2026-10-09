@@ -470,12 +470,13 @@ class Store:
                                auto=auto)
 
     # ---- the weekly re-screen ----
-    def weekly_targets(self) -> list[str]:
-        """What the weekly re-screen follows up: the newest real (not synthetic) import under each policy pack."""
+    def weekly_targets(self, packs: list[str] | None = None) -> list[str]:
+        """What the weekly re-screen follows up: the newest real (not synthetic) import under each policy pack, or
+        under just the packs named."""
         seen, out = set(), []
         for m in self.list_runs():  # newest first
             pack = (m.get("policy") or {}).get("pack_id", DEFAULTS_ID)
-            if m.get("data_class") == "synthetic" or m.get("parent_id") or pack in seen:
+            if m.get("data_class") == "synthetic" or m.get("parent_id") or pack in seen or (packs and pack not in packs):
                 continue
             seen.add(pack)
             out.append(m["id"])

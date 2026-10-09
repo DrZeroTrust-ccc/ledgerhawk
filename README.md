@@ -378,4 +378,5 @@ any import with analyst work on it, and any import another one was restored from
 that followed a removed one is re-linked so decisions still carry forward. Removed imports are in the nightly backups.
 
 Settings: `LEDGERHAWK_WEEKLY=0` turns it off; `LEDGERHAWK_WEEKLY_DAY` (0 = Monday), `LEDGERHAWK_WEEKLY_HOUR` (UTC) and
-`LEDGERHAWK_WEEKLY_KEEP` change when it runs and how many are kept.
+`LEDGERHAWK_WEEKLY_KEEP` change when it runs and how many are kept, and `LEDGERHAWK_WEEKLY_PACKS` (pack ids,
+comma-separated) limits it to some policy packs.

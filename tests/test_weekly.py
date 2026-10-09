@@ -33,6 +33,8 @@ def test_due_once_a_week_after_the_slot(st):
     assert w.status(at(2026, 10, 14))["next"].startswith("2026-10-19T11:00")
     assert not Weekly(st, enabled=False).due(at(2026, 10, 12))
     assert [t["id"] for t in w.status()["targets"]] == [st.first]
+    assert Weekly(st, enabled=True, packs=["gsa-fy26-pilot"]).status()["targets"] == []  # first is under the defaults
+    assert not Weekly(st, enabled=True, packs=["gsa-fy26-pilot"]).due(at(2026, 10, 12))
 
 
 def test_weekly_follows_up_digests_and_prunes_without_losing_decisions(st):
