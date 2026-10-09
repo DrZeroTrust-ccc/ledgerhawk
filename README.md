@@ -343,3 +343,22 @@ Everything LedgerHawk holds lives in `LEDGERHAWK_DATA_DIR`: imports, uploaded so
 
   What was in the data folder is moved aside to `<data dir>.before-restore-<time>`, never deleted; remove it once the
   restore checks out (the disk is small).
+
+## Alerts
+
+LedgerHawk tells an Admin when something goes wrong while nobody is watching:
+
+- an import, follow-up, restore, USAspending check or policy preview fails, including when it runs out of memory;
+- USAspending doesn't answer for some excluded vendors;
+- a backup fails;
+- the server restarts without being asked to. A deploy or restart from Render shuts down cleanly; running out of
+  memory doesn't, and the next start says so.
+
+Every alert is listed under **Alerts** on the People page, with a **Send a test alert** button. To be told right away,
+set either or both on the server:
+
+- `LEDGERHAWK_ALERT_WEBHOOK`: a Slack, Microsoft Teams, Google Chat or Discord incoming-webhook URL.
+- `LEDGERHAWK_ALERT_EMAIL` (comma-separated) with `LEDGERHAWK_SMTP_HOST`, `LEDGERHAWK_SMTP_PORT` (587, STARTTLS),
+  `LEDGERHAWK_SMTP_USER`, `LEDGERHAWK_SMTP_PASSWORD` and optionally `LEDGERHAWK_SMTP_FROM`.
+
+`LEDGERHAWK_SITE_URL` adds a link to the site in each alert. The same alert isn't sent twice within an hour.

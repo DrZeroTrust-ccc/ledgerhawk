@@ -134,6 +134,7 @@ def compare_runs(old_rows: list[dict], new_rows: list[dict]) -> dict:
             "counts": {"new": len(added), "dropped": len(dropped), "changed": len(changed)}}
 
 
+JOB_KINDS = {"new": "Import", "follow_up": "Follow-up import", "restore": "Restore", "check": "USAspending check"}
 OUT_OF_MEMORY = ("The server ran out of memory partway through. LedgerHawk itself kept running. Try again when nothing "
                  "else is importing; if it happens again, the file needs a larger server.")
 RECOVERED = "Saved before the job was cut off; its last steps are finished when the import is opened."
@@ -198,6 +199,7 @@ class Store:
         self.jobs_inline = os.environ.get("LEDGERHAWK_JOBS_INLINE") == "1"
         # heavy jobs (imports, previews, checks) run in a process of their own where the system allows it
         self.isolate_jobs = hasattr(os, "fork") and os.environ.get("LEDGERHAWK_JOBS_IN_PROCESS") != "1"
+        self.alert = None  # alert(kind, title, detail, key=...) tells an Admin something went wrong; set by the app
         self._jobs_running: set[tuple[str, str]] = set()
         self._lock = threading.Lock()
         self._auto_lock = threading.Lock()
@@ -523,6 +525,13 @@ class Store:
                 f.write_text(json.dumps(j, indent=2))
         return j
 
+    def _alert(self, kind: str, title: str, detail: str = "", key: str = "") -> None:
+        if self.alert:
+            try:
+                self.alert(kind, title, detail, key=key)
+            except Exception:
+                logging.getLogger("ledgerhawk").exception("couldn't raise an alert")
+
     def _recover_run(self, j: dict) -> str:
         """The import a cut-off job made, if it got as far as saving one (only the comparison or the log entry
         missing): imports run one at a time, so it's the first one created after this job began running and before
@@ -620,6 +629,9 @@ class Store:
             finally:
                 if cleanup:
                     shutil.rmtree(cleanup, ignore_errors=True)
+            if job["state"] == "error":
+                self._alert("job", f"{JOB_KINDS.get(kind, 'Import')} failed: {label}",
+                            f"Started by {by or 'someone'}. {job['error']}", key=f"job:{jid}")
         if self.jobs_inline:
             work()
         else:
@@ -684,6 +696,7 @@ class Store:
                       result=self._isolated(self._run_preview, pid, draft, lambda step: write(step=step)))
             except OutOfMemory:
                 write(state="error", finished_at=_now(), error=OUT_OF_MEMORY)
+                self._alert("job", f"Policy preview failed: {pid}", f"Started by {by or 'someone'}. {OUT_OF_MEMORY}")
             except (ValueError, KeyError, FileNotFoundError) as exc:
                 write(state="error", finished_at=_now(), error=str(exc).strip("'\""))
             except Exception as exc:
@@ -1719,6 +1732,10 @@ class Store:
         self.audit(analyst, "exclusion_check", None, run_id, f"USAspending check of {len(rows)} excluded vendors"
                    + (" not yet looked up" if not again else "") + ": "
                    f"{ok} looked up" + (f", {failed} didn't answer" if failed else ""))
+        if failed:
+            self._alert("check", f"USAspending didn't answer for {failed} excluded vendor{'s' if failed != 1 else ''}",
+                        f"{ok} of {len(rows)} were looked up in {self.run_meta(run_id)['label']}. Those not answered stay "
+                        "red as 'not yet checked'; run the check again to finish them.", key=f"check:{run_id}:{_now()[:13]}")
         return run_id
 
     def fetch_case_awards(self, run_id: str, uei: str, analyst: str) -> dict:

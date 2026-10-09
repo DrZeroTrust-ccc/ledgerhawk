@@ -189,8 +189,81 @@ export default function PeoplePage({ myEmail }: { myEmail: string }) {
           </div>
         )}
       </Card>
+      <AlertsCard />
       <BackupsCard />
     </div>
+  )
+}
+
+// Admins only: what went wrong while nobody was looking, and where those alerts go.
+function AlertsCard() {
+  const { data, error, reload } = useAsync(() => api.alerts(), [])
+  const [note, setNote] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <Card
+      title="Alerts"
+      action={
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            setErr(null)
+            setNote(null)
+            try {
+              const r = await api.testAlert()
+              setNote(
+                r.channels.length
+                  ? r.sent.length
+                    ? `Test alert sent by ${r.sent.join(' and ')}.`
+                    : 'The test alert wasn’t delivered; see below.'
+                  : 'Test alert kept here. No chat webhook or email is set up, so nothing was sent.',
+              )
+              reload()
+            } catch (e) {
+              setErr((e as Error).message)
+            }
+          }}
+        >
+          Send a test alert
+        </Button>
+      }
+    >
+      <ErrorNote error={error || err} />
+      {note && (
+        <p role="status" className="mb-2 text-sm text-emerald-800">
+          {note}
+        </p>
+      )}
+      {!data && !error && <Loading />}
+      {data && (
+        <div className="space-y-3 text-sm">
+          <p className="text-slate-600">
+            {data.channels.length
+              ? `Sent to ${data.channels.join(' and ')} when an import or check fails, a backup fails, or the server restarts without being asked to.`
+              : 'Kept here only. Set LEDGERHAWK_ALERT_WEBHOOK (Slack, Teams, Google Chat) or LEDGERHAWK_ALERT_EMAIL with SMTP settings on the server to be told right away.'}
+          </p>
+          {data.alerts.length === 0 ? (
+            <p className="text-slate-500">Nothing has gone wrong.</p>
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {data.alerts.slice(0, 15).map((a) => (
+                <li key={a.at + a.title} className="py-2">
+                  <div className="flex flex-wrap justify-between gap-x-4">
+                    <span className={a.kind === 'test' ? 'font-medium text-slate-700' : 'font-medium text-crimson'}>{a.title}</span>
+                    <span className="tabular text-xs text-slate-500">
+                      {when(a.at)}
+                      {a.repeat ? ' · repeat, not re-sent' : a.sent.length ? ` · sent by ${a.sent.join(', ')}` : ''}
+                    </span>
+                  </div>
+                  {a.detail && <p className="mt-0.5 text-xs text-slate-600">{a.detail}</p>}
+                  {a.errors.length > 0 && <p className="mt-0.5 text-xs text-crimson">Not delivered: {a.errors.join('; ')}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
   )
 }
 

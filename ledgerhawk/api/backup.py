@@ -152,6 +152,7 @@ class Backups:
         self._busy = busy
         self._lock = threading.Lock()
         self.running = False
+        self.on_failure: Callable[[str], None] | None = None  # told the error when a backup fails
 
     # -- status --------------------------------------------------------------------------------------------------
     def _status_path(self) -> Path:
@@ -211,8 +212,13 @@ class Backups:
             self._write(last_ok=ok, last_error=None)
             return ok
         except Exception as exc:
-            self._write(last_error={"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": by,
-                                    "error": f"{type(exc).__name__}: {exc}"[:500]})
+            err = f"{type(exc).__name__}: {exc}"[:500]
+            self._write(last_error={"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "by": by, "error": err})
+            if self.on_failure:
+                try:
+                    self.on_failure(err)
+                except Exception:
+                    pass
             raise
         finally:
             self.running = False
