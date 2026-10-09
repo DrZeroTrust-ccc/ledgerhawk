@@ -526,6 +526,9 @@ export default function VendorPage() {
               items={[
                 { label: 'Case file (Word)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.docx`, hint: 'Editable, with notes and sign-off' },
                 { label: 'Case file (PDF)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/case.pdf`, hint: 'For sharing as is' },
+                ...(v.far.some((p) => p.status !== 'not_applicable')
+                  ? [{ label: 'FAR referral memo (Word)', href: `/api/runs/${id}/vendors/${encodeURIComponent(v.uei)}/far-memo.docx`, hint: 'Provisions to review, for the SDO or OIG' }]
+                  : []),
               ]}
             />
           </span>
