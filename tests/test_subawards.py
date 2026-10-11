@@ -58,3 +58,12 @@ def test_the_awards_index_carries_subcontract_counts(tmp_path):
     a = st.case_awards_index("r1")["U1"]
     assert a["subawards"] == 2 and a["subawards_after"] == 1 and a["subawards_after_dollars"] == 250000.0
     assert paid_after_exclusion(a)
+
+
+def test_actions_summary_counts_paid_actions_like_the_chart():
+    mk = lambda d, amt, lab="work added or changed": {"date": d, "amount": amt, "label": lab, "flagged": True,  # noqa: E731
+                                                      "schedule": False, "kind": "work", "award_id": "X", "mod": "P1", "action_type": "B"}
+    s = aw.actions_summary([mk("2025-10-23", 0), mk("2025-12-02", 11000, "funding added"), mk("2026-01-12", 1.9e6)], "2025-10-21")
+    assert s.startswith("2 paid actions after the exclusion of 2025-10-21") and "$1,911,000 obligated" in s
+    assert s.endswith("plus 1 with no new money (on the exclusion date or $0)")
+    assert aw.actions_summary([mk("2025-10-21", 500)], "2025-10-21").startswith("No paid actions after the exclusion")

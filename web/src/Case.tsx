@@ -401,9 +401,22 @@ function AfterExclusion({ e }: { e: AwardEntity }) {
   const flagged = (e.actions ?? []).filter((a) => a.flagged || (a.schedule && a.kind === 'cancel'))
   if (e.actions_error) return <div className="mt-1 text-xs text-crimson">{e.actions_error}</div>
   if (!flagged.length) return null
+  // counted the way "paid after exclusion" is (new money strictly after the date), so it agrees with the chart above;
+  // computed here so lookups saved before this wording read the same
+  const since = e.excluded_since
+  const marked = flagged.filter((a) => a.flagged)
+  const paid = marked.filter((a) => a.amount > 0 && a.date > since)
+  const other = marked.length - paid.length
+  const headline = paid.length
+    ? `${paid.length} paid action${paid.length === 1 ? '' : 's'} after the exclusion of ${since} (${money(paid.reduce((s, a) => s + a.amount, 0))})` +
+      (other ? `, plus ${other} with no new money (on the exclusion date or $0)` : '')
+    : marked.length
+      ? `No paid actions after the exclusion of ${since}: ${other} with no new money (on the exclusion date or $0)`
+      : ''
+  const schedule = (e.actions_summary ?? '').split('. ').filter((s) => s.includes('GSA Schedule'))
   return (
     <div className="mt-2 rounded-md bg-crimson-50 px-2 py-1.5 text-xs">
-      <div className="font-medium text-crimson">{e.actions_summary}</div>
+      <div className="font-medium text-crimson">{[headline, ...schedule].filter(Boolean).join('. ')}</div>
       <ul className="mt-1 divide-y divide-crimson/10">
         {flagged.slice(0, 8).map((a) => (
           <li key={a.award_id + a.mod + a.date} className="flex flex-wrap items-baseline justify-between gap-x-3 py-0.5">
