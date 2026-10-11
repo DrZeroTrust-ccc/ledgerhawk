@@ -13,6 +13,7 @@ import IntegrityPage from './pages/IntegrityPage'
 import SubjectsPage from './pages/SubjectsPage'
 import SubjectScreenPage from './pages/SubjectScreenPage'
 import RunRecordPage from './pages/RunRecordPage'
+import ExecutivePage from './pages/ExecutivePage'
 import MyCasesPage from './pages/MyCasesPage'
 import VendorsPage from './pages/VendorsPage'
 import VendorLookupPage from './pages/VendorLookupPage'
@@ -123,6 +124,9 @@ function RunBar() {
           <NavLink to={`/runs/${id}/record`} className={sub}>
             Import record
           </NavLink>
+          <NavLink to={`/runs/${id}/executive`} className={sub}>
+            Executive summary
+          </NavLink>
         </div>
       </div>
     </div>
@@ -158,7 +162,7 @@ export default function App() {
     <RunsContext.Provider value={{ runs: runs.data, reload: runs.reload }}>
       <AnalystContext.Provider value={analyst}>
         <div className="flex min-h-screen flex-col">
-          <header className="bg-navy">
+          <header className="bg-navy print:hidden">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-6">
               <Wordmark />
               <Nav admin={signedIn?.role === 'admin'} />
@@ -190,7 +194,11 @@ export default function App() {
               </div>
             </div>
           )}
-          {signedIn?.role !== null && <RunBar />}
+          {signedIn?.role !== null && (
+            <div className="print:hidden">
+              <RunBar />
+            </div>
+          )}
           <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
             {signedIn && signedIn.role === null ? (
               <Pending me={signedIn} />
@@ -204,6 +212,7 @@ export default function App() {
                 <Route path="/runs/:id/exclusion-gaps" element={<ExclusionGapsPage />} />
                 <Route path="/runs/:id/integrity" element={<IntegrityPage />} />
                 <Route path="/runs/:id/record" element={<RunRecordPage />} />
+                <Route path="/runs/:id/executive" element={<ExecutivePage />} />
                 <Route path="/vendors" element={<VendorsPage />} />
                 <Route path="/vendors/:uei" element={<VendorLookupPage />} />
                 <Route path="/subjects" element={<SubjectsPage />} />

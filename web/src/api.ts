@@ -290,6 +290,26 @@ export type Subaward = {
   after_exclusion: boolean
   url: string
 }
+export type Executive = {
+  import: { id: string; label: string; created_at: string; data_class: string; policy: string; policy_version: number }
+  screened: { vendors: number; dollars: number }
+  red: { vendors: number; dollars: number }
+  yellow: { vendors: number; dollars: number }
+  excluded: { vendors: number; checked: number; paid_after: number; paid_after_dollars: number; subcontracts_after: number }
+  watchlists: { vendors: number; checked: boolean; ofac: number; leie: number }
+  top: { uei: string; name: string; tot: number; why: string }[]
+  changes: { since: string; new: number; dropped: number; changed: number; new_top: { uei: string; name: string; tot: number }[] } | null
+  data: { sam: string | null; exclusions: string | null; watchlists: string; usaspending: string }
+  effort: {
+    rows: { task: string; hours: number; basis: string }[]
+    total: number
+    low: number
+    high: number
+    weeks_one_analyst: number
+    note: string
+  }
+  machine_minutes: number | null
+}
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -992,6 +1012,7 @@ export const api = {
   run: (id: string) => req<RunSummary>(`/api/runs/${id}`),
   createRun: (form: FormData) => req<ImportStart>('/api/runs', { method: 'POST', body: form }),
   weekly: () => req<WeeklyStatus>('/api/weekly'),
+  executive: (id: string) => req<Executive>(`/api/runs/${id}/executive`),
   importJobs: (active: boolean) => req<{ jobs: ImportJob[] }>(`/api/import-jobs${active ? '?active=true' : ''}`),
   importJob: (id: string) => req<ImportJob>(`/api/import-jobs/${encodeURIComponent(id)}`),
   exclusionCheck: (id: string) => req<{ excluded: number; checked: number; paid_after: number }>(`/api/runs/${id}/exclusion-check`),
