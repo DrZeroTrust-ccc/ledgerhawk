@@ -68,7 +68,7 @@ export default function MyCasesPage() {
                   </div>
                   {r.due && (
                     <span
-                      className={`tabular w-24 text-xs ${r.due < today && (!r.disposition || r.disposition.carried_from) ? 'font-semibold text-crimson' : 'text-slate-600'}`}
+                      className={`tabular w-28 whitespace-nowrap text-xs ${r.due < today && (!r.disposition || r.disposition.carried_from) ? 'font-semibold text-crimson' : 'text-slate-600'}`}
                     >
                       due {r.due}
                     </span>
