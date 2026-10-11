@@ -6,6 +6,7 @@ import { useAnalystName } from '../App'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { api, LANE_LABEL, money, REASON_LABEL, type ExclusionHit, type SamCard, type VendorDetail } from '../api'
 import LinkMap from '../LinkMap'
+import FamilyCard from '../FamilyCard'
 import { FarCard } from '../Far'
 import { MoneyByYear, ScreenEvidence, WhyHere } from '../VendorRecord'
 import { Button, Card, ColorChip, DownloadMenu, ErrorNote, FlagChip, Loading, QueueChip, TierChip, TIER_SHORT, useAsync } from '../ui'
@@ -662,6 +663,7 @@ export default function VendorPage() {
               {tab === 'money' && (
                 <>
                   <SignalsCard v={v} />
+                  {v.family && v.family.length > 1 && <FamilyCard runId={id} family={v.family} />}
                   <CaseAwards runId={id} v={v} reload={reload} />
                 </>
               )}

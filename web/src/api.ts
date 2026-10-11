@@ -313,6 +313,19 @@ export type Executive = {
   machine_minutes: number | null
 }
 export type CaseActivity = { last_viewed: string | null; updates: number; latest: string }
+export type FamilyMember = {
+  uei: string
+  name: string
+  fy24: number
+  fy25: number
+  tot: number
+  certs: string[]
+  start: string
+  state: string
+  queue: string
+  self: boolean
+  excluded: boolean
+}
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -404,6 +417,7 @@ export type VendorDetail = VendorRow & {
   why: string
   exclusion: ExclusionHit[]
   watchlist?: { list: string; name: string; detail: string; date: string; match: string; url: string }[]
+  family?: FamilyMember[]
   history: HistoryItem[]
   case: {
     review: ScreenReview
