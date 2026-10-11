@@ -6,7 +6,40 @@ same screen by hand, scaled to this import's size.
 """
 from __future__ import annotations
 
+from ..pipeline.integrity import INTEGRITY_MEANING
 from .analysis import exclusion_timing
+
+# The reasons behind a color, grouped for the "where the flagged money is" chart: (key, label, does the reason match)
+REASONS = [
+    ("paid_after", "Paid after exclusion", lambda r: r.startswith("USAspending:") or ("obligations in" in r and "began after" in r)
+     or r == INTEGRITY_MEANING["A"]),
+    ("unchecked", "Excluded, payments not yet checked", lambda r: r.startswith("On the SAM exclusions list; payments")),
+    ("signals", "Two or more independent signals", lambda r: r == "Two or more independent signals"),
+    ("analyst", "Analyst Tier 1 or referral", lambda r: r in ("Analyst set Tier 1", "Analyst decided to refer")),
+    ("watchlist", "OFAC or HHS-OIG name match", lambda r: r.startswith("Same name as an OFAC") or "HHS-OIG exclusion" in r),
+    ("strong", "One strong signal", lambda r: r == "One strong signal"),
+    ("related", "Related firms in SAM", lambda r: r == "Related firms in SAM"),
+    ("tied", "Tied to an excluded party", lambda r: r == "Tied to an excluded party" or r in (INTEGRITY_MEANING["B"], INTEGRITY_MEANING["C"])),
+    ("cleared", "Excluded, not paid after", lambda r: r.startswith("Excluded") and ("no contract actions" in r or "no new money" in r)),
+    ("analyst_low", "Analyst Tier 2 or 3", lambda r: r in ("Analyst set Tier 2", "Analyst set Tier 3")),
+    ("mailbox", "Mailbox or virtual-office address", lambda r: "mailbox" in r or "virtual office" in r),
+]
+
+
+def by_reason(rows: list[dict], colored: dict[str, tuple[str, list[str]]]) -> list[dict]:
+    """Red and yellow dollars and vendors per reason, largest first. A vendor counts once under each reason it has, so
+    the bars overlap and don't add up to the total."""
+    out = {k: {"key": k, "label": label, "vendors": 0, "dollars": 0.0, "red": 0, "yellow": 0} for k, label, _ in REASONS}
+    for r in rows:
+        c, why = colored.get(r["uei"], ("", []))
+        if c not in ("red", "yellow"):
+            continue
+        hit = {k for k, _, test in REASONS for w in why if test(w)}
+        for k in hit:
+            out[k]["vendors"] += 1
+            out[k]["dollars"] += float(r.get("tot") or 0)
+            out[k][c] += 1
+    return sorted((dict(x, dollars=round(x["dollars"], 2)) for x in out.values() if x["vendors"]), key=lambda x: -x["dollars"])
 
 # Hours to do each part by hand: (label, hours, basis). Scaled to the import in effort().
 EFFORT = [
@@ -58,6 +91,7 @@ def build(rows: list[dict], colored: dict[str, tuple[str, list[str]]], awards: d
         "watchlists": {"vendors": len(watch), "checked": bool(man.get("watchlists")),
                        "ofac": sum(1 for r in watch if any(h["list"] == "OFAC SDN" for h in r["watchlist"])),
                        "leie": sum(1 for r in watch if any(h["list"] == "HHS-OIG LEIE" for h in r["watchlist"]))},
+        "by_reason": by_reason(rows, colored),
         "top": [{"uei": r["uei"], "name": r["name"], "tot": float(r.get("tot") or 0), "why": colored[r["uei"]][1][0]}
                 for r in top_red],
         "changes": ({"since": (summary.get("follows") or {}).get("created_at", "")[:10], **ch["counts"],

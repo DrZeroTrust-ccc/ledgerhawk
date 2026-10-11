@@ -299,6 +299,7 @@ export type Executive = {
   excluded: { vendors: number; checked: number; paid_after: number; paid_after_total: number; paid_after_dollars: number; subcontracts_after: number }
   watchlists: { vendors: number; checked: boolean; ofac: number; leie: number }
   top: { uei: string; name: string; tot: number; why: string }[]
+  by_reason: { key: string; label: string; vendors: number; dollars: number; red: number; yellow: number }[]
   changes: { since: string; new: number; dropped: number; changed: number; new_top: { uei: string; name: string; tot: number }[] } | null
   data: { sam: string | null; exclusions: string | null; watchlists: string; usaspending: string }
   effort: {
