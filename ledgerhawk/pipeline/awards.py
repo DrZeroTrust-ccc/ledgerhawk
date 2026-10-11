@@ -209,12 +209,18 @@ def actions_summary(actions: list[dict], since: str) -> str:
     flagged = [a for a in actions if a["flagged"]]
     parts_out = []
     if flagged:
+        # paid counts the way "paid after exclusion" does: new money strictly after the date; the rest are said apart
+        paid = [a for a in flagged if a["amount"] > 0 and a["date"] > since]
+        other = len(flagged) - len(paid)
         by_kind: dict[str, int] = {}
-        for a in flagged:
+        for a in paid or flagged:
             by_kind[a["label"]] = by_kind.get(a["label"], 0) + 1
         parts = ", ".join(f"{k}: {n}" for k, n in by_kind.items())
-        money_after = sum(a["amount"] for a in flagged if a["amount"] > 0)
-        line = f"{len(flagged)} action{'' if len(flagged) == 1 else 's'} after the exclusion of {since} ({parts}; ${money_after:,.0f} obligated)"
+        money_after = sum(a["amount"] for a in paid)
+        nothing = f"{other} with no new money (on the exclusion date or $0)"
+        line = (f"{len(paid)} paid action{'' if len(paid) == 1 else 's'} after the exclusion of {since} "
+                f"({parts}; ${money_after:,.0f} obligated)" + (f", plus {nothing}" if other else "")
+                if paid else f"No paid actions after the exclusion of {since}: {nothing}")
         sched = [a for a in flagged if a["schedule"]]
         if sched:
             last = sched[-1]
