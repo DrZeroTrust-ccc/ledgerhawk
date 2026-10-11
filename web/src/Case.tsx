@@ -1,6 +1,7 @@
 // Case tools shared by subject screens and leads in a run: notes and evidence, two-person sign-off, awards and the
 // evidence ledger. Each page supplies a CaseCtx that says where its notes and sign-off are stored.
 import { useState } from 'react'
+import ExclusionTimeline from './ExclusionTimeline'
 import {
   api,
   money,
@@ -511,7 +512,13 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
             {e.error ? (
               <div className="text-xs text-crimson">{e.error}</div>
             ) : e.count === 0 ? (
-              <div className="text-xs text-slate-500">No contracts or IDVs on USAspending.</div>
+              <>
+                <div className="text-xs text-slate-500">No contracts or IDVs of its own on USAspending.</div>
+                {/* a firm with no prime contracts can still be paid as a subcontractor, or by actions on an old award */}
+                <ExclusionTimeline e={e} />
+                <AfterExclusion e={e} />
+                <Subcontracts e={e} />
+              </>
             ) : (
               <>
                 <div className="tabular text-xs text-slate-600">
@@ -524,6 +531,7 @@ export function AwardBlock({ entities, awards }: { entities: AwardEntity[]; awar
                     {e.after_exclusion} award{e.after_exclusion === 1 ? '' : 's'} started on or after the exclusion of {e.excluded_since}
                   </div>
                 )}
+                <ExclusionTimeline e={e} />
                 <AfterExclusion e={e} />
                 <Subcontracts e={e} />
                 <ByYear e={e} />
