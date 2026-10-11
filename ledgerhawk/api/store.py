@@ -248,6 +248,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS person_seen (email TEXT PRIMARY KEY, at TEXT NOT NULL);
                 """
             )
+            if "due" not in {r[1] for r in db.execute("PRAGMA table_info(run_assignment)")}:
+                db.execute("ALTER TABLE run_assignment ADD COLUMN due TEXT")  # a due date set with the assignment
             if "email" not in {r[1] for r in db.execute("PRAGMA table_info(audit)")}:
                 db.execute("ALTER TABLE audit ADD COLUMN email TEXT")  # who, by sign-in, beside the name
             db.execute("CREATE INDEX IF NOT EXISTS audit_at ON audit (at)")
@@ -256,7 +258,8 @@ class Store:
                 db.execute("INSERT OR IGNORE INTO run_disposition SELECT run_id, uei, value, note, analyst, at "
                            "FROM disposition WHERE run_id IS NOT NULL")
                 for table, col, action in (("routing", "owner", "routing"), ("assignment", "assignee", "assigned")):
-                    db.execute(f"INSERT OR IGNORE INTO run_{table} SELECT a.run_id, t.uei, t.{col}, t.analyst, t.at "
+                    db.execute(f"INSERT OR IGNORE INTO run_{table} (run_id, uei, {col}, analyst, at) "
+                               f"SELECT a.run_id, t.uei, t.{col}, t.analyst, t.at "
                                f"FROM {table} t JOIN audit a ON a.id = (SELECT MAX(id) FROM audit WHERE uei = t.uei "
                                "AND action = ? AND run_id IS NOT NULL)", (action,))
                 db.execute("INSERT INTO migration VALUES ('per_run', ?)", (_now(),))
@@ -1916,20 +1919,47 @@ class Store:
         self.audit(analyst, "routing", uei, run_id, f"Routed to {owner.strip()}")
         return {"uei": uei, "owner": owner.strip(), "analyst": analyst, "at": at}
 
-    def assign(self, ueis: list[str], assignee: str, analyst: str, run_id: str) -> int:
+    def assign(self, ueis: list[str], assignee: str, analyst: str, run_id: str, due: str = "") -> int:
+        """Assign leads to an analyst, optionally due by a date (YYYY-MM-DD). An empty assignee unassigns, overriding
+        one carried from an earlier run."""
         if not analyst.strip():
             raise ValueError("An analyst name is required.")
+        if due:
+            try:
+                due = date.fromisoformat(due).isoformat()
+            except ValueError:
+                raise ValueError("Enter the due date as YYYY-MM-DD.")
+        who_, due = assignee.strip(), (due if assignee.strip() else "")
         at = _now()
         with self._db() as db:
-            if assignee.strip():
-                db.executemany("INSERT OR REPLACE INTO run_assignment VALUES (?,?,?,?,?)",
-                               [(run_id, u, assignee.strip(), analyst, at) for u in ueis])
-            else:
-                # an empty assignee in this run overrides one carried from an earlier run
-                db.executemany("INSERT OR REPLACE INTO run_assignment VALUES (?,?,?,?,?)", [(run_id, u, "", analyst, at) for u in ueis])
+            db.executemany("INSERT OR REPLACE INTO run_assignment (run_id, uei, assignee, analyst, at, due) VALUES (?,?,?,?,?,?)",
+                           [(run_id, u, who_, analyst, at, due or None) for u in ueis])
         for u in ueis:
-            self.audit(analyst, "assigned", u, run_id, f"Assigned to {assignee.strip()}" if assignee.strip() else "Unassigned")
+            self.audit(analyst, "assigned", u, run_id,
+                       (f"Assigned to {who_}" + (f", due {due}" if due else "")) if who_ else "Unassigned")
         return len(ueis)
+
+    def case_activity(self, ueis: list[str], name: str, email: str) -> dict[str, dict]:
+        """For each lead: when this person last opened it, and what others have done to it since (decisions, notes,
+        tiers, assignments, lookups), so My cases can say what changed since they last looked."""
+        if not ueis:
+            return {}
+        me = (name.strip().casefold(), (email or "").strip().casefold())
+        out: dict[str, dict] = {u: {"last_viewed": None, "updates": 0, "latest": ""} for u in ueis}
+        with self._db() as db:
+            rows = db.execute(f"SELECT uei, at, analyst, email, action, detail, id FROM audit WHERE uei IN ({self._in(ueis)}) "
+                              "ORDER BY id", ueis).fetchall()
+        mine = lambda a, e: (a or "").strip().casefold() == me[0] or (me[1] and (e or "").strip().casefold() == me[1])  # noqa: E731
+        seen_id: dict[str, int] = {}  # by log order: two entries can share a second
+        for uei, at, analyst, em, action, _, rid in rows:
+            if action == "view" and mine(analyst, em):
+                out[uei]["last_viewed"], seen_id[uei] = at, rid
+        for uei, at, analyst, em, action, detail, rid in rows:
+            if action in ("view", "download") or mine(analyst, em) or rid <= seen_id.get(uei, 0):
+                continue
+            out[uei]["updates"] += 1
+            out[uei]["latest"] = f"{analyst}: {detail}"[:160]
+        return out
 
     def analyst_state(self, run_id: str) -> dict[str, dict]:
         """Per-UEI tier override, routing, assignee and last-touched time as this run sees them."""
@@ -1941,7 +1971,7 @@ class Store:
                                "ORDER BY id", ids).fetchall()
             owners = db.execute(f"SELECT run_id, uei, owner, analyst, at FROM run_routing WHERE run_id IN ({self._in(ids)}) ORDER BY at",
                                 ids).fetchall()
-            assigned = db.execute(f"SELECT run_id, uei, assignee, analyst, at FROM run_assignment WHERE run_id IN ({self._in(ids)}) "
+            assigned = db.execute(f"SELECT run_id, uei, assignee, analyst, at, due FROM run_assignment WHERE run_id IN ({self._in(ids)}) "
                                   "ORDER BY at", ids).fetchall()
             touched = db.execute(f"SELECT uei, MAX(at) FROM audit WHERE uei IS NOT NULL AND run_id IN ({self._in(own)}) GROUP BY uei",
                                  own).fetchall()
@@ -1950,7 +1980,8 @@ class Store:
             out.setdefault(uei, {})["tier"] = rec
         for uei, rec in self._pick(run_id, ((r[0], r[1], {"owner": r[2], "analyst": r[3], "at": r[4]}) for r in owners)).items():
             out.setdefault(uei, {})["owner"] = rec
-        for uei, rec in self._pick(run_id, ((r[0], r[1], {"assignee": r[2], "analyst": r[3], "at": r[4]}) for r in assigned)).items():
+        for uei, rec in self._pick(run_id, ((r[0], r[1], {"assignee": r[2], "analyst": r[3], "at": r[4], "due": r[5] or ""})
+                                            for r in assigned)).items():
             if rec["assignee"]:
                 out.setdefault(uei, {})["assignee"] = rec
         for uei, at in touched:

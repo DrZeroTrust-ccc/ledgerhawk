@@ -38,6 +38,7 @@ export type VendorRow = {
   owner_suggested: string
   owner_set: { owner: string; analyst: string; at: string } | null
   assignee: string
+  due?: string
   last_touched: string | null
   integrity?: Integrity | null
 }
@@ -310,6 +311,7 @@ export type Executive = {
   }
   machine_minutes: number | null
 }
+export type CaseActivity = { last_viewed: string | null; updates: number; latest: string }
 export type BackupStatus = {
   configured: boolean
   bucket: string
@@ -1096,12 +1098,15 @@ export const api = {
     req<{ changed: number }>(`/api/runs/${id}/tiers`, json(body)),
   importDecisions: (id: string, form: FormData) => req<DecisionImport>(`/api/runs/${id}/import-decisions`, { method: 'POST', body: form }),
   progress: (id: string, analyst: string) => req<QueueProgress>(`/api/runs/${id}/progress?${new URLSearchParams({ analyst })}`),
-  myCases: (analyst: string) => req<{ rows: (VendorRow & { run: RunRef })[] }>(`/api/my-cases?${new URLSearchParams({ analyst })}`),
+  myCases: (analyst: string) =>
+    req<{ rows: (VendorRow & { run: RunRef; activity?: CaseActivity | null })[]; today?: string }>(
+      `/api/my-cases?${new URLSearchParams({ analyst })}`,
+    ),
   record: (id: string) => req<RunRecord>(`/api/runs/${id}/record`),
   followUp: (id: string, form: FormData) => req<ImportStart>(`/api/runs/${id}/follow-up`, { method: 'POST', body: form }),
   confirmCarried: (id: string, body: { ueis: string[]; analyst: string }) =>
     req<{ confirmed: number }>(`/api/runs/${id}/confirm-carried`, json(body)),
-  assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string }) =>
+  assign: (id: string, body: { ueis: string[]; assignee: string; analyst: string; due?: string }) =>
     req<{ assigned: number }>(`/api/runs/${id}/assign`, json(body)),
 }
 
