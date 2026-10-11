@@ -1616,6 +1616,33 @@ def start_exclusion_check(run_id: str, analyst: str = Form(""), again: bool = Fo
     return {"job": job}
 
 
+def _machine_minutes(run_id: str) -> float | None:
+    """How long LedgerHawk took on this import: the import itself plus its USAspending checks, from the job log."""
+    meta = store.run_meta(run_id)
+    total = 0.0
+    for j in store.import_jobs(limit=200):
+        if j["state"] != "done" or not j.get("finished_at") or not j.get("running_at"):
+            continue
+        if j.get("run_id") == run_id and j["kind"] in ("new", "follow_up", "restore") or (
+                j["kind"] == "check" and j["label"].endswith(meta["label"]) and j["running_at"] >= meta["created_at"]):
+            total += (datetime.fromisoformat(j["finished_at"]) - datetime.fromisoformat(j["running_at"])).total_seconds()
+    return round(total / 60, 1) if total else None
+
+
+@app.get("/api/runs/{run_id}/executive")
+def executive_summary(run_id: str):
+    """The one-pager for leadership: what was screened, what was found and for how much money, the vendors to look at
+    first, what changed since the last import, the data it rests on, and the analyst effort it saved."""
+    from ..exports.executive import build as build_executive
+    data = _get(store.vendors, run_id)
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
+    awards = store.case_awards_index(run_id)
+    colored = {r["uei"]: vendor_color(r, _workflow(r, state.get(r["uei"], {})), disp.get(r["uei"]), awards.get(r["uei"]))
+               for r in data["rows"] if r["uei"]}
+    return build_executive(data["rows"], colored, awards, store.summary(run_id), _machine_minutes(run_id))
+
+
 @app.get("/api/runs/{run_id}/exports/analysis.zip")
 def export_analysis(run_id: str, colors: str = "red,yellow"):
     """Red and yellow vendors (or the colors asked for) as flat tables for analysis: vendors.csv with one column per
