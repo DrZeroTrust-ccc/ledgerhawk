@@ -295,7 +295,7 @@ export type Executive = {
   screened: { vendors: number; dollars: number }
   red: { vendors: number; dollars: number }
   yellow: { vendors: number; dollars: number }
-  excluded: { vendors: number; checked: number; paid_after: number; paid_after_dollars: number; subcontracts_after: number }
+  excluded: { vendors: number; checked: number; paid_after: number; paid_after_total: number; paid_after_dollars: number; subcontracts_after: number }
   watchlists: { vendors: number; checked: boolean; ofac: number; leie: number }
   top: { uei: string; name: string; tot: number; why: string }[]
   changes: { since: string; new: number; dropped: number; changed: number; new_top: { uei: string; name: string; tot: number }[] } | null

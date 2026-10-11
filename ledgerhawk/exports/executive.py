@@ -49,7 +49,11 @@ def build(rows: list[dict], colored: dict[str, tuple[str, list[str]]], awards: d
         "red": {"vendors": len(by["red"]), "dollars": money(by["red"])},
         "yellow": {"vendors": len(by["yellow"]), "dollars": money(by["yellow"])},
         "excluded": {"vendors": len(excluded), "checked": sum(1 for r in excluded if r["uei"] in awards),
-                     "paid_after": len(paid_after), "paid_after_dollars": money(paid_after),
+                     "paid_after": len(paid_after), "paid_after_total": money(paid_after),
+                     # the money itself: contract actions and subcontracts dated after each exclusion (USAspending)
+                     "paid_after_dollars": round(sum(float((awards.get(r["uei"]) or {}).get("paid_dollars") or 0)
+                                                     + float((awards.get(r["uei"]) or {}).get("subawards_after_dollars") or 0)
+                                                     for r in paid_after), 2),
                      "subcontracts_after": len(subs_after)},
         "watchlists": {"vendors": len(watch), "checked": bool(man.get("watchlists")),
                        "ofac": sum(1 for r in watch if any(h["list"] == "OFAC SDN" for h in r["watchlist"])),
