@@ -37,3 +37,15 @@ def test_executive_summary_for_an_import(tmp_path, monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(appmod)
+
+
+def test_paid_after_dollars_are_the_money_after_exclusion_not_the_vendors_totals():
+    from ledgerhawk.exports.executive import build
+    v = {"uei": "U", "name": "X", "tot": 200e6, "queue": "", "exclusion_flags": ["EXCLUDED"],
+         "exclusion": [{"kind": "direct", "active_date": "2026-06-18"}]}
+    aw = {"U": {"fetched_at": "2026-10-08", "paid_actions": 7, "paid_dollars": 2.3e6, "new_awards_after": 0,
+                "same_day": 0, "zero_dollar": 0, "subawards_after": 1, "subawards_after_dollars": 0.2e6}}
+    summary = {"meta": {"id": "r", "label": "L", "created_at": "2026-10-08"}, "manifest": {}, "changes": None}
+    x = build([v], {"U": ("red", ["why"])}, aw, summary)
+    assert x["excluded"]["paid_after"] == 1 and x["excluded"]["paid_after_dollars"] == 2.5e6
+    assert x["excluded"]["paid_after_total"] == 200e6

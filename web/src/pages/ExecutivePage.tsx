@@ -141,7 +141,10 @@ export default function ExecutivePage() {
                   ? `${num(x.watchlists.ofac)} OFAC sanctions and ${num(x.watchlists.leie)} HHS-OIG exclusion name matches to confirm`
                   : 'OFAC and HHS-OIG lists: checked on the next import'}
               </li>
-              <li>{money(x.excluded.paid_after_dollars)} paid to excluded vendors since FY24</li>
+              <li>
+                {money(x.excluded.paid_after_dollars)} in contract actions and subcontracts dated after the exclusions (USAspending); those vendors
+                received {money(x.excluded.paid_after_total)} in FY24–25 in all
+              </li>
             </ul>
           </div>
           <div>
@@ -154,9 +157,7 @@ export default function ExecutivePage() {
         </section>
       </div>
 
-      <p className="text-xs text-slate-500">
-        Screening signals and dollars under review, not findings of fraud. Every red and yellow vendor, with its evidence, is in the analysis export.
-      </p>
+      <p className="text-xs text-slate-500">Every red and yellow vendor, with its evidence, is in the analysis export.</p>
     </div>
   )
 }
