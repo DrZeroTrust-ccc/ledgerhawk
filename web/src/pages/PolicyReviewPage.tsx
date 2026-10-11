@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, money, num, MUST_CATCH_LABEL, type ImportJob, type PolicyPreview } from '../api'
+import { api, money, num, MUST_CATCH_LABEL, QUEUE_LABEL, type ImportJob, type PolicyPreview } from '../api'
 import { ImportProgress, useImportJob } from '../imports'
 import { useAnalystName } from '../App'
 import { Breadcrumbs, usePlace } from '../nav'
@@ -21,6 +21,84 @@ const TRIAGE = new Set([
 ])
 
 type Tab = 'out' | 'in' | 'tier' | 'conf'
+
+// Before and after, queue by queue: the live count as a gray bar, the draft's in the validated slot-1 blue, the
+// difference beside them, then the biggest flows between queues. Two series, so a legend; numbers in ink.
+const LIVE = '#a3a19a'
+const DRAFT = '#2a78d6'
+const QUEUES = ['priority', 'strong', 'relationship', 'exclusion'] as const
+
+function QueueShift({ r }: { r: NonNullable<PolicyPreview['result']> }) {
+  const live = r.live.by_queue ?? {}
+  const draft = r.draft.by_queue ?? {}
+  const max = Math.max(1, ...QUEUES.flatMap((q) => [live[q] ?? 0, draft[q] ?? 0]))
+  const flows = new Map<string, number>()
+  for (const m of r.moves) {
+    const k = `${m.from || 'none'}→${m.to || 'none'}`
+    flows.set(k, (flows.get(k) ?? 0) + 1)
+  }
+  const named = (q: string) => (q === 'none' ? 'not queued' : (QUEUE_LABEL[q] ?? q).toLowerCase())
+  const top = [...flows.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6)
+  const bar = (n: number, color: string) => (
+    <span className="h-3 rounded-r" style={{ width: `max(${n > 0 ? 2 : 0}px, ${(n / max) * 100}%)`, background: color }} aria-hidden />
+  )
+  return (
+    <Card title="Where the leads move">
+      <div className="mb-2 flex gap-4 text-xs text-slate-600" aria-hidden>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-3 rounded-sm" style={{ background: LIVE }} /> Live version
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-3 rounded-sm" style={{ background: DRAFT }} /> This draft
+        </span>
+      </div>
+      <ul className="space-y-2.5">
+        {QUEUES.map((q) => {
+          const a = live[q] ?? 0
+          const b = draft[q] ?? 0
+          const d = b - a
+          return (
+            <li
+              key={q}
+              className="grid grid-cols-[10rem_1fr_5rem] items-center gap-3 text-sm"
+              title={`${QUEUE_LABEL[q]}: ${num(a)} now, ${num(b)} under the draft`}
+            >
+              <span className="text-slate-700">{QUEUE_LABEL[q]}</span>
+              <span className="space-y-1">
+                <span className="flex items-center gap-2">
+                  {bar(a, LIVE)}
+                  <span className="tabular text-xs text-slate-600">{num(a)}</span>
+                </span>
+                <span className="flex items-center gap-2">
+                  {bar(b, DRAFT)}
+                  <span className="tabular text-xs text-slate-600">{num(b)}</span>
+                </span>
+              </span>
+              <span className={`tabular text-right text-sm font-medium ${d === 0 ? 'text-slate-400' : 'text-ink'}`}>
+                {d > 0 ? `+${num(d)}` : d < 0 ? `−${num(-d)}` : 'no change'}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+      {top.length > 0 && (
+        <div className="mt-3 border-t border-slate-100 pt-2 text-xs text-slate-600">
+          <span className="font-medium text-ink">Biggest moves: </span>
+          {top.map(([k, n], i) => {
+            const [f, t] = k.split('→')
+            return (
+              <span key={k}>
+                {i > 0 && ' · '}
+                {num(n)} from {named(f)} to {named(t)}
+              </span>
+            )
+          })}
+          {r.moves_total > r.moves.length && <span className="text-slate-400"> (from the {num(r.moves.length)} largest moves)</span>}
+        </div>
+      )}
+    </Card>
+  )
+}
 
 function Results({ r }: { r: NonNullable<PolicyPreview['result']> }) {
   const [tab, setTab] = useState<Tab>('out')
@@ -111,6 +189,7 @@ function Results({ r }: { r: NonNullable<PolicyPreview['result']> }) {
           <div className="text-xs text-slate-500">{r.tier_moves_total} tier moves</div>
         </div>
       </div>
+      <QueueShift r={r} />
       <Card>
         <div role="tablist" className="-mx-5 -mt-5 mb-3 flex flex-wrap gap-1 border-b border-slate-200 px-4">
           {tabs.map(([k, label, n]) => (
