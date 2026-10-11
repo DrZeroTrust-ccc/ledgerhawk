@@ -651,3 +651,12 @@ def test_health_answers_while_a_screen_is_being_built(tmp_path):
         assert body == {"id": "SID"}
     finally:
         mp.undo()
+
+
+def test_vendor_record_lists_its_family_of_registrations(ctx):
+    client, run_id, _ = ctx
+    rows = client.get(f"/api/runs/{run_id}/vendors", params={"limit": 500}).json()["rows"]
+    split = next(r for r in rows if any(s["id"] == "S1" for s in r["signals"]))  # a re-formed successor: two registrations
+    fam = client.get(f"/api/runs/{run_id}/vendors/{split['uei']}").json()["family"]
+    assert len(fam) >= 2 and sum(m["self"] for m in fam) == 1
+    assert fam == sorted(fam, key=lambda m: -m["tot"]) and {"fy24", "fy25", "certs", "start", "excluded"} <= set(fam[0])

@@ -1379,6 +1379,22 @@ def signal_histogram(run_id: str):
     return {"signals": counts, "combinations": dict(sorted(combos.items(), key=lambda kv: -kv[1]))}
 
 
+def _family(data: dict, v: dict, cap: int = 25) -> list[dict]:
+    """Every registration in the import under the same company name (one company, several UEIs), with the money in
+    each year, so a shift from one UEI to another, or a certified firm split across several, shows at a glance."""
+    members = [data["by_uei"][u] for u in data["by_nn"].get(v.get("nn") or "", []) if u in data["by_uei"]]
+    if len(members) < 2:
+        return []
+    out = []
+    for m in sorted(members, key=lambda m: -float(m.get("tot") or 0))[:cap]:
+        card = m.get("sam") or {}
+        out.append({"uei": m["uei"], "name": m["name"], "fy24": float(m.get("fy24") or 0), "fy25": float(m.get("fy25") or 0),
+                    "tot": float(m.get("tot") or 0), "certs": card.get("certs") or [], "start": card.get("start_date") or "",
+                    "state": card.get("state") or "", "queue": m.get("queue") or "", "self": m["uei"] == v["uei"],
+                    "excluded": "EXCLUDED" in (m.get("exclusion_flags") or [])})
+    return out
+
+
 @app.get("/api/runs/{run_id}/vendors/{uei}")
 def vendor(run_id: str, uei: str):
     data = _get(store.vendors, run_id)
@@ -1398,6 +1414,7 @@ def vendor(run_id: str, uei: str):
     out["ledger"] = _ledger(v, out["case"])
     out["summary_enabled"] = summary_mod.enabled() or store.summary_client is not None
     out["screens"] = store.screens_for(uei)
+    out["family"] = _family(data, v)
     sm = out["case"]["summary"]
     if sm:
         sm["stale"] = sm.get("ledger_fp") != summary_mod.ledger_fingerprint(out["ledger"])
