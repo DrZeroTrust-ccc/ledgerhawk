@@ -1253,7 +1253,7 @@ def _workflow(v: dict, st: dict) -> dict:
     return {
         "tier": t["tier"] if t else tdef, "tier_default": tdef, "tier_change": t,
         "owner": o["owner"] if o else odef, "owner_suggested": odef, "owner_set": o,
-        "assignee": a["assignee"] if a else "", "last_touched": st.get("last_touched"),
+        "assignee": a["assignee"] if a else "", "due": (a or {}).get("due", ""), "last_touched": st.get("last_touched"),
     }
 
 
@@ -1827,6 +1827,7 @@ class AssignIn(BaseModel):
     ueis: list[str]
     assignee: str
     analyst: str
+    due: str = ""
 
 
 @app.post("/api/runs/{run_id}/assign")
@@ -1837,7 +1838,7 @@ def assign(run_id: str, body: AssignIn):
     if len(body.ueis) > 1000:
         raise HTTPException(400, "Assign at most 1,000 vendors at a time.")
     try:
-        return {"assigned": store.assign(body.ueis, body.assignee, body.analyst, run_id)}
+        return {"assigned": store.assign(body.ueis, body.assignee, body.analyst, run_id, body.due)}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -2052,7 +2053,11 @@ def my_cases(analyst: str = ""):
             v = data["by_uei"].get(u)
             if v:
                 out.append({**_slim(v, disp, state), "run": store.run_ref(rid)})
-    return {"rows": out}
+    u = CURRENT_USER.get()
+    activity = store.case_activity(sorted({r["uei"] for r in out}), analyst, u.email if u else "")
+    for r in out:
+        r["activity"] = activity.get(r["uei"])
+    return {"rows": out, "today": date.today().isoformat()}
 
 
 class RestoreIn(BaseModel):
