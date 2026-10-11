@@ -49,3 +49,20 @@ def test_paid_after_dollars_are_the_money_after_exclusion_not_the_vendors_totals
     x = build([v], {"U": ("red", ["why"])}, aw, summary)
     assert x["excluded"]["paid_after"] == 1 and x["excluded"]["paid_after_dollars"] == 2.5e6
     assert x["excluded"]["paid_after_total"] == 200e6
+
+
+def test_flagged_money_by_reason_overlaps_and_skips_green():
+    from ledgerhawk.exports.executive import by_reason
+    from ledgerhawk.pipeline.integrity import INTEGRITY_MEANING
+    rows = [{"uei": u, "tot": t} for u, t in (("A", 10e6), ("B", 4e6), ("C", 1e6), ("D", 9e9))]
+    colored = {
+        "A": ("red", ["USAspending: 7 paid contract actions ($2.3M) after the exclusion date", "Analyst set Tier 1"]),
+        "B": ("yellow", ["Excluded Jun 01, 2025; USAspending shows no contract actions after it", INTEGRITY_MEANING["C"]]),
+        "C": ("yellow", ["One strong signal"]),
+        "D": ("green", ["Analyst decision: Clear"]),
+    }
+    out = {b["key"]: b for b in by_reason(rows, colored)}
+    assert out["paid_after"]["dollars"] == 10e6 and out["analyst"]["dollars"] == 10e6  # A counts under both
+    assert out["cleared"]["vendors"] == 1 and out["tied"]["vendors"] == 1 and out["strong"]["dollars"] == 1e6
+    assert all(b["dollars"] < 9e9 for b in out.values())  # green never counted
+    assert [b["key"] for b in by_reason(rows, colored)][:2] in (["paid_after", "analyst"], ["analyst", "paid_after"])

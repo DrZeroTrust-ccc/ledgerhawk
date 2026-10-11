@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
-import { api, money, num } from '../api'
+import { useState } from 'react'
+import { api, money, num, type Executive } from '../api'
 import { usePlace } from '../nav'
 import { ErrorNote, Loading, useAsync } from '../ui'
 
@@ -14,6 +15,45 @@ function Tile({ label, value, sub, tone = 'ink' }: { label: string; value: strin
       <div className={`tabular mt-1 text-2xl font-semibold ${color}`}>{value}</div>
       {sub && <div className="tabular mt-0.5 text-xs text-slate-600">{sub}</div>}
     </div>
+  )
+}
+
+// Red and yellow dollars by reason: one series, so one hue (validated slot 1), bars capped at 16px with a rounded end,
+// value at the tip in ink, details on hover. A vendor counts under each of its reasons, so the bars overlap.
+function WhereTheMoneyIs({ rows }: { rows: Executive['by_reason'] }) {
+  const [hover, setHover] = useState<string | null>(null)
+  const max = Math.max(...rows.map((r) => r.dollars), 1)
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white px-5 py-4 print:break-inside-avoid">
+      <h2 className="text-sm font-semibold text-navy">Where the flagged money is</h2>
+      <p className="text-xs text-slate-500">
+        FY24–25 obligations of red and yellow vendors, by reason. A vendor with several reasons counts under each, so the bars overlap.
+      </p>
+      <ul className="mt-3 space-y-2" onMouseLeave={() => setHover(null)}>
+        {rows.map((r) => (
+          <li
+            key={r.key}
+            className={`grid grid-cols-[12rem_1fr] items-center gap-3 rounded text-sm sm:grid-cols-[16rem_1fr] ${hover === r.key ? 'bg-slate-50' : ''}`}
+            onMouseEnter={() => setHover(r.key)}
+            title={`${r.label}: ${money(r.dollars)} across ${num(r.vendors)} vendors (${num(r.red)} red, ${num(r.yellow)} yellow)`}
+          >
+            <span className="truncate text-slate-700">{r.label}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="h-4 shrink-0 rounded-r" style={{ width: `max(2px, ${(r.dollars / max) * 70}%)`, background: '#2a78d6' }} aria-hidden />
+              <span className="tabular whitespace-nowrap text-xs text-slate-700">
+                {money(r.dollars)} · {num(r.vendors)} vendor{r.vendors === 1 ? '' : 's'}
+                {hover === r.key && (
+                  <span className="text-slate-500">
+                    {' '}
+                    ({num(r.red)} red, {num(r.yellow)} yellow)
+                  </span>
+                )}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -58,6 +98,8 @@ export default function ExecutivePage() {
           tone="red"
         />
       </div>
+
+      {x.by_reason.length > 0 && <WhereTheMoneyIs rows={x.by_reason} />}
 
       <section className="rounded-lg border border-slate-200 bg-white px-5 py-4 print:break-inside-avoid">
         <h2 className="text-sm font-semibold text-navy">Look at these first</h2>
