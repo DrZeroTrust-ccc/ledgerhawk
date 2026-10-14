@@ -1682,6 +1682,39 @@ def export_analysis(run_id: str, colors: str = "red,yellow"):
     return Response(body, media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@app.get("/api/runs/{run_id}/exports/findings.pptx")
+def export_findings(run_id: str, cases: int = 10):
+    """The findings briefing for leadership: a PowerPoint of the import's strongest cases, each fact graded as a
+    confirmed fact, anomaly, risk indicator or matter needing investigation, with its source and how to verify it."""
+    from ..exports.briefing import build_briefing
+    from ..exports.executive import build as build_executive
+    from ..exports.findings import build_cases
+    data = _get(store.vendors, run_id)
+    disp = store.dispositions(run_id)
+    state = store.analyst_state(run_id)
+    awards = store.case_awards_index(run_id)
+    entities = store.case_awards_entities(run_id)
+    lens = _far_lens(run_id)
+    summary = store.summary(run_id)
+    items, colored = [], {}
+    for r in data["rows"]:
+        if not r["uei"]:
+            continue
+        wf = _workflow(r, state.get(r["uei"], {}))
+        colored[r["uei"]] = c = vendor_color(r, wf, disp.get(r["uei"]), awards.get(r["uei"]))
+        if c[0] in ("red", "green"):
+            items.append({"v": r, "wf": wf, "disposition": disp.get(r["uei"]), "color": c, "awards": awards.get(r["uei"]),
+                          "entity": entities.get(r["uei"]), "far": lens(r) if c[0] == "red" else None})
+    x = build_executive(data["rows"], colored, awards, summary, _machine_minutes(run_id))
+    found, counts = build_cases(items, {**(summary.get("manifest") or {}), "created_at": summary["meta"]["created_at"]},
+                                limit=max(1, min(cases, 25)))
+    body = build_briefing(x, summary, found, counts)
+    u = CURRENT_USER.get()
+    store.audit(u.name if u else "", "export", None, run_id, f"Findings briefing (PowerPoint): {len(found)} cases")
+    return Response(body, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk findings briefing {run_id}.pptx"'})
+
+
 @app.get("/api/runs/{run_id}/vendors/{uei}/case.pdf")
 def export_case(run_id: str, uei: str):
     data = _get(store.vendors, run_id)
