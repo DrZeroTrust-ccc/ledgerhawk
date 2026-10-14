@@ -152,3 +152,25 @@ def test_the_transactions_lookup_reads_every_page():
     def endless(url, body):
         return {"results": [], "page_metadata": {"hasNext": True}}
     assert aw.actions_after("U1", "2025-06-18", post=endless, today=date(2026, 10, 14))["truncated"]
+
+
+def test_a_lookup_with_a_dropped_part_keeps_the_earlier_one(tmp_path):
+    """A transactions request USAspending drops must not overwrite a good lookup with "no actions after exclusion"."""
+    import pytest
+    from ledgerhawk.api.store import Store
+    from ledgerhawk.pipeline import awards as aw
+    st = Store(tmp_path / "data")
+    st.vendors = lambda run_id: {"by_uei": {"U1": {"name": "ACME", "exclusion": EXCLUDED["exclusion"]}}}
+    st.run_dir = lambda run_id: st.root / "runs" / run_id
+    d = st.root / "cases" / "r1" / "U1"
+    d.mkdir(parents=True)
+    d.joinpath("awards.json").write_text(json.dumps({"fetched_at": "2026-10-10", "entities": [ENTITY]}))
+    real = aw.screen_awards
+    aw.screen_awards = lambda screen, post=None: {"errors": 0, "entities": [{**ENTITY, "actions": [],
+                                                                           "actions_error": "did not answer"}]}
+    try:
+        with pytest.raises(ConnectionError):
+            st.fetch_case_awards("r1", "U1", "Ana")
+    finally:
+        aw.screen_awards = real
+    assert json.loads(d.joinpath("awards.json").read_text())["entities"][0]["actions"] == ENTITY["actions"]

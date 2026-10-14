@@ -1834,7 +1834,11 @@ class Store:
         screen = {"subjects": [{"ref": 1, "entities": [{"uei": uei, "name": v["name"], "sam": v.get("sam"),
                                                          "exclusion": v.get("exclusion") or []}], "related": []}]}
         res = awards_mod.screen_awards(screen, post=self.awards_post or awards_mod._post)
-        if res["errors"]:
+        # A lookup where any part failed (awards, the transactions after exclusion, yearly totals or subcontracts) is not
+        # saved: a dropped transactions request would otherwise read as "no contract actions after the exclusion" and
+        # overwrite a good earlier lookup.
+        if res["errors"] or any(e.get(k) for e in res["entities"]
+                                for k in ("actions_error", "subawards_error", "history_error")):
             raise ConnectionError("USAspending did not answer. Try again in a few minutes; the last lookup, if any, is kept.")
         res["fetched_by"] = analyst.strip()
         d.mkdir(parents=True, exist_ok=True)
