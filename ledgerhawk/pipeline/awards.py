@@ -110,6 +110,7 @@ TX_API = "https://api.usaspending.gov/api/v2/search/spending_by_transaction/"
 TX_FIELDS = ["Award ID", "Mod", "Action Date", "Action Type", "Transaction Amount", "Transaction Description",
              "Awarding Agency", "Awarding Sub Agency", "Recipient Name", "Recipient UEI"]
 TX_LIMIT = 100
+TX_PAGES = 20  # up to 2,000 transactions per group after an exclusion; beyond that the lookup says it was cut short
 # FPDS reason-for-modification codes. Ending or cleaning up a contract after an exclusion is expected; adding work,
 # money, time or an option is what FAR 9.405-1 says needs a written compelling-reason determination.
 ACTION_KINDS = {
@@ -171,34 +172,39 @@ def actions_after(uei: str, since: str, post: Post = _post, today: date | None =
     if not since or since > today.isoformat():
         return out
     for group, (codes, _) in GROUPS.items():
-        body = {"filters": {"award_type_codes": codes, "recipient_search_text": [uei],
-                            "time_period": [{"start_date": since, "end_date": today.isoformat()}]},
-                "fields": TX_FIELDS, "limit": TX_LIMIT, "page": 1, "sort": "Action Date", "order": "asc"}
-        try:
-            res = post(TX_API, body)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
-            out["error"] = f"USAspending transactions did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"
-            continue
-        for row in res.get("results") or []:
-            got = (row.get("Recipient UEI") or "").strip().upper()
-            if got and got != uei:
-                continue
-            when = _iso(row.get("Action Date"))
-            if not when or when < since:
-                continue
-            amount = float(row.get("Transaction Amount") or 0)
-            award_id = row.get("Award ID") or ""
-            kind = _action_kind(str(row.get("Mod") or ""), str(row.get("Action Type") or ""), amount, award_id)
-            gid = row.get("generated_internal_id") or ""
-            out["actions"].append({
-                "group": group, "award_id": award_id, "mod": str(row.get("Mod") or ""), "date": when,
-                "action_type": str(row.get("Action Type") or ""), "kind": kind, "label": KIND_LABELS[kind],
-                "amount": amount, "description": (row.get("Transaction Description") or "").strip(),
-                "agency": row.get("Awarding Agency") or "", "sub_agency": row.get("Awarding Sub Agency") or "",
-                "schedule": _schedule(award_id), "flagged": kind in FLAGGED_KINDS,
-                "url": AWARD_PAGE + gid if gid else "",
-            })
-        out["truncated"] = out["truncated"] or bool((res.get("page_metadata") or {}).get("hasNext"))
+        for page in range(1, TX_PAGES + 1):
+            body = {"filters": {"award_type_codes": codes, "recipient_search_text": [uei],
+                                "time_period": [{"start_date": since, "end_date": today.isoformat()}]},
+                    "fields": TX_FIELDS, "limit": TX_LIMIT, "page": page, "sort": "Action Date", "order": "asc"}
+            try:
+                res = post(TX_API, body)
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+                out["error"] = f"USAspending transactions did not answer ({getattr(exc, 'code', '') or type(exc).__name__})"
+                break
+            for row in res.get("results") or []:
+                got = (row.get("Recipient UEI") or "").strip().upper()
+                if got and got != uei:
+                    continue
+                when = _iso(row.get("Action Date"))
+                if not when or when < since:
+                    continue
+                amount = float(row.get("Transaction Amount") or 0)
+                award_id = row.get("Award ID") or ""
+                kind = _action_kind(str(row.get("Mod") or ""), str(row.get("Action Type") or ""), amount, award_id)
+                gid = row.get("generated_internal_id") or ""
+                out["actions"].append({
+                    "group": group, "award_id": award_id, "mod": str(row.get("Mod") or ""), "date": when,
+                    "action_type": str(row.get("Action Type") or ""), "kind": kind, "label": KIND_LABELS[kind],
+                    "amount": amount, "description": (row.get("Transaction Description") or "").strip(),
+                    "agency": row.get("Awarding Agency") or "", "sub_agency": row.get("Awarding Sub Agency") or "",
+                    "schedule": _schedule(award_id), "flagged": kind in FLAGGED_KINDS,
+                    "url": AWARD_PAGE + gid if gid else "",
+                })
+            more = bool((res.get("page_metadata") or {}).get("hasNext"))
+            if not more:
+                break
+            if page == TX_PAGES:
+                out["truncated"] = True
     out["actions"].sort(key=lambda a: a["date"])
     return out
 

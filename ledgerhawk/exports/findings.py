@@ -61,9 +61,6 @@ INNOCENT = {
     "tied": "A former relationship that ended before the exclusion",
 }
 
-MAX_ACTIONS = 6  # paid actions after exclusion itemised per case; the rest are summed in one fact
-
-
 def _money(x: float) -> str:
     x = float(x or 0)
     return f"${x / 1e6:,.1f}M" if abs(x) >= 1e6 else f"${x:,.0f}"
@@ -93,7 +90,10 @@ def facts_for(v: dict, entity: dict | None, awards: dict | None, far: list[dict]
     sam_search = f"SAM.gov > Search > Exclusions, UEI {uei}"
     entity_page = f"SAM.gov > Search > Entities, UEI {uei}"
 
+    direct = any(h.get("kind") == "direct" for h in v.get("exclusion") or [])
     for h in v.get("exclusion") or []:
+        if direct and h.get("kind") in ("name_match", "alias"):
+            continue  # usually the same firm's other exclusion records; its own UEI already settles it
         who = f"{h.get('agency') or 'agency not stated'}, {h.get('type') or 'type not stated'}"
         rec = "; ".join(x for x in (f"CT code {h['ct_code']}" if h.get("ct_code") else "",
                                     f"program {h['program']}" if h.get("program") else "") if x)
@@ -101,7 +101,9 @@ def facts_for(v: dict, entity: dict | None, awards: dict | None, far: list[dict]
         if kind == "direct":
             scope = " (this facility only)" if h.get("scope") == "Facility-only" else ""
             out.append(_fact("confirmed", f"On the SAM exclusions list under its own UEI{scope}: {who}, active since "
-                             f"{_iso(h.get('active_date')) or 'date not stated'}", "SAM exclusions extract", rec or "Exclusion record",
+                             f"{_iso(h.get('active_date')) or 'date not stated'}"
+                             + (f", ends {_iso(h['termination_date'])}" if h.get("termination_date") not in (None, "", "Indefinite")
+                                else ", indefinite" if h.get("termination_date") == "Indefinite" else ""), "SAM exclusions extract", rec or "Exclusion record",
                              ex_date, sam_search, kind="excluded"))
         elif kind == "alias":
             out.append(_fact("indicator", f"Name matches an alias on the exclusion record of {h.get('name', '')} ({who})",
@@ -133,21 +135,30 @@ def facts_for(v: dict, entity: dict | None, awards: dict | None, far: list[dict]
     since = e.get("excluded_since") or (awards or {}).get("excluded_since") or ""
     paid = sorted((a for a in e.get("actions") or [] if a.get("flagged") and (a.get("amount") or 0) > 0
                    and since and (a.get("date") or "") > since), key=lambda a: -a["amount"])
-    for a in paid[:MAX_ACTIONS]:
+    for a in paid:
         out.append(_fact("confirmed", f"{a.get('label') or 'Contract action'} on {a['date']} for {_money(a['amount'])}, after the "
                          f"exclusion of {since}" + (" (GSA Schedule)" if a.get("schedule") else ""),
                          "USAspending.gov transactions", f"{a['award_id']} mod {a.get('mod') or '0'}", usa_date,
                          "USAspending award page", a.get("url", ""), kind="paid_after"))
-    if len(paid) > MAX_ACTIONS:
-        rest = paid[MAX_ACTIONS:]
-        out.append(_fact("confirmed", f"{len(rest)} more paid actions after the exclusion, {_money(sum(a['amount'] for a in rest))} "
-                         "in all", "USAspending.gov transactions", "See the evidence index", usa_date,
-                         "USAspending award pages", kind="paid_after"))
+    odd = [a for a in e.get("actions") or [] if not a.get("flagged") and (a.get("amount") or 0) > 0
+           and since and (a.get("date") or "") > since]
+    for a in sorted(odd, key=lambda a: -a["amount"]):
+        out.append(_fact("anomaly", f"{_money(a['amount'])} obligated on {a['date']} by an action coded as {a.get('label') or 'a modification'}"
+                         f" (FPDS action type {a.get('action_type') or 'blank'}), after the exclusion of {since}; not counted as "
+                         "paid after exclusion", "USAspending.gov transactions", f"{a['award_id']} mod {a.get('mod') or '0'}",
+                         usa_date, "USAspending award page", a.get("url", ""),
+                         innocent="A miscoded action type, or money moved within the award", kind="odd_action"))
+    if e.get("actions_truncated"):
+        out.append(_fact("anomaly", "USAspending returned more transactions after the exclusion than LedgerHawk reads; the "
+                         "money after exclusion may be understated", "USAspending.gov transactions", "", usa_date,
+                         f"USAspending.gov recipient profile, UEI {uei}", kind="truncated"))
     for a in e.get("awards") or []:
         if a.get("after_exclusion"):
-            out.append(_fact("confirmed", f"Award {a['award_id']} started {a['start']} ({_money(a['amount'])}), after the "
-                             f"exclusion of {since}", "USAspending.gov awards", a["award_id"], usa_date,
-                             "USAspending award page", a.get("url", ""), kind="paid_after"))
+            money = (a.get("amount") or 0) > 0
+            out.append(_fact("confirmed", f"Award {a['award_id']} started {a['start']} "
+                             + (f"({_money(a['amount'])})" if money else "with no money obligated yet (a contract vehicle)")
+                             + f", after the exclusion of {since}", "USAspending.gov awards", a["award_id"], usa_date,
+                             "USAspending award page", a.get("url", ""), kind="paid_after" if money else "new_vehicle"))
     for s in e.get("subawards") or []:
         if s.get("after_exclusion") and s.get("amount", 0) > 0:
             out.append(_fact("confirmed", f"Subcontract of {_money(s['amount'])} on {s['date']} under {s.get('prime') or 'a prime'}'s "
@@ -200,11 +211,13 @@ def facts_for(v: dict, entity: dict | None, awards: dict | None, far: list[dict]
         for el in p["elements"]:
             if el["state"] == NEEDS_RECORD and el.get("detail") not in seen:
                 seen.add(el.get("detail"))
-                out.append(_fact("investigate", f"{el['text']} ({p['cite']})", "Record LedgerHawk does not hold",
+                need = el["text"] if p["cite"] in el["text"] else f"{el['text']} ({p['cite']})"
+                out.append(_fact("investigate", f"{el.get('detail') or 'Check'}, to establish: {need[:1].lower()}{need[1:]}",
+                                 "Record LedgerHawk does not hold",
                                  el.get("detail", ""), "", f"Holder: {p['binds']}; route to {p['routes_to']}", kind="far"))
             elif el["state"] == CONFIRMED:
                 d = el.get("decision") or {}
-                out.append(_fact("confirmed", f"{el['text']} ({p['cite']})", "Analyst confirmed from a record",
+                out.append(_fact("confirmed", el["text"] if p["cite"] in el["text"] else f"{el['text']} ({p['cite']})", "Analyst confirmed from a record",
                                  d.get("note", ""), (d.get("at") or "")[:10], f"Analyst: {d.get('analyst', '')}", kind="far"))
     if any(f["kind"] == "paid_after" for f in out) and not any(f["level"] == "investigate" for f in out):
         out.append(_fact("investigate", "Whether the contracting officer checked SAM before each action after the exclusion, "
@@ -270,19 +283,20 @@ def build_cases(items: list[dict], manifest: dict, limit: int = 10) -> tuple[lis
         counts[cat] += 1
         e = it.get("entity") or {}
         since = e.get("excluded_since") or ""
-        after = sum(a["amount"] for a in e.get("actions") or [] if a.get("flagged") and (a.get("amount") or 0) > 0
-                    and since and a["date"] > since) + sum(s["amount"] for s in e.get("subawards") or []
-                                                         if s.get("after_exclusion") and s.get("amount", 0) > 0)
+        paid = [a for a in e.get("actions") or [] if a.get("flagged") and (a.get("amount") or 0) > 0
+                and since and a["date"] > since]
+        subs = [s for s in e.get("subawards") or [] if s.get("after_exclusion") and s.get("amount", 0) > 0]
+        after = sum(a["amount"] for a in paid) + sum(s["amount"] for s in subs)
         disp = it.get("disposition") or {}
         cases.append({
             "uei": v["uei"], "name": v["name"], "category": cat, "category_label": CATEGORY[cat],
             "tot": float(v.get("tot") or 0), "fy24": float(v.get("fy24") or 0), "fy25": float(v.get("fy25") or 0),
-            "after_dollars": round(after, 2), "why": why, "facts": facts,
+            "after_dollars": round(after, 2), "paid_actions": len(paid), "paid_subawards": len(subs), "why": why, "facts": facts,
             "levels": {k: sum(1 for f in facts if f["level"] == k) for k in LEVELS},
             "timeline": _timeline(v, facts, it.get("entity")),
             "route": (it.get("wf") or {}).get("owner") or v.get("owner_suggested") or "",
             "next_step": next((f["text"] for f in facts if f["level"] == "investigate"), ""),
-            "innocent": next((f["innocent"] for f in facts if f["innocent"] and not f["weak"]), ""),
+            "innocent": next((f["innocent"] for f in facts if f["innocent"] and f["level"] == "indicator" and not f["weak"]), ""),
             "review": (f"{disp['value']} by {disp.get('analyst') or 'an analyst'} on {(disp.get('at') or '')[:10]}"
                        if disp.get("value") else ""),
             "state": (v.get("sam") or {}).get("state", ""),
@@ -298,10 +312,12 @@ def headline(case: dict) -> str:
     f = case["facts"]
     excl = next((x for x in f if x["kind"] == "excluded"), None)
     if case["category"] == PAID_AFTER:
-        n = sum(1 for x in f if x["kind"] == "paid_after" and x["source"].startswith("USAspending"))
+        n, m = case.get("paid_actions", 0), case.get("paid_subawards", 0)
+        what = " and ".join(x for x in (f"{n} paid contract action{'s' if n != 1 else ''}" if n else "",
+                                         f"{m} subcontract{'s' if m != 1 else ''}" if m else "") if x)
         money = f"{_money(case['after_dollars'])} " if case["after_dollars"] else ""
         return (f"{case['name']} is on the SAM exclusions list, yet {money}in federal money reached it after the exclusion date"
-                + (f" ({n} record{'s' if n != 1 else ''} in USAspending)." if n else ", by the GSA vendor file's own fiscal-year totals."))
+                + (f" ({what} in USAspending)." if what else ", by the GSA vendor file's own fiscal-year totals."))
     if case["category"] == UNCHECKED and excl:
         return f"{case['name']} is on the SAM exclusions list; its contract actions after the exclusion date still need checking."
     plural = {"anomaly": "anomalies", "indicator": "risk indicators"}

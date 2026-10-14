@@ -138,6 +138,15 @@ class Builder:
         return buf.getvalue()
 
 
+def _shown(facts: list[dict]) -> list[dict]:
+    """The facts for a case's evidence slide: the largest few payments, then every other kind of fact, so a case with
+    dozens of actions still shows its anomalies and open questions. All of them are in the evidence index."""
+    paid = [f for f in facts if f["kind"] == "paid_after"]
+    rest = [f for f in facts if f["kind"] != "paid_after"]
+    keep = {id(f) for f in (paid[:4] + rest + paid[4:])[:EVIDENCE_ROWS]}
+    return [f for f in facts if id(f) in keep]
+
+
 def _cut(s: str, n: int) -> str:
     s = " ".join(str(s or "").split())
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
@@ -250,7 +259,17 @@ def build_briefing(x: dict, summary: dict, cases: list[dict], counts: dict, gene
     rows = [["Pattern", "Existing check", "Why it misses this", "In this import"]]
     for key, label, check, why in MISSED:
         r = found.get(key)
-        rows.append([label, check, why, f"{r['vendors']:,} vendors, {_money(r['dollars'])}" if r else "None found"])
+        if key == "paid_after":
+            found_here = (f"{ex['paid_after']:,} vendor{'s' if ex['paid_after'] != 1 else ''}; {_money(ex['paid_after_dollars'])} after their exclusion dates"
+                          if ex["paid_after"] else "None found")
+        elif key == "unchecked":
+            left = ex["vendors"] - ex["checked"]
+            found_here = (f"{left:,} of {ex['vendors']:,} not yet checked" if left
+                          else f"{ex['vendors']:,} in the data; all checked in USAspending")
+        else:
+            found_here = (f"{r['vendors']:,} vendor{'s' if r['vendors'] != 1 else ''}, {_money(r['dollars'])} FY24-25"
+                          if r else "None found")
+        rows.append([label, check, why, found_here])
     b.table(s, rows, [2.6, 2.6, 5.3, 1.8], size=10, row_h=Inches(0.62))
 
     # 7. Cases at a glance
@@ -288,7 +307,7 @@ def build_briefing(x: dict, summary: dict, cases: list[dict], counts: dict, gene
               "\n".join(f"{k}: {_cut(v, 170)}" for k, v in side if v), 11)
 
         s = b.slide(f"Evidence: {_cut(c['name'], 60)}", f"Case {i}")
-        facts = c["facts"]
+        facts = _shown(c["facts"])
         rows = [["Level", "Fact", "Source and record", "As of", "How to verify"]]
         for f in facts[:EVIDENCE_ROWS]:
             rows.append([f["level_label"], _cut(f["text"], 150) + (f"\nInnocent explanation: {f['innocent']}" if f["innocent"] else ""),
@@ -296,10 +315,10 @@ def build_briefing(x: dict, summary: dict, cases: list[dict], counts: dict, gene
                          _cut(f["url"] or f["verify"], 80)])
         b.table(s, rows, [1.6, 5.0, 2.6, 1.0, 2.1], y=Inches(1.3), size=9, row_h=Inches(0.55),
                 fills=[LEVEL_FILL[f["level"]] for f in facts[:EVIDENCE_ROWS]])
-        if len(facts) > EVIDENCE_ROWS:
+        if len(c["facts"]) > EVIDENCE_ROWS:
             _text(s, Inches(0.5), Inches(6.55), Inches(12), Inches(0.4),
-                  f"{len(facts) - EVIDENCE_ROWS} more facts for this case are in the evidence index (Appendix C).", 10, color=MUTED)
-        for f in facts:
+                  f"{len(c['facts']) - EVIDENCE_ROWS} more facts for this case are in the evidence index (Appendix C).", 10, color=MUTED)
+        for f in c["facts"]:
             index.append((i, c["name"], f))
 
     # 9. Recommended actions

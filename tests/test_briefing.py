@@ -109,3 +109,46 @@ def test_the_briefing_deck_for_an_import(tmp_path, monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(appmod)
+
+
+def test_what_verification_found_on_the_real_gsa_run():
+    """Positive money on a termination is shown as an anomaly, a $0 vehicle is not money, a vendor excluded under its
+    own UEI carries no same-name noise, every paid action is itemised, and the headline counts actions, not facts."""
+    v = {**EXCLUDED, "exclusion": EXCLUDED["exclusion"] + [
+        {"kind": "name_match", "support": "unsupported", "name": "ACME LLC", "agency": "GSA", "type": "x"}]}
+    v["exclusion"][0] = {**v["exclusion"][0], "termination_date": "2026-10-19"}
+    acts = [{"award_id": f"A{k}", "mod": "P1", "date": f"2025-0{k + 7}-01", "amount": 1000.0 * (k + 1), "flagged": True,
+             "label": "funding added", "schedule": False, "url": ""} for k in range(3)]
+    acts.append({"award_id": "T1", "mod": "P00006", "date": "2026-06-24", "amount": 4609253.0, "flagged": False,
+                 "label": "cancelled or terminated", "action_type": "F", "url": ""})
+    ent = {**ENTITY, "actions": acts, "actions_truncated": True,
+           "awards": [{"award_id": "IDV0", "start": "2025-09-09", "amount": 0, "after_exclusion": True, "url": ""}]}
+    facts = facts_for(v, ent, {"fetched_at": "2026-10-10"}, [], MAN)
+    assert not any(f["kind"] == "name" for f in facts)
+    assert "ends 2026-10-19" in facts[0]["text"]
+    assert sum(f["kind"] == "paid_after" for f in facts) == 3
+    odd = next(f for f in facts if f["kind"] == "odd_action")
+    assert odd["level"] == "anomaly" and "$4.6M" in odd["text"] and "type F" in odd["text"]
+    assert any(f["kind"] == "truncated" for f in facts)
+    vehicle = next(f for f in facts if f["kind"] == "new_vehicle")
+    assert vehicle["level"] == "confirmed" and "no money obligated" in vehicle["text"]
+    cases, _ = build_cases([{"v": v, "color": ("red", ["x"]), "entity": ent, "awards": {"fetched_at": "2026-10-10"}}], MAN)
+    assert cases[0]["after_dollars"] == 6000.0 and "(3 paid contract actions in USAspending)" in cases[0]["headline"]
+
+
+def test_the_transactions_lookup_reads_every_page():
+    from ledgerhawk.pipeline import awards as aw
+    pages = []
+
+    def post(url, body):
+        pages.append(body["page"])
+        n = body["page"]
+        rows = [{"Award ID": f"X{n}", "Mod": f"P{n}", "Action Date": "2025-08-01", "Action Type": "G",
+                 "Transaction Amount": 10.0, "Recipient UEI": "U1"}] if "A" in body["filters"]["award_type_codes"] else []
+        return {"results": rows, "page_metadata": {"hasNext": n < 3 and bool(rows)}}
+    out = aw.actions_after("U1", "2025-06-18", post=post, today=date(2026, 10, 14))
+    assert [a["award_id"] for a in out["actions"]] == ["X1", "X2", "X3"] and not out["truncated"]
+
+    def endless(url, body):
+        return {"results": [], "page_metadata": {"hasNext": True}}
+    assert aw.actions_after("U1", "2025-06-18", post=endless, today=date(2026, 10, 14))["truncated"]
