@@ -78,13 +78,22 @@ export default function ExecutivePage() {
             {x.import.data_class === 'synthetic' && ' · synthetic demo data'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink print:hidden"
-        >
-          Print or save as PDF
-        </button>
+        <div className="flex gap-2 print:hidden">
+          <a
+            href={`/api/runs/${x.import.id}/exports/findings.pptx`}
+            className="rounded-md border border-navy px-3 py-1.5 text-sm font-medium text-navy hover:bg-slate-50"
+            title="A PowerPoint of the strongest cases, each fact graded and sourced, for agency leadership"
+          >
+            Findings briefing (PowerPoint)
+          </a>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="rounded-md bg-navy px-3 py-1.5 text-sm font-medium text-white hover:bg-ink"
+          >
+            Print or save as PDF
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
