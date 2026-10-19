@@ -1081,12 +1081,14 @@ def muted_sites():
 
 
 @app.post("/api/context/muted-sites")
-def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""), mute: bool = Form(True)):
+def mute_site(analyst: str = Form(""), host: str = Form(""), note: str = Form(""), mute: str = Form("true")):
+    # a str, not a bool: newer FastAPI reads a missing bool form field as an unticked checkbox (False)
+    mute_on = mute.strip().lower() not in ("false", "0", "off", "no")
     analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the change is attributed.")
     try:
-        return {"sites": store.mute_site(analyst=analyst, host=host, note=note, mute=mute)}
+        return {"sites": store.mute_site(analyst=analyst, host=host, note=note, mute=mute_on)}
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
