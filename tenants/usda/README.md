@@ -20,3 +20,7 @@ Then in the USDA instance: add the SAM exclusions and entity extracts on the Imp
 
 Recipients USAspending shows without a UEI (redacted individuals, county aggregates) can't be screened; the build
 summary counts them. Every case shown to USDA is checked against primary records first.
+
+OSINT keys for this tenant go in `usda-data\osint.env` (one `NAME=value` per line: `BRAVE_API_KEY`,
+`COURTLISTENER_TOKEN`, `OPENSANCTIONS_API_KEY`, `SMARTY_AUTH_ID`, `SMARTY_AUTH_TOKEN`, `ANTHROPIC_API_KEY`). The
+launcher loads only those names, only into this process. Use keys made for USDA so the live site's limits are untouched.

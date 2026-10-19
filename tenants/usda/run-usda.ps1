@@ -24,6 +24,18 @@ $shared = "LEDGERHAWK_BACKUP_BUCKET LEDGERHAWK_BACKUP_ENDPOINT LEDGERHAWK_BACKUP
           "LEDGERHAWK_CF_API_TOKEN LEDGERHAWK_CF_ACCOUNT_ID LEDGERHAWK_CF_POLICY_ID LEDGERHAWK_CF_APP_ID " +
           "LEDGERHAWK_CF_TEAM_DOMAIN LEDGERHAWK_CF_AUD LEDGERHAWK_ACCESS_PASSWORD LEDGERHAWK_SITE_URL SAM_API_KEY"
 foreach ($v in $shared.Split(" ", [StringSplitOptions]::RemoveEmptyEntries)) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+# Optional OSINT keys for this tenant only, one NAME=value per line, kept outside the repo.
+# Only these names are read; anything else in the file is ignored.
+$keysFile = Join-Path $repo "usda-data\osint.env"
+$allowed = "BRAVE_API_KEY BRAVE_QPS COURTLISTENER_TOKEN OPENSANCTIONS_API_KEY SMARTY_AUTH_ID SMARTY_AUTH_TOKEN ANTHROPIC_API_KEY".Split(" ")
+if (Test-Path $keysFile) {
+    foreach ($line in Get-Content $keysFile) {
+        if ($line -match '^\s*([A-Z_]+)\s*=\s*(.+?)\s*$' -and $allowed -contains $Matches[1]) {
+            Set-Item "Env:$($Matches[1])" $Matches[2]
+        }
+    }
+    Write-Host "Loaded OSINT keys for this tenant from $keysFile"
+}
 $env:LEDGERHAWK_DATA_DIR = $DataDir
 $env:LEDGERHAWK_SEED_SYNTHETIC = "0"
 $env:LEDGERHAWK_WEEKLY = "0"
