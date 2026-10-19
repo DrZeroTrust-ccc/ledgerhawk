@@ -159,8 +159,11 @@ def test_context_api_and_subject_exports(tmp_path):
         sid = client.post("/api/subject-screens", data={"subjects_text": p["ex_affiliate"], "people_text": "Reese Fosterling, NY",
                                                         "analyst": "T", "sam_source": ids["sam"],
                                                         "exclusions_source": ids["exclusions"]}).json()["id"]
+        assert client.get(f"/api/subject-screens/{sid}/court-records.xlsx").status_code == 409
         r = client.post(f"/api/subject-screens/{sid}/context", data={"analyst": "A"})
         assert r.status_code == 200, r.text
+        courts_wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/court-records.xlsx").content))
+        assert courts_wb.sheetnames == ["Read Me", "Court Records", "By Vendor"] and courts_wb["By Vendor"].max_row == 2
         ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]
         assert [e.get("ref") for e in ents] == [1, None] and ents[1]["person_ref"] == 1 and ents[1]["person"]
         wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/subject-screen.xlsx").content))

@@ -32,6 +32,7 @@ from ..pipeline.subjects import PERSON_STATUSES, STATUSES, parse_people, parse_s
 from ..pipeline.tiering import OWNERS, TIER_MEANING, TIERS, default_tier, suggest_owner
 from ..exports.case import build_case
 from ..exports.small import build_small
+from ..exports.courts import build_court_records
 from ..exports.linkchart import build_linkchart
 from ..exports.subjects import build_subjects
 from ..exports.word import build_case_docx, build_far_memo_docx, build_subjects_docx
@@ -1153,6 +1154,19 @@ def export_link_chart(sid: str):
         raise HTTPException(404, "Subject screen not found")
     return Response(build_linkchart(s), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="LedgerHawk-Link-Chart-{sid}.xlsx"'})
+
+
+@app.get("/api/subject-screens/{sid}/court-records.xlsx")
+def export_court_records(sid: str, mentions: bool = False):
+    try:
+        s = store.subject_screen(sid)
+    except KeyError:
+        raise HTTPException(404, "Subject screen not found")
+    if not s.get("context"):
+        raise HTTPException(409, "Run the outside-context check on this screen first; court records come from it.")
+    return Response(build_court_records(s, include_mentions=mentions),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": f'attachment; filename="LedgerHawk-Court-Records-{sid}.xlsx"'})
 
 
 @app.get("/api/runs/{run_id}")

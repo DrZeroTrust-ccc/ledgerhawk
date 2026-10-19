@@ -464,9 +464,16 @@ def courts(q: str, fetch: Fetch) -> list[dict]:
             title = r.get("caseName") or r.get("case_name") or ""
             where = " · ".join(x for x in [r.get("court") or r.get("court_citation_string") or "",
                                            r.get("docketNumber") or ""] if x)
-            out.append(_item(label, title, ("https://www.courtlistener.com" + path) if path.startswith("/") else path,
-                             _iso(r.get("dateFiled") or ""), where=where, snippet=r.get("cause") or r.get("suitNature") or "",
-                             match="name in case"))
+            item = _item(label, title, ("https://www.courtlistener.com" + path) if path.startswith("/") else path,
+                         _iso(r.get("dateFiled") or ""), where=where, snippet=r.get("cause") or r.get("suitNature") or "",
+                         match="name in case")
+            # the docket's own fields, so a case can be graded on what the court record says (courtrecords.py)
+            item["case"] = {"kind": "docket" if kind == "r" else "opinion", "court": r.get("court") or "",
+                            "court_id": r.get("court_id") or "", "docket": r.get("docketNumber") or "",
+                            "filed": _iso(r.get("dateFiled") or ""), "terminated": _iso(r.get("dateTerminated") or ""),
+                            "suit": r.get("suitNature") or "", "cause": r.get("cause") or "",
+                            "parties": [str(p) for p in (r.get("party") or []) if p][:40]}
+            out.append(item)
     return out
 
 
