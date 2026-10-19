@@ -257,7 +257,7 @@ function Changes({ ch }: { ch: SubjectChanges }) {
   )
 }
 
-const JOB_KINDS: JobKind[] = ['recheck', 'awards', 'context']
+const JOB_KINDS: JobKind[] = ['recheck', 'awards', 'context', 'courts']
 
 function duration(ms: number) {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -306,7 +306,7 @@ function JobProgress({ job }: { job: ScreenJob }) {
   const elapsed = now - Date.parse(job.started_at)
   const pct = job.total ? Math.min(100, (job.done / job.total) * 100) : 0
   const left = job.done > 0 && job.total > job.done ? `about ${duration((elapsed / job.done) * (job.total - job.done))} left` : ''
-  const unit = job.kind === 'context' ? 'names' : job.kind === 'awards' ? 'lookups' : 'steps'
+  const unit = job.kind === 'context' || job.kind === 'courts' ? 'names' : job.kind === 'awards' ? 'lookups' : 'steps'
   return (
     <div className="rounded-md border border-navy-100 bg-navy-50 px-3 py-2" role="status" aria-live="polite">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs text-slate-600">
@@ -350,7 +350,7 @@ function JobButton({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const running = job?.state === 'running'
-  const start = { awards: api.fetchScreenAwards, context: api.fetchScreenContext, recheck: api.recheckSubjectScreen }[kind]
+  const start = { awards: api.fetchScreenAwards, context: api.fetchScreenContext, recheck: api.recheckSubjectScreen, courts: api.recheckScreenCourts }[kind]
   return (
     <span className="flex flex-col items-end gap-1">
       <Button
@@ -467,6 +467,7 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   })
   const running = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'running')
   const failed = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'error')
+  const courtsUnchecked = (data.context?.entities ?? []).filter((e) => e.sources?.courts?.error).length
   return (
     <div className="space-y-3">
       {m.privileged && (
@@ -501,6 +502,17 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
             busyLabel="Searching outside sources…"
             title="News, DOJ press releases, federal court records, SEC filings and the OFAC list for every subject and person"
           />
+          {(courtsUnchecked > 0 || jobs.courts?.state === 'running') && (
+            <JobButton
+              id={m.id}
+              kind="courts"
+              job={jobs.courts}
+              started={started}
+              label={`Re-check courts (${courtsUnchecked} not checked)`}
+              busyLabel="Re-checking courts…"
+              title="Ask CourtListener again for the names its rate limit skipped. Waits out the limit, so a long list can take hours."
+            />
+          )}
           {data.subjects.length > 0 && (
             <JobButton
               id={m.id}

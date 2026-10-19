@@ -160,8 +160,19 @@ def test_context_api_and_subject_exports(tmp_path):
                                                         "analyst": "T", "sam_source": ids["sam"],
                                                         "exclusions_source": ids["exclusions"]}).json()["id"]
         assert client.get(f"/api/subject-screens/{sid}/court-records.xlsx").status_code == 409
+        assert client.post(f"/api/subject-screens/{sid}/courts", data={"analyst": "A"}).json()["state"] == "error"
+        appmod.store.context_fetch = fake_sources(down=("courtlistener",))
         r = client.post(f"/api/subject-screens/{sid}/context", data={"analyst": "A"})
         assert r.status_code == 200, r.text
+        ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]
+        assert all(e["sources"]["courts"]["error"] for e in ents)
+        # the court re-check asks CourtListener again for just those names and keeps the other sources as they were
+        appmod.store.context_fetch = fake_sources()
+        job = client.post(f"/api/subject-screens/{sid}/courts", data={"analyst": "A"}).json()
+        assert job["state"] == "done" and job["result"] == {"names": 2, "checked": 2, "still_unchecked": 0}, job
+        ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]
+        assert not any(e["sources"]["courts"]["error"] for e in ents) and ents[0]["sources"]["courts"]["items"]
+        assert ents[0]["errors"] == 0
         courts_wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/court-records.xlsx").content))
         assert courts_wb.sheetnames == ["Read Me", "Court Records", "By Vendor"] and courts_wb["By Vendor"].max_row == 2
         ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]

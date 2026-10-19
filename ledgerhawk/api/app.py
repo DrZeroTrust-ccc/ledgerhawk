@@ -1051,6 +1051,15 @@ def screen_context(sid: str, analyst: str = Form("")):
     return _screen_job(sid, "context", analyst, run)
 
 
+@app.post("/api/subject-screens/{sid}/courts")
+def recheck_screen_courts(sid: str, analyst: str = Form("")):
+    """Re-ask CourtListener for the names its rate limit skipped, waiting the limit out."""
+    analyst = who(analyst)
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the re-check is attributed.")
+    return _screen_job(sid, "courts", analyst, lambda progress: store.recheck_courts(sid, analyst, progress))
+
+
 @app.get("/api/context")
 def get_context(uei: str = "", name: str = "", person: bool = False):
     return {"context": store.context(uei=uei, name=name, person=person)}

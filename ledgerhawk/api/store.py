@@ -22,6 +22,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import urllib.error
 import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1339,6 +1340,49 @@ class Store:
                    f"{sum(f['adverse'] for f in found)} with enforcement or litigation language")
         return out | {"entities": found}
 
+    def recheck_courts(self, sid: str, analyst: str, progress=None) -> dict:
+        """Ask CourtListener again for the names on a screen whose court search didn't answer (usually its rate limit),
+        waiting out the limit instead of skipping. Only the court results change; each name is saved as it finishes,
+        so a restart keeps what was done."""
+        d = self.root / "subjects" / sid
+        self.subject_screen(sid)  # KeyError if there is no such screen
+        f = d / "context.json"
+        if not f.exists():
+            raise ValueError("Run the outside-context check on this screen first.")
+        if (sid, "context") in self._jobs_running:
+            raise ValueError("The outside-context check is still running on this screen. Re-check courts after it finishes.")
+        ctx = json.loads(f.read_text())
+        todo = [i for i, e in enumerate(ctx["entities"]) if ((e.get("sources") or {}).get("courts") or {}).get("error")]
+        fetch = self.context_fetch or context_mod._fetch
+        if progress:
+            progress(0, len(todo), f"{len(todo)} names to re-check; waits out CourtListener's limit when it is reached")
+        fixed = 0
+        for n, i in enumerate(todo, start=1):
+            e = ctx["entities"][i]
+            c = e.get("clues") or context_mod.clues_for(e["name"], uei=e.get("uei", ""), person=e.get("person", False))
+            q = e.get("query") or (e["name"].strip().title() if e.get("person") else context_mod.query_name(e["name"]))
+            try:
+                items = [context_mod.score(x, c) | {"id": context_mod.item_id(x)}
+                         for x in context_mod.courts(q, fetch, patient=True)]
+                e["sources"]["courts"] = {"items": items, "error": "", "fetched_at": _now()}
+                fixed += 1
+            except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
+                why = getattr(exc, "code", "") or type(exc).__name__
+                e["sources"]["courts"] = {"items": [], "error": f"{context_mod.SOURCE_LABELS['courts']} did not answer ({why})"}
+            every = [x for src in e["sources"].values() for x in src["items"]]
+            e.update(count=len(every), adverse=sum(1 for x in every if x["tags"]),
+                     errors=sum(1 for src in e["sources"].values() if src["error"]))
+            self._save_context(e)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(ctx, indent=2))
+            tmp.replace(f)
+            if progress:
+                progress(n, len(todo), f"Finished: {e['name']}")
+        left = len(todo) - fixed
+        self.audit(analyst, "context_lookup", None, None, f"Court re-check for screen {sid}: {fixed} of {len(todo)} names "
+                   "answered" + (f", {left} still not checked" if left else ""))
+        return {"names": len(todo), "checked": fixed, "still_unchecked": left}
+
     def fetch_screen_awards(self, sid: str, analyst: str, progress=None) -> dict:
         """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""
         screen = self.subject_screen(sid)
@@ -1356,7 +1400,7 @@ class Store:
     # Each takes minutes, longer than a proxy will hold a request open, so it runs in a thread and reports progress to
     # jobs.json beside the screen; the page polls it. One job of each kind per screen at a time.
     JOB_LABELS = {"awards": "Looking up awards on USAspending", "context": "Searching outside sources",
-                  "recheck": "Re-checking with the latest data"}
+                  "recheck": "Re-checking with the latest data", "courts": "Re-checking federal court records"}
 
     def screen_jobs(self, sid: str) -> dict:
         f = self.root / "subjects" / sid / "jobs.json"
