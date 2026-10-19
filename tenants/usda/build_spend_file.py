@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import json
 import re
 import sys
@@ -57,7 +58,7 @@ def _post(url: str, body: dict | None) -> dict:
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 return json.load(r)
-        except (urllib.error.URLError, TimeoutError) as e:
+        except (urllib.error.URLError, http.client.HTTPException, OSError) as e:  # incl. dropped connections
             if isinstance(e, urllib.error.HTTPError) and e.code < 500 and e.code != 429:
                 raise
             time.sleep(2 ** attempt)
