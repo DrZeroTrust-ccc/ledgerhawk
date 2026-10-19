@@ -38,6 +38,7 @@ if (Test-Path $keysFile) {
 }
 $env:LEDGERHAWK_DATA_DIR = $DataDir
 $env:LEDGERHAWK_SEED_SYNTHETIC = "0"
+$env:LEDGERHAWK_AWARDING_AGENCY = "Department of Agriculture"  # USAspending checks count USDA money only
 $env:LEDGERHAWK_WEEKLY = "0"
 
 # Own virtualenv and web build inside this checkout.
