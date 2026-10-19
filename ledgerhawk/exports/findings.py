@@ -13,6 +13,7 @@ common never make a case on their own.
 """
 from __future__ import annotations
 
+from ..pipeline.awards import awarding_agency
 from ..pipeline.far import CONFIRMED, NEEDS_RECORD
 from ..pipeline.integrity import INTEGRITY_MEANING, _parse_date
 from ..pipeline.stages import SIGNAL_LABELS
@@ -316,7 +317,8 @@ def headline(case: dict) -> str:
         what = " and ".join(x for x in (f"{n} paid contract action{'s' if n != 1 else ''}" if n else "",
                                          f"{m} subcontract{'s' if m != 1 else ''}" if m else "") if x)
         money = f"{_money(case['after_dollars'])} " if case["after_dollars"] else ""
-        return (f"{case['name']} is on the SAM exclusions list, yet {money}in federal money reached it after the exclusion date"
+        whose = f"{awarding_agency()} money" if awarding_agency() else "federal money"
+        return (f"{case['name']} is on the SAM exclusions list, yet {money}in {whose} reached it after the exclusion date"
                 + (f" ({what} in USAspending)." if what else ", by the GSA vendor file's own fiscal-year totals."))
     if case["category"] == UNCHECKED and excl:
         return f"{case['name']} is on the SAM exclusions list; its contract actions after the exclusion date still need checking."

@@ -9,6 +9,7 @@ obligations as reported and can lag or be revised.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -34,6 +35,24 @@ MAX_UEIS = 200
 EARLIEST = "2007-10-01"  # USAspending search covers FY2008 onward
 
 Post = Callable[[str, dict], dict]
+
+
+def awarding_agency() -> str:
+    """The one awarding agency a tenant's lookups are limited to (LEDGERHAWK_AWARDING_AGENCY, a USAspending top-tier
+    name such as "Department of Agriculture"). Unset means every agency, as before."""
+    return os.environ.get("LEDGERHAWK_AWARDING_AGENCY", "").strip()
+
+
+def source_label() -> str:
+    agency = awarding_agency()
+    return f"USAspending ({agency} only)" if agency else "USAspending"
+
+
+def _filters(**f) -> dict:
+    agency = awarding_agency()
+    if agency:
+        f["agencies"] = [{"type": "awarding", "tier": "toptier", "name": agency}]
+    return f
 
 
 def _post(url: str, body: dict) -> dict:
@@ -80,8 +99,8 @@ def awards_for_uei(uei: str, post: Post = _post, today: date | None = None) -> d
     today = today or date.today()
     out = {"uei": uei, "awards": [], "truncated": False, "error": ""}
     for group, (codes, fields) in GROUPS.items():
-        body = {"filters": {"award_type_codes": codes, "recipient_search_text": [uei],
-                            "time_period": [{"start_date": EARLIEST, "end_date": today.isoformat()}]},
+        body = {"filters": _filters(award_type_codes=codes, recipient_search_text=[uei],
+                                    time_period=[{"start_date": EARLIEST, "end_date": today.isoformat()}]),
                 "fields": fields, "limit": PER_GROUP, "page": 1, "sort": "Award Amount", "order": "desc"}
         try:
             try:
@@ -173,8 +192,8 @@ def actions_after(uei: str, since: str, post: Post = _post, today: date | None =
         return out
     for group, (codes, _) in GROUPS.items():
         for page in range(1, TX_PAGES + 1):
-            body = {"filters": {"award_type_codes": codes, "recipient_search_text": [uei],
-                                "time_period": [{"start_date": since, "end_date": today.isoformat()}]},
+            body = {"filters": _filters(award_type_codes=codes, recipient_search_text=[uei],
+                                        time_period=[{"start_date": since, "end_date": today.isoformat()}]),
                     "fields": TX_FIELDS, "limit": TX_LIMIT, "page": page, "sort": "Action Date", "order": "asc"}
             try:
                 res = post(TX_API, body)
@@ -261,8 +280,8 @@ def subawards_for_uei(uei: str, since: str, post: Post = _post, today: date | No
     today = today or date.today()
     out = {"subawards": [], "truncated": False, "error": ""}
     body = {"spending_level": "subawards", "subawards": True,
-            "filters": {"award_type_codes": GROUPS["contract"][0], "recipient_search_text": [uei],
-                        "time_period": [{"start_date": EARLIEST, "end_date": today.isoformat()}]},
+            "filters": _filters(award_type_codes=GROUPS["contract"][0], recipient_search_text=[uei],
+                                time_period=[{"start_date": EARLIEST, "end_date": today.isoformat()}]),
             "fields": SUB_FIELDS, "limit": SUB_LIMIT, "page": 1, "sort": "Sub-Award Amount", "order": "desc"}
     try:
         res = post(API, body)
@@ -297,8 +316,8 @@ def history_for_uei(uei: str, post: Post = _post, today: date | None = None) -> 
     """Contract and IDV obligations by fiscal year for one UEI, so a jump can be read against the firm's own record."""
     today = today or date.today()
     codes = GROUPS["contract"][0] + GROUPS["idv"][0]
-    body = {"group": "fiscal_year", "filters": {"award_type_codes": codes, "recipient_search_text": [uei],
-                                                "time_period": [{"start_date": EARLIEST, "end_date": today.isoformat()}]}}
+    body = {"group": "fiscal_year", "filters": _filters(award_type_codes=codes, recipient_search_text=[uei],
+                                                        time_period=[{"start_date": EARLIEST, "end_date": today.isoformat()}])}
     try:
         try:
             res = post(HISTORY_API, body)
