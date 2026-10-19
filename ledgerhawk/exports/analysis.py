@@ -23,6 +23,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from ..pipeline.awards import source_label
 from ..pipeline.far import FAR_MAP_VERSION
 from ..pipeline.integrity import FY_START, INTEGRITY_MEANING, _parse_date
 from ..pipeline.rules import policy_label
@@ -77,7 +78,7 @@ def exclusion_timing(v: dict, awards: dict | None = None) -> tuple[str, str]:
             bits = ([f"{n} paid contract action{'s' if n != 1 else ''} ({_money(dollars)})" if n else ""]
                     + [f"{new} award{'s' if new != 1 else ''} starting" if new else ""]
                     + [f"{subs} subcontract{'s' if subs != 1 else ''} under other firms' contracts ({_money(sub_dollars)})" if subs else ""])
-            return "after", "USAspending: " + " and ".join(b for b in bits if b) + " after the exclusion date"
+            return "after", f"{source_label()}: " + " and ".join(b for b in bits if b) + " after the exclusion date"
         on_day, zero = awards.get("same_day", 0), awards.get("zero_dollar", 0)
         if on_day or zero:
             bits = ([f"{on_day} on the exclusion date itself" if on_day else ""]

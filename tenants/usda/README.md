@@ -24,3 +24,8 @@ summary counts them. Every case shown to USDA is checked against primary records
 OSINT keys for this tenant go in `usda-data\osint.env` (one `NAME=value` per line: `BRAVE_API_KEY`,
 `COURTLISTENER_TOKEN`, `OPENSANCTIONS_API_KEY`, `SMARTY_AUTH_ID`, `SMARTY_AUTH_TOKEN`, `ANTHROPIC_API_KEY`). The
 launcher loads only those names, only into this process. Use keys made for USDA so the live site's limits are untouched.
+
+On the USDA Render service, set `LEDGERHAWK_AWARDING_AGENCY=Department of Agriculture`. Every USAspending lookup in a
+subject screen or excluded-vendor check (paid after exclusion, awards starting after it, subcontracts, history) then
+counts only USDA money, and the app labels those lines "USAspending (Department of Agriculture only)". Services
+without the setting, such as the live GSA site, keep looking across every agency.
