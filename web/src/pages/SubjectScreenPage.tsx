@@ -526,6 +526,7 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
               { label: 'Report (Word)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.docx`, hint: 'Findings, next steps, notes and sign-off' },
               { label: 'Workbook (Excel)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/subject-screen.xlsx`, hint: 'Every subject, related firm, award and source' },
               { label: 'Link chart (i2 / Maltego)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/link-chart.xlsx`, hint: 'Entities and links to import' },
+              { label: 'Court records (Excel)', href: `/api/subject-screens/${encodeURIComponent(m.id)}/court-records.xlsx`, hint: 'Government cases first; needs the outside-context check' },
             ]}
           />
         </div>
