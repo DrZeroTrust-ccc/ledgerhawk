@@ -23,7 +23,7 @@ from ..pipeline.decisions import parse_decisions
 from ..pipeline.explain import QUEUE_LABELS, headline, why_it_flagged
 from ..pipeline import far as far_mod
 from ..pipeline.ledger import build_ledger
-from ..pipeline import samgov
+from ..pipeline import courtindex, samgov
 from ..pipeline import summary as summary_mod
 from ..pipeline.integrity import INTEGRITY_MEANING, INTEGRITY_TIERS, integrity_summary
 from ..pipeline.rules import RuleSet
@@ -705,6 +705,40 @@ def refresh_sources(analyst: str = Form("")):
     return {"enabled": True, **store.auto_status(), "running": True}
 
 
+@app.get("/api/court-index")
+def court_index_status():
+    """The local copy of CourtListener's dockets that court searches run on, and its build, if one is running."""
+    path = courtindex.default_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return {"enabled": courtindex.enabled(), "index": courtindex.status(), "job": courtindex.job(),
+            "disk_free_gb": round(shutil.disk_usage(path.parent).free / 1e9, 1)}
+
+
+@app.post("/api/court-index")
+def build_court_index(analyst: str = Form("")):
+    analyst = who(analyst)
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the build is attributed.")
+    if not courtindex.enabled():
+        raise HTTPException(503, "The court index is turned off on this server (LEDGERHAWK_COURT_INDEX=off).")
+    store.audit(analyst, "court_index", None, None, "Started building the local court docket index from CourtListener")
+    job = courtindex.start(inline=store.jobs_inline)
+    return court_index_status() | {"job": job}
+
+
+def _court_index_loop() -> None:
+    """Once a day, rebuild the court index when CourtListener has published a newer docket file."""
+    import time
+    while True:
+        time.sleep(6 * 3600)
+        try:
+            if courtindex.refresh_if_newer():
+                print("Court index: a newer CourtListener docket file is out; rebuilding", flush=True)
+        except Exception as exc:
+            print(f"Court index refresh check failed: {type(exc).__name__}: {exc}", flush=True)
+        time.sleep(18 * 3600)
+
+
 def _sam_gov_loop() -> None:
     """Check SAM.gov twice a day for a newer exclusions extract (daily) and entity extract (monthly)."""
     import time
@@ -736,6 +770,8 @@ def _index_newest_sam() -> None:
 
 
 threading.Thread(target=_index_newest_sam, daemon=True).start()
+if courtindex.enabled():
+    threading.Thread(target=_court_index_loop, daemon=True).start()
 if samgov.api_key():
     threading.Thread(target=_sam_gov_loop, daemon=True).start()
 

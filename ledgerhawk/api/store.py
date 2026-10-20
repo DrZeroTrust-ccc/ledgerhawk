@@ -1170,6 +1170,8 @@ class Store:
         screen["context"] = json.loads(cx.read_text()) if cx.exists() else None
         if screen["context"]:
             screen["context"]["entities"] = [self._with_verdicts(e) for e in screen["context"]["entities"]]
+            idx = context_mod.courtindex.status()
+            screen["context"]["courts_pending"] = sum(context_mod.courts_pending(e, idx) for e in screen["context"]["entities"])
         return screen
 
     # ---- outside context (news, courts, DOJ, SEC, OFAC) -------------------------------------------------------
@@ -1352,10 +1354,12 @@ class Store:
         if (sid, "context") in self._jobs_running:
             raise ValueError("The outside-context check is still running on this screen. Re-check courts after it finishes.")
         ctx = json.loads(f.read_text())
-        todo = [i for i, e in enumerate(ctx["entities"]) if ((e.get("sources") or {}).get("courts") or {}).get("error")]
+        idx = context_mod.courtindex.status()
+        todo = [i for i, e in enumerate(ctx["entities"]) if context_mod.courts_pending(e, idx)]
         fetch = self.context_fetch or context_mod._fetch
         if progress:
-            progress(0, len(todo), f"{len(todo)} names to re-check; waits out CourtListener's limit when it is reached")
+            progress(0, len(todo), f"{len(todo)} names to re-check" + (f" in the court index (as of {idx['as_of']})" if idx else
+                                                                         "; waits out CourtListener's limit when it is reached"))
         fixed = 0
         for n, i in enumerate(todo, start=1):
             e = ctx["entities"][i]
@@ -1363,8 +1367,9 @@ class Store:
             q = e.get("query") or (e["name"].strip().title() if e.get("person") else context_mod.query_name(e["name"]))
             try:
                 items = [context_mod.score(x, c) | {"id": context_mod.item_id(x)}
-                         for x in context_mod.courts(q, fetch, patient=True)]
-                e["sources"]["courts"] = {"items": items, "error": "", "fetched_at": _now()}
+                         for x in context_mod.courts(q, fetch, patient=True, recent=len(todo) <= context_mod.RECENT_COURTS_MAX)]
+                e["sources"]["courts"] = {"items": items, "error": "", "fetched_at": _now()} | (
+                    {"index_as_of": idx["as_of"]} if idx else {})
                 fixed += 1
             except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
                 why = getattr(exc, "code", "") or type(exc).__name__
