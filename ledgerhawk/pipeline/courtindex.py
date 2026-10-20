@@ -140,11 +140,13 @@ def build(path: Path | None = None, *, opener: Opener | None = None, listing=Non
         p.unlink(missing_ok=True)
     db = sqlite3.connect(tmp)
     try:
+        # rows go in file order under SQLite's own rowid: keyed by CourtListener's id (random order in the file),
+        # every insert landed on a random page of a growing table and the load slowed to a crawl
         db.executescript("""
             PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-65536;
             CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
             CREATE TABLE courts(id TEXT PRIMARY KEY, short TEXT, full TEXT, jurisdiction TEXT);
-            CREATE TABLE d(id INTEGER PRIMARY KEY, court TEXT, docket TEXT, filed TEXT, terminated TEXT, suit TEXT,
+            CREATE TABLE d(cid INTEGER, court TEXT, docket TEXT, filed TEXT, terminated TEXT, suit TEXT,
                            cause TEXT, name TEXT, slug TEXT);
         """)
         say("Loading the court list")
@@ -169,18 +171,19 @@ def build(path: Path | None = None, *, opener: Opener | None = None, listing=Non
                     continue
                 batch.append((int(i), court, docket, filed, term, suit[:120], cause[:120], cap, slug[:80]))
                 if len(batch) >= BATCH:
-                    db.executemany("INSERT OR REPLACE INTO d VALUES(?,?,?,?,?,?,?,?,?)", batch)
+                    db.executemany("INSERT INTO d VALUES(?,?,?,?,?,?,?,?,?)", batch)
+                    db.commit()
                     n += len(batch)
                     batch = []
                     if n % 1_000_000 == 0:
                         say(f"Loaded {n / 1e6:.0f}M dockets ({min(99, 100 * raw.pos // max(src['size'], 1))}% of the file)")
             if batch:
-                db.executemany("INSERT OR REPLACE INTO d VALUES(?,?,?,?,?,?,?,?,?)", batch)
+                db.executemany("INSERT INTO d VALUES(?,?,?,?,?,?,?,?,?)", batch)
                 n += len(batch)
         say(f"Indexing {n:,} case captions for search")
         db.executescript("""
-            CREATE VIRTUAL TABLE f USING fts5(name, content='d', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
-            INSERT INTO f(rowid, name) SELECT id, name FROM d;
+            CREATE VIRTUAL TABLE f USING fts5(name, content='d', tokenize='unicode61 remove_diacritics 2');
+            INSERT INTO f(rowid, name) SELECT rowid, name FROM d;
             INSERT INTO f(f) VALUES('optimize');
         """)
         meta = {"key": src["key"], "as_of": src["as_of"], "dockets": n,
@@ -238,9 +241,12 @@ def search(q: str, limit: int = 25, path: Path | None = None) -> list[dict]:
     phrase = _phrase(q)
     if not c or not phrase:
         return []
-    sql = f"""SELECT d.id, d.court, d.docket, d.filed, d.terminated, d.suit, d.cause, d.name, d.slug,
+    # an index built before 2026-10-20 keys dockets by CourtListener's id; later ones keep it in cid
+    with _lock:
+        old = "cid" not in {r[1] for r in c.execute("PRAGMA table_info(d)")}
+    sql = f"""SELECT {"d.id" if old else "d.cid"}, d.court, d.docket, d.filed, d.terminated, d.suit, d.cause, d.name, d.slug,
                      COALESCE(k.short, ''), COALESCE(k.full, ''), COALESCE(k.jurisdiction, '')
-              FROM f JOIN d ON d.id = f.rowid LEFT JOIN courts k ON k.id = d.court
+              FROM f JOIN d ON {"d.id" if old else "d.rowid"} = f.rowid LEFT JOIN courts k ON k.id = d.court
               WHERE f MATCH ? ORDER BY {_RANK}, d.filed DESC LIMIT ?"""
     with _lock:
         rows = c.execute(sql, (f"name:{phrase}", limit)).fetchall()

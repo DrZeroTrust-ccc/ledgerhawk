@@ -134,3 +134,23 @@ def test_build_needs_disk_space(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="Raise the disk size"):
         ci.build(tmp_path / "c.sqlite", opener=opener, listing=listing)
     assert ci.status(tmp_path / "c.sqlite") is None
+
+
+def test_search_reads_an_index_built_by_the_first_version(tmp_path):
+    import sqlite3
+    p = tmp_path / "old.sqlite"
+    db = sqlite3.connect(p)
+    db.executescript("""
+        CREATE TABLE meta(k TEXT PRIMARY KEY, v TEXT);
+        CREATE TABLE courts(id TEXT PRIMARY KEY, short TEXT, full TEXT, jurisdiction TEXT);
+        CREATE TABLE d(id INTEGER PRIMARY KEY, court TEXT, docket TEXT, filed TEXT, terminated TEXT, suit TEXT,
+                       cause TEXT, name TEXT, slug TEXT);
+        INSERT INTO d VALUES(68822695, 'vawd', '6:24-cr-00016', '2024-06-03', '', '', '', 'United States v. Envigo RMS, LLC', 's');
+        CREATE VIRTUAL TABLE f USING fts5(name, content='d', content_rowid='id');
+        INSERT INTO f(rowid, name) SELECT id, name FROM d;
+    """)
+    db.commit()
+    db.close()
+    ci._cache.clear()
+    assert [h["id"] for h in ci.search("Envigo RMS", path=p)] == [68822695]
+    ci._cache.clear()
