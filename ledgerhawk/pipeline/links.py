@@ -25,8 +25,9 @@ SIGNAL_LABELS.update({
     "R_split_cert": "Certified firm split across UEIs",
     "L_successor": "Linked successor",
     "L_affil_cert": "Possible certified-firm affiliation",
+    "L_network": "Funded network (shared contact or suite)",
 })
-SAM_SIGNALS = {"R_young", "R_split_cert", "L_successor", "L_affil_cert"}
+SAM_SIGNALS = {"R_young", "R_split_cert", "L_successor", "L_affil_cert", "L_network"}
 CORE_SIGNALS = {"S1", "S2", "S3", "S4"} | SAM_SIGNALS
 MAX_NEIGHBORS = 25
 
@@ -177,6 +178,7 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
                 add(i, "L_affil_cert", f"Certified ({', '.join(ri['sam']['certs'])}) and linked to certified {rj['name']} "
                                        f"[{rj['uei']}] ({', '.join(rj['sam']['certs'])}) via {via}")
     df["links"] = [links.get(i, []) for i in df.index]
+    net_people, net_suites = _networks(df, gsa.index, sam, rules, add)
     df["signals"] = [sig[i] for i in df.index]
 
     # --- Neighborhood for the link graph (non-hub shared keys only) -------------------------
@@ -184,7 +186,7 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
     bkey_rows: dict[str, list[int]] = defaultdict(list)
     for i in gsa.index:
         c = df.at[i, "sam"]
-        if c["akey"] and c["suite_count"] <= cap:
+        if c["akey"] and (c["suite_count"] <= cap or c["akey"] in net_suites):
             akey_rows[c["akey"]].append(i)
         if c["bkey"] and c["bldg_count"] <= cap:
             bkey_rows[c["bkey"]].append(i)
@@ -205,7 +207,7 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
                 d["via"].append(how)
 
         for p in c["pocs"]:
-            if p["universe"] <= cap:
+            if p["universe"] <= cap or p["pkey"] in net_people:
                 for j in by_person.get(p["pkey"], [])[: MAX_NEIGHBORS + 1]:
                     note(j, f"person:{p['pkey']}")
         for j in akey_rows.get(c["akey"], []):
@@ -219,6 +221,44 @@ def sam_screen(df: pd.DataFrame, sam: SamExtract | SamSlice, rules: RuleSet, ex:
     if ex is not None:
         df = _exclusion_links(df, sam, ex, rules)
     return df
+
+
+def _networks(df: pd.DataFrame, idx, sam, rules: RuleSet, add) -> tuple[set[str], set[str]]:
+    """L_network: a contact or suite tied to at least `network_min_members` vendors in the file, with combined dollars of
+    at least `network_min_total`, where those vendors are at least `network_share` of the contact's or suite's SAM
+    registrations (at most `network_cap`). Returns the contact and suite keys that qualified."""
+    if rules.network_min_members <= 0:
+        return set(), set()
+    people: dict[str, list[int]] = defaultdict(list)
+    suites: dict[str, list[int]] = defaultdict(list)
+    names: dict[str, str] = {}
+    for i in idx:
+        c = df.at[i, "sam"]
+        for p in c["pocs"]:
+            if i not in people[p["pkey"]]:
+                people[p["pkey"]].append(i)
+                names[p["pkey"]] = f"{p['name']} ({p['state']})"
+        if c["akey"]:
+            suites[c["akey"]].append(i)
+            names[c["akey"]] = c["address"]
+    found: tuple[set[str], set[str]] = (set(), set())
+    for kind, groups, universe, out in (("contact", people, sam.freq_person, found[0]),
+                                        ("suite", suites, sam.freq_suite, found[1])):
+        for key, rows in groups.items():
+            n, u = len(rows), int(universe.get(key, 0)) or len(rows)
+            total = float(df.loc[rows, "tot"].sum())
+            if (n < rules.network_min_members or u > rules.network_cap or n / u < rules.network_share
+                    or total < rules.network_min_total):
+                continue
+            out.add(key)
+            top = sorted(rows, key=lambda j: -df.at[j, "tot"])
+            for i in rows:
+                others = [df.at[j, "name"] for j in top if j != i][:4]
+                more = f" and {n - 1 - len(others)} more" if n - 1 > len(others) else ""
+                add(i, "L_network", f"One of {n} funded vendors sharing {kind} {names[key]} ({money(total)} combined; "
+                                    f"{n} of its {u} SAM registrations): {', '.join(others)}{more}",
+                    network_key=key, network_kind=kind, network_size=n, network_total=total)
+    return found
 
 
 def _exclusion_links(df: pd.DataFrame, sam: SamSlice, ex: ExclusionsExtract, rules: RuleSet) -> pd.DataFrame:

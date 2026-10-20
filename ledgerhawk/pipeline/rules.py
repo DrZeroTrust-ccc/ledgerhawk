@@ -170,6 +170,13 @@ class RuleSet:
     person_vendor_cap: int = 8
     l_min: float = 250_000
     l_fade_ratio: float = 0.25
+    # Funded network: one contact or suite tied to many vendors in the file, like a meal sponsor and its sites. Off at 0.
+    # A registered agent also sits on many registrations, but few of them are in the file; requiring the file's share
+    # of the contact's or suite's SAM registrations to be high tells the two apart, so the hub cap doesn't hide it.
+    network_min_members: int = 0
+    network_share: float = 0.5
+    network_min_total: float = 1_000_000
+    network_cap: int = 50
     stem_stop_words: list[str] = field(default_factory=lambda: list(STEM_STOP_WORDS))
     # Lists
     majors: list[str] = field(default_factory=lambda: list(DEFAULT_MAJORS))

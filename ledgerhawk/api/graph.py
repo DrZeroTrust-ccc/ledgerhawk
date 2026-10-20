@@ -30,16 +30,18 @@ def build_graph(v: dict, by_uei: dict[str, dict], by_nn: dict[str, list[str]], h
 
     center = vnode(v["uei"])
     card = v.get("sam") or {}
+    # A funded network's contact or suite is shared by many registrations but is the link itself, not a hub.
+    network = {s.get("network_key") for s in v.get("signals", []) if s.get("id") == "L_network"}
     person_ids: dict[str, str] = {}
     for p in card.get("pocs", []):
-        hub = p["universe"] > hub_cap
+        hub = p["universe"] > hub_cap and p["pkey"] not in network
         pid = node(f"p:{p['pkey']}", "person", f"{p['name']} ({p['state']})", universe=p["universe"], hub=hub,
                    note=f"shared by {p['universe']} SAM entities, suppressed" if hub else "")
         person_ids[p["pkey"]] = pid
         edge(center, pid, "has_poc", p["role"].replace("_", " "))
     suite = bldg = None
     if card.get("akey"):
-        hub = card["suite_count"] > hub_cap
+        hub = card["suite_count"] > hub_cap and card["akey"] not in network
         suite = node(f"a:{card['akey']}", "suite", card["address"], universe=card["suite_count"], hub=hub,
                      note=f"{card['suite_count']} SAM entities at this suite, suppressed" if hub else "")
         edge(center, suite, "located_at")
