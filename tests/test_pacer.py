@@ -71,6 +71,9 @@ def test_qa_and_refused_login(monkeypatch):
     assert pacer.search_url().startswith("https://qa-pcl.uscourts.gov/") and "qa-login" in pacer.login_url()
     with pytest.raises(pacer.PacerError, match="Invalid username or password"):
         pacer.party_search("X", FakePacer(refuse=True))
+    monkeypatch.delenv("PACER_LOGIN_ID")
+    monkeypatch.setenv("PACER_USERNAME", "firm")
+    assert pacer.configured() and pacer._login_id() == "firm"
     monkeypatch.delenv("PACER_PASSWORD")
     assert not pacer.configured()
 

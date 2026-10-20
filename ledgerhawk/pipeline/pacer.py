@@ -5,8 +5,8 @@ party index finds it.
 
 PACER is paid: about $0.10 per page of results (54 cases a page), waived when an account's total stays under $30 a
 quarter. So it is only run for the vendors that matter (flagged or top-dollar, see store.pacer_check) and each search
-fetches PACER_MAX_PAGES pages (default 1). The account is the analyst's firm's own, set as PACER_LOGIN_ID and
-PACER_PASSWORD (and PACER_CLIENT_CODE if the account needs one) in the server environment; PACER_ENV=qa points at
+fetches PACER_MAX_PAGES pages (default 1). The account is the analyst's firm's own, set as PACER_LOGIN_ID (or PACER_USERNAME)
+and PACER_PASSWORD (and PACER_CLIENT_CODE if the account needs one) in the server environment; PACER_ENV=qa points at
 PACER's free test system.
 """
 from __future__ import annotations
@@ -38,8 +38,13 @@ ROLES = {"dft": "Defendant", "pla": "Plaintiff", "pet": "Petitioner", "res": "Re
          "ust": "U.S. Trustee", "garn": "Garnishee", "mov": "Movant", "rlt": "Relator"}
 
 
+def _login_id() -> str:
+    # PACER calls it a username on its site and loginId in its API; either name works
+    return (os.environ.get("PACER_LOGIN_ID") or os.environ.get("PACER_USERNAME") or "").strip()
+
+
 def configured() -> bool:
-    return bool(os.environ.get("PACER_LOGIN_ID", "").strip() and os.environ.get("PACER_PASSWORD", "").strip())
+    return bool(_login_id() and os.environ.get("PACER_PASSWORD", "").strip())
 
 
 def _qa() -> bool:
@@ -79,7 +84,7 @@ _state = {"token": "", "last": 0.0}
 
 
 def _login(post: Post) -> str:
-    body = {"loginId": os.environ.get("PACER_LOGIN_ID", "").strip(), "password": os.environ.get("PACER_PASSWORD", "")}
+    body = {"loginId": _login_id(), "password": os.environ.get("PACER_PASSWORD", "")}
     if os.environ.get("PACER_CLIENT_CODE", "").strip():
         body["clientCode"] = os.environ["PACER_CLIENT_CODE"].strip()
     res = json.loads(post(login_url(), body, {}))
