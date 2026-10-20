@@ -97,6 +97,14 @@ def case_type(item: dict) -> str:
     return OTHER
 
 
+# Words that make a firm's core name read as an ordinary phrase in a DOJ title ("bribes on federal contracts"), so such
+# a firm needs its full legal name (with LLC, INC) or a known other name to count as named.
+_PLAIN_WORDS = {"FEDERAL", "CONTRACT", "CONTRACTS", "CONTRACTING", "CONTRACTOR", "CONTRACTORS", "GOVERNMENT", "DEFENSE",
+                "PUBLIC", "HEALTH", "HEALTHCARE", "MEDICAL", "CARE", "PRISON", "INDUSTRIES", "SECURITY", "NATIONAL",
+                "AMERICAN", "AMERICA", "UNITED", "STATES", "PROGRAM", "PROGRAMS", "GRANT", "GRANTS", "BENEFITS", "MEDICARE",
+                "MEDICAID", "ENERGY", "CONSTRUCTION", "PROCUREMENT", "SUPPLY", "SUPPLIES", "SYSTEMS"}
+
+
 def _named(text: str, c: dict) -> bool:
     """The vendor's name in a party name or caption: the full legal name or another known name, or the core name when
     it is distinctive enough to stand on its own."""
@@ -104,7 +112,9 @@ def _named(text: str, c: dict) -> bool:
     if cx._has(flat, c["name"]) or any(cx._has(flat, n) for n in c["other_names"]):
         return True
     core = normalize_name(c["name"])
-    return not c["generic"] and len(core.split()) >= 2 and cx._has(flat, core) and not cx._other_business(flat, c)
+    if c["generic"] or len(core.split()) < 2 or all(t in cx.GENERIC or t in _PLAIN_WORDS for t in core.split()):
+        return False
+    return cx._has(flat, core) and not cx._other_business(flat, c)
 
 
 def role(item: dict, c: dict) -> str:

@@ -107,3 +107,9 @@ def test_doj_releases_that_name_a_place_or_a_prison_are_not_cases():
     assert cr.grade(_doj("Federal Prison Industries Inc Agrees to Settle Kickback Claims"), fpi) == cr.GOVERNMENT
     # a firm in the title with charging language is still a government case
     assert cr.grade(_doj("Ridge Analytics LLC Indicted in Contract Fraud Scheme"), C) == cr.GOVERNMENT
+
+
+def test_a_plain_phrase_name_needs_its_full_legal_name():
+    fc = cx.clues_for("FEDERAL CONTRACTS LLC")
+    assert cr.grade(_doj("Raytheon Agrees to Pay $950M to Resolve False Claims Act Allegations on Federal Contracts"), fc) == cr.MENTION
+    assert cr.grade(_doj("Federal Contracts LLC Owner Pleads Guilty to Bribery"), fc) == cr.GOVERNMENT
