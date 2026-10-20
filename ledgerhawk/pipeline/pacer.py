@@ -87,7 +87,10 @@ def _login(post: Post) -> str:
     body = {"loginId": _login_id(), "password": os.environ.get("PACER_PASSWORD", "")}
     if os.environ.get("PACER_CLIENT_CODE", "").strip():
         body["clientCode"] = os.environ["PACER_CLIENT_CODE"].strip()
-    res = json.loads(post(login_url(), body, {}))
+    try:
+        res = json.loads(post(login_url(), body, {}))
+    except urllib.error.HTTPError as exc:
+        raise PacerError(f"PACER's login service refused the account (HTTP {exc.code}){_said(exc)}") from None
     if str(res.get("loginResult")) != "0" or not res.get("nextGenCSO"):
         # PACER's own words (wrong password, client code needed...); never the request, which carries the password
         raise PacerError(f"PACER login refused: {res.get('errorDescription') or 'no reason given'}")
@@ -121,12 +124,31 @@ def _find(body: dict, page: int, post: Post) -> dict:
             time.sleep(wait)
         _state["last"] = time.monotonic()
     for fresh in (False, True):
+        token = _token(post, fresh)
         try:
-            return json.loads(post(search_url(page), body, headers | {"X-NEXT-GEN-CSO": _token(post, fresh)}))
+            return json.loads(post(search_url(page), body, headers | {"X-NEXT-GEN-CSO": token}))
         except urllib.error.HTTPError as exc:
-            if exc.code not in (401, 403) or fresh:  # an expired token gets one fresh login
+            if exc.code not in (401, 403):
                 raise
+            if fresh:  # a fresh login was refused too: the account, not the token
+                raise PacerError(f"PACER logged in but refused the Case Locator search (HTTP {exc.code}){_said(exc)}. "
+                                 "The account may not have Case Locator access yet, or needs a client code.") from None
     raise AssertionError("unreachable")
+
+
+def _said(exc: urllib.error.HTTPError) -> str:
+    """What PACER's error response says, if anything, for the job's error message and the server log."""
+    try:
+        raw = exc.read()[:2000].decode("utf-8", "replace")
+    except (OSError, AttributeError, TypeError):
+        return ""
+    try:
+        res = json.loads(raw)
+        text = res.get("errorDescription") or res.get("message") or res.get("error") or "" if isinstance(res, dict) else ""
+    except ValueError:
+        text = re.sub(r"<[^>]+>|\s+", " ", raw).strip()[:200]
+    log.warning("PACER answered HTTP %s: %s", exc.code, text or "(no body)")
+    return f": {text}" if text else ""
 
 
 def _docket(row: dict) -> str:

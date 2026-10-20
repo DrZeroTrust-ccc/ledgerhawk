@@ -129,3 +129,21 @@ def test_court_flags_lists_enforcement_cases_worst_first():
     assert [f["name"] for f in cf["flags"]] == ["ENVIGO RMS LLC", "DELTA WIDGETS LLC"]  # criminal first; the CFC dispute is counted
     assert cf["flags"][0]["worst"] == cr.CRIMINAL and cf["flags"][0]["records"][0]["docket"] == "6:24-cr-00016"
     assert cf["contract_disputes"] == 1 and cf["vendors"] == 3 and cf["unchecked"] == 0
+
+
+def test_refusals_stop_with_pacers_reason():
+    import io
+
+    class Refuses(FakePacer):
+        def __call__(self, url, body, headers):
+            if "parties/find" in url:
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(b'{"message": "PCL access not enabled"}'))
+            return super().__call__(url, body, headers)
+    with pytest.raises(pacer.PacerError, match="refused the Case Locator search .HTTP 401.: PCL access not enabled"):
+        pacer.party_search("X", Refuses())
+
+    def login_401(url, body, headers):
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(b"<html>Unauthorized</html>"))
+    pacer._state["token"] = ""
+    with pytest.raises(pacer.PacerError, match="login service refused the account .HTTP 401.: Unauthorized"):
+        pacer.party_search("X", login_401)
