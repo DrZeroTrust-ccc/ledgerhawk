@@ -10,6 +10,7 @@ import {
   type ScreenJob,
   type ScreenJobs,
   type ScreenContext,
+  type CourtFlags as CourtFlagsData,
   type SubjectChanges,
   type SubjectResult,
   type SubjectScreen,
@@ -564,6 +565,72 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   )
 }
 
+const CASE_STYLE: Record<string, string> = {
+  Criminal: 'bg-crimson-50 text-crimson ring-1 ring-crimson/30',
+  'False Claims Act / qui tam': 'bg-crimson-50 text-crimson ring-1 ring-crimson/30',
+  'U.S. government civil case': 'bg-amber-50 text-amber-800 ring-1 ring-amber-200',
+}
+const MATCH_LABEL: Record<string, string> = { strong: 'Strong match', possible: 'Possible match', weak: 'Name only' }
+
+function CourtFlags({ cf, id }: { cf: CourtFlagsData; id: string }) {
+  const [all, setAll] = useState(false)
+  const shown = all ? cf.flags : cf.flags.slice(0, 10)
+  return (
+    <Card
+      title="Court red flags"
+      action={
+        <a className="text-sm text-navy underline" href={`/api/subject-screens/${encodeURIComponent(id)}/court-records.xlsx`}>
+          All court records (Excel)
+        </a>
+      }
+    >
+      <p className="text-sm text-slate-600">
+        {cf.flags.length
+          ? `${cf.flags.length} of ${cf.vendors} vendors are named in a criminal, False Claims Act or other U.S. government case.`
+          : `None of the ${cf.vendors} vendors is named in a criminal, False Claims Act or other U.S. government case.`}{' '}
+        Also: {cf.contract_disputes} with a contract dispute against the government, {cf.party_cases} with other federal suits (in the Excel).
+        {cf.unchecked > 0 && <span className="font-semibold text-crimson"> {cf.unchecked} vendors not yet checked.</span>}
+      </p>
+      {shown.length > 0 && (
+        <div className="mt-3 divide-y divide-slate-100">
+          {shown.map((f) => (
+            <div key={f.uei || f.name} className="py-2">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-semibold text-ink">{f.name}</span>
+                {f.uei && <span className="text-xs text-slate-500">{f.uei}</span>}
+                {f.tot > 0 && <span className="text-xs text-slate-500">{money(f.tot)}</span>}
+                {f.ref != null && <span className="text-xs text-slate-400">#{f.ref}</span>}
+              </div>
+              <ul className="mt-1 space-y-1">
+                {f.records.map((r, i) => (
+                  <li key={i} className="flex flex-wrap items-baseline gap-2 text-sm">
+                    <span className={`rounded px-1.5 py-0.5 text-xs ${CASE_STYLE[r.case_type] ?? 'bg-slate-100 text-slate-700'}`}>{r.case_type}</span>
+                    <a className="text-navy underline" href={r.url} target="_blank" rel="noreferrer">
+                      {r.title || r.docket || r.source}
+                    </a>
+                    <span className="text-xs text-slate-500">
+                      {[r.court, r.docket, r.filed?.slice(0, 10), r.role && `vendor is ${r.role.toLowerCase()}`, MATCH_LABEL[r.confidence], r.verdict === 'same' && 'confirmed by analyst']
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  </li>
+                ))}
+                {f.count > f.records.length && <li className="text-xs text-slate-500">and {f.count - f.records.length} more in the Excel</li>}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+      {cf.flags.length > 10 && (
+        <button className="mt-2 text-sm text-navy underline" onClick={() => setAll(!all)}>
+          {all ? 'Show the first 10' : `Show all ${cf.flags.length}`}
+        </button>
+      )}
+      <p className="mt-2 text-xs text-slate-500">Matched on the case name. Open the docket and confirm the party before citing a case.</p>
+    </Card>
+  )
+}
+
 export default function SubjectScreenPage() {
   const { id = '' } = useParams()
   const { data, error, reload } = useAsync(() => api.subjectScreen(id), [id])
@@ -579,6 +646,7 @@ export default function SubjectScreenPage() {
       <Breadcrumbs items={[{ label: 'Subject screens', to: '/subjects' }, { label: data.meta.matter || 'Untitled matter' }]} />
       <Header key={data.meta.id} data={data} reload={reload} />
       {data.changes && <Changes ch={data.changes} />}
+      {data.court_flags && <CourtFlags cf={data.court_flags} id={data.meta.id} />}
       <Review ctx={ctx} notesTarget="screen" />
       <Card>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

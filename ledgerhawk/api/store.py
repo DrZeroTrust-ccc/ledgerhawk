@@ -1183,6 +1183,7 @@ class Store:
             screen["context"]["entities"] = [self._with_verdicts(e) for e in screen["context"]["entities"]]
             idx = context_mod.courtindex.status()
             screen["context"]["courts_pending"] = sum(context_mod.courts_pending(e, idx) for e in screen["context"]["entities"])
+            screen["court_flags"] = courtrecords_mod.court_flags(screen)
             screen["context"]["pacer"] = {"configured": pacer_mod.configured(),
                                           "todo": len(courtrecords_mod.pacer_targets(screen, pacer_top()))}
         return screen

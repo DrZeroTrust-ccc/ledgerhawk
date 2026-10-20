@@ -747,6 +747,27 @@ export type SubjectScreen = {
   review: ScreenReview
   awards: ScreenAwards | null
   context: ScreenContext | null
+  court_flags?: CourtFlags
+}
+
+export type CourtFlagRecord = {
+  title: string
+  url: string
+  source: string
+  case_type: string
+  role: string
+  court: string
+  docket: string
+  filed: string
+  confidence: string
+  verdict: string
+}
+export type CourtFlags = {
+  flags: { name: string; uei: string; ref: number | null; tot: number; count: number; worst: string; records: CourtFlagRecord[] }[]
+  contract_disputes: number
+  party_cases: number
+  vendors: number
+  unchecked: number
 }
 
 export type Award = {

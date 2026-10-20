@@ -113,3 +113,19 @@ def test_targets_are_flagged_and_top_dollar():
                                        {"name": "Pat Doe", "person": True, "sources": {}}]}}
     # flagged first (excluded, court party), then the biggest not yet searched; the top 2 are A (done) and B
     assert cr.pacer_targets(screen, top=2) == [2, 3, 1]
+
+
+def test_court_flags_lists_enforcement_cases_worst_first():
+    def doc(title, docket, court="vawd"):
+        i = cx._item("Federal docket", title, f"https://www.courtlistener.com/docket/{docket}/x/", "2024-01-01")
+        i["case"] = {"docket": docket, "court_id": court, "parties": []}
+        return i
+    ents = [{"name": "ENVIGO RMS LLC", "uei": "E", "ref": 1, "sources": {"courts": {"items": [doc("United States v. Envigo RMS, LLC", "6:24-cr-00016")], "error": ""}}},
+            {"name": "RIDGE ANALYTICS LLC", "uei": "R", "ref": 2, "sources": {"courts": {"items": [doc("Ridge Analytics LLC v. United States", "1:22-cv-00500", "uscfc")], "error": ""}}},
+            {"name": "DELTA WIDGETS LLC", "uei": "D", "ref": 3, "sources": {"courts": {"items": [doc("United States v. Delta Widgets LLC", "5:26-cv-05132", "arwd")], "error": ""}}}]
+    screen = {"subjects": [{"status": "clear", "entities": [{"uei": "E", "tot": 1.0}, {"uei": "R", "tot": 9.0}, {"uei": "D", "tot": 5.0}]}],
+              "context": {"entities": ents}}
+    cf = cr.court_flags(screen)
+    assert [f["name"] for f in cf["flags"]] == ["ENVIGO RMS LLC", "DELTA WIDGETS LLC"]  # criminal first; the CFC dispute is counted
+    assert cf["flags"][0]["worst"] == cr.CRIMINAL and cf["flags"][0]["records"][0]["docket"] == "6:24-cr-00016"
+    assert cf["contract_disputes"] == 1 and cf["vendors"] == 3 and cf["unchecked"] == 0

@@ -274,3 +274,35 @@ def pacer_targets(screen: dict, top: int = 25) -> list[int]:
     vendors = [i for i, e in enumerate(cxs) if not e.get("person") and dollars(i) > 0]
     biggest = set(sorted(vendors, key=lambda i: -dollars(i))[:top]) & set(todo)
     return sorted(flagged | biggest, key=lambda i: (i not in flagged, -dollars(i)))
+
+
+ENFORCEMENT_TYPES = [CRIMINAL, FCA, US_CIVIL]
+
+
+def court_flags(screen: dict, per_vendor: int = 5) -> dict:
+    """The screen's court red flags for the top of the screen page: vendors named in a criminal, False Claims Act or
+    other United States case (or a DOJ release saying so), worst first. Contract disputes with the government and
+    private suits are counted, not listed; the court-records workbook has them all."""
+    res = screen_records(screen)
+    flags, disputes, party = [], 0, 0
+    for v in res["vendors"]:
+        gov = [r for r in v["records"] if r["grade"] == GOVERNMENT]
+        hits = [r for r in gov if r["case_type"] in ENFORCEMENT_TYPES]
+        disputes += any(r["case_type"] == CONTRACT_US for r in gov)
+        party += bool(v["counts"][PARTY])
+        if not hits:
+            continue
+        hits.sort(key=lambda r: (ENFORCEMENT_TYPES.index(r["case_type"]), r["analyst_verdict"] != "same",
+                                 [-ord(ch) for ch in (r.get("date") or "")]))
+        flags.append({"name": v["name"], "uei": v["uei"], "ref": v["ref"], "tot": v["tot"], "count": len(hits),
+                      "worst": hits[0]["case_type"],
+                      "records": [{"title": r.get("title", ""), "url": r.get("url", ""), "source": r.get("source", ""),
+                                   "case_type": r["case_type"], "role": r.get("role", ""),
+                                   "court": (r.get("case") or {}).get("court") or r.get("where", ""),
+                                   "docket": (r.get("case") or {}).get("docket", ""),
+                                   "filed": (r.get("case") or {}).get("filed") or r.get("date", ""),
+                                   "confidence": r.get("confidence", ""), "verdict": r["analyst_verdict"]}
+                                  for r in hits[:per_vendor]]})
+    flags.sort(key=lambda f: (ENFORCEMENT_TYPES.index(f["worst"]), -f["tot"], f["name"]))
+    return {"flags": flags, "contract_disputes": disputes, "party_cases": party,
+            "vendors": res["counts"]["vendors"], "unchecked": res["counts"]["unchecked"]}
