@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from . import context as cx
+from . import pacer
 from .normalize import normalize_name
 
 GOVERNMENT, PARTY, MENTION = "government", "party", "mention"
@@ -56,7 +57,7 @@ _CRIM_DOCKET = re.compile(r"(?:^|[^a-z])(?:cr|mj|po)(?:[^a-z]|$)", re.I)
 _US_PARTY = re.compile(r"^\s*(?:the\s+)?(?:united states(?: of america)?|u\.?\s?s\.?\s?a?\.?|usa)(?:\s|,|$)", re.I)
 _US_CAPTION = re.compile(r"\b(?:united states(?: of america)?|u\.?\s?s\.?a?\.?|usa)\s+(?:ex\.?\s*rel\.?[^v]*)?v[s]?\.?\s", re.I)
 _FCA = re.compile(r"31:37[23]\d|false claims|qui tam|\bex\.?\s*rel\b", re.I)
-CONTRACT_COURTS = {"uscfc", "cfc", "asbca", "cbca"}
+CONTRACT_COURTS = {"uscfc", "cfc", "cofc", "asbca", "cbca"}
 
 
 def _court_id(case: dict) -> str:
@@ -88,7 +89,7 @@ def case_type(item: dict) -> str:
         return US_CIVIL if us_party else FRAUD
     if us_party:
         return US_CIVIL
-    if court.endswith("b") and len(court) in (3, 4, 5) or suit.startswith(("422", "423")) or "bankruptcy" in (case.get("court") or "").lower():
+    if court.endswith("b") and len(court) in (3, 4, 5) or court.endswith("bk") or case.get("jurisdiction") == "BK" or suit.startswith(("422", "423")) or "bankruptcy" in (case.get("court") or "").lower():
         return BANKRUPTCY
     if suit.startswith(("71", "72", "73", "74", "75", "79", "442")):
         return EMPLOYMENT
@@ -118,7 +119,11 @@ def _named(text: str, c: dict) -> bool:
 
 
 def role(item: dict, c: dict) -> str:
-    """Which side of the caption the vendor is on ('X v. Y'), when the caption says."""
+    """Which side the vendor is on: the role PACER lists for the vendor's own party row, else the side of the caption
+    ('X v. Y'), when the caption says."""
+    pr = [p["role"] for p in (item.get("case") or {}).get("party_roles") or [] if p.get("role") and _named(p["name"], c)]
+    if pr:
+        return " / ".join(dict.fromkeys(pr))
     title = item.get("title") or ""
     parts = re.split(r"\s+v(?:s)?\.?\s+", title, maxsplit=1, flags=re.I)
     if len(parts) != 2:
@@ -186,10 +191,15 @@ def grade(item: dict, c: dict) -> str:
         return GOVERNMENT if tags & {"criminal", "civil enforcement", "procurement"} else MENTION
     if not is_party(item, c):
         return MENTION
+    roles = {p.get("role") for p in (item.get("case") or {}).get("party_roles") or [] if _named(p.get("name") or "", c)}
+    if roles and roles <= _SIDELINE_ROLES:  # a creditor in someone else's bankruptcy, a firm's lawyer...
+        return MENTION
     return GOVERNMENT if kind in GOVERNMENT_TYPES else PARTY
 
 
-COURT_SOURCES = ("courts", "doj")
+COURT_SOURCES = ("courts", "pacer", "doj")
+# PACER roles that put the vendor at the edge of a case, not in the dispute
+_SIDELINE_ROLES = {"Creditor", "Attorney", "Interested party", "Garnishee", "Trustee", "U.S. Trustee"}
 
 
 def records(entity: dict) -> tuple[list[dict], str]:
@@ -197,17 +207,28 @@ def records(entity: dict) -> tuple[list[dict], str]:
     federal court search didn't answer, if it didn't. Ruled-out and muted records are left out."""
     c = entity.get("clues") or cx.clues_for(entity["name"], uei=entity.get("uei", ""))
     out = []
+    sources = entity.get("sources") or {}
+    # a PACER case CourtListener also has shows once, as CourtListener's (free to open), with PACER's party roles
+    pacer_by_key = {k: i for i in (sources.get("pacer") or {}).get("items") or [] if (k := pacer.docket_key(i.get("case") or {}))}
+    used = set()
     for key in COURT_SOURCES:
-        for i in (entity.get("sources") or {}).get(key, {}).get("items") or []:
+        for i in sources.get(key, {}).get("items") or []:
             v = i.get("verdict") or {}
             if v.get("verdict") == "not":
                 continue
+            if key == "courts" and (k := pacer.docket_key(i.get("case") or {})) in pacer_by_key:
+                used.add(k)
+                pc, case = pacer_by_key[k]["case"], i.get("case") or {}
+                i = i | {"case": case | {"party_roles": pc["party_roles"], "parties": (case.get("parties") or []) + pc["parties"]},
+                         "also_in": "PACER"}
+            if key == "pacer" and pacer.docket_key(i.get("case") or {}) in used:
+                continue
             kind, g = case_type(i), grade(i, c)
-            out.append(i | {"grade": g, "case_type": kind, "role": role(i, c) if key == "courts" else "",
+            out.append(i | {"grade": g, "case_type": kind, "role": role(i, c) if key in ("courts", "pacer") else "",
                             "why_it_matters": WHY_IT_MATTERS.get(kind, ""), "analyst_verdict": v.get("verdict") or ""})
     out.sort(key=lambda r: (GRADE_ORDER.index(r["grade"]), r["analyst_verdict"] != "same",
                             [-ord(ch) for ch in (r.get("date") or "")]))
-    err = ((entity.get("sources") or {}).get("courts") or {}).get("error", "")
+    err = (sources.get("courts") or {}).get("error", "")
     return out, err
 
 
@@ -231,3 +252,25 @@ def screen_records(screen: dict) -> dict:
     return {"vendors": vendors, "unchecked": unchecked,
             "counts": {g: sum(1 for v in vendors if v["counts"][g]) for g in GRADE_ORDER} | {"vendors": len(vendors),
                                                                                              "unchecked": len(unchecked)}}
+
+
+_EXCLUSION_STATUSES = {"excluded", "tied", "related_excluded"}
+
+
+def pacer_targets(screen: dict, top: int = 25) -> list[int]:
+    """Which of a screen's outside-context names get a PACER party search (it is paid, so not all of them): vendors
+    that are excluded or tied to an exclusion, vendors whose court records already show them as a party, and the `top`
+    vendors by dollars. Names already searched on PACER are skipped. Positions in screen['context']['entities']."""
+    cxs = (screen.get("context") or {}).get("entities") or []
+    subj = {e["uei"]: e | {"status": s.get("status")} for s in screen.get("subjects") or [] for e in s["entities"] if e.get("uei")}
+    todo = [i for i, e in enumerate(cxs) if not e.get("person") and not (
+        (src := (e.get("sources") or {}).get("pacer")) and src.get("fetched_at") and not src.get("error"))]
+
+    def dollars(i: int) -> float:
+        return float((subj.get(cxs[i].get("uei") or "") or {}).get("tot") or 0.0)
+    flagged = {i for i in todo if (subj.get(cxs[i].get("uei") or "") or {}).get("status") in _EXCLUSION_STATUSES}
+    flagged |= {i for i in todo if any(r["grade"] != MENTION for r in records(cxs[i])[0])}
+    # the top names on the whole screen, so a second run doesn't reach further down the list
+    vendors = [i for i, e in enumerate(cxs) if not e.get("person") and dollars(i) > 0]
+    biggest = set(sorted(vendors, key=lambda i: -dollars(i))[:top]) & set(todo)
+    return sorted(flagged | biggest, key=lambda i: (i not in flagged, -dollars(i)))

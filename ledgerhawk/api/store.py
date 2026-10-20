@@ -30,6 +30,8 @@ from pathlib import Path
 from ..pipeline import awards as awards_mod
 from ..pipeline.awards import awarded_after
 from ..pipeline import context as context_mod
+from ..pipeline import courtrecords as courtrecords_mod
+from ..pipeline import pacer as pacer_mod
 from ..pipeline import samgov
 from ..pipeline import watchlists
 from ..pipeline import summary as summary_mod
@@ -80,6 +82,14 @@ SOURCE_KINDS = {
 
 def _rank(tier: str) -> int:
     return {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "explained": 9}.get(tier, 10)
+
+
+def pacer_top() -> int:
+    """How many of a screen's biggest vendors get a PACER search besides the flagged ones (PACER_TOP, default 25)."""
+    try:
+        return max(0, int(os.environ.get("PACER_TOP", "25") or 25))
+    except ValueError:
+        return 25
 
 
 def _now() -> str:
@@ -196,6 +206,7 @@ class Store:
         self._live_screens: dict[tuple[str, str], object] = {}  # the live side of quick estimates, kept per import  # run id -> (vendor file loaded, stored rows by UEI, restores), for estimates
         self.awards_post = None  # tests swap in a fake USAspending
         self.context_fetch = None  # and fake news, court, SEC, DOJ and OFAC sources
+        self.pacer_post = None  # and a fake PACER
         self.summary_client = None  # and a fake Claude
         self.hawk_inline = False  # tests write queue reasons in the request instead of a background thread
         # and run screen jobs (awards, outside context, re-check) in the request
@@ -1172,6 +1183,8 @@ class Store:
             screen["context"]["entities"] = [self._with_verdicts(e) for e in screen["context"]["entities"]]
             idx = context_mod.courtindex.status()
             screen["context"]["courts_pending"] = sum(context_mod.courts_pending(e, idx) for e in screen["context"]["entities"])
+            screen["context"]["pacer"] = {"configured": pacer_mod.configured(),
+                                          "todo": len(courtrecords_mod.pacer_targets(screen, pacer_top()))}
         return screen
 
     # ---- outside context (news, courts, DOJ, SEC, OFAC) -------------------------------------------------------
@@ -1330,9 +1343,18 @@ class Store:
                                         progress=progress)
         if found and all(f["errors"] == len(f["sources"]) for f in found):
             raise ConnectionError("None of the outside sources answered. Try again in a few minutes.")
+        # PACER results are paid for and come from their own job (pacer_check): a refresh keeps them
+        cf = self.root / "subjects" / sid / "context.json"
+        paid = {(e.get("uei") or e["name"]): e["sources"]["pacer"] for e in (json.loads(cf.read_text())["entities"] if cf.exists() else [])
+                if (e.get("sources") or {}).get("pacer")}
         for t, f in zip(targets, found):
             f["fetched_by"] = analyst.strip()
             f["ref"], f["person_ref"] = t.get("ref"), t.get("person_ref")
+            if (kept := paid.get(f.get("uei") or f["name"])) is not None:
+                f["sources"]["pacer"] = kept
+                every = [x for src in f["sources"].values() for x in src["items"]]
+                f.update(count=len(every), adverse=sum(1 for x in every if x["tags"]),
+                         errors=sum(1 for src in f["sources"].values() if src["error"]))
             self._save_context(f)
         out = {"fetched_at": _now(), "fetched_by": analyst.strip(), "entities": found, "skipped": 0}
         found = [self._with_verdicts(f) for f in found]
@@ -1353,6 +1375,8 @@ class Store:
             raise ValueError("Run the outside-context check on this screen first.")
         if (sid, "context") in self._jobs_running:
             raise ValueError("The outside-context check is still running on this screen. Re-check courts after it finishes.")
+        if (sid, "pacer") in self._jobs_running:
+            raise ValueError("The PACER search is still running on this screen. Re-check courts after it finishes.")
         ctx = json.loads(f.read_text())
         idx = context_mod.courtindex.status()
         todo = [i for i, e in enumerate(ctx["entities"]) if context_mod.courts_pending(e, idx)]
@@ -1388,6 +1412,69 @@ class Store:
                    "answered" + (f", {left} still not checked" if left else ""))
         return {"names": len(todo), "checked": fixed, "still_unchecked": left}
 
+    def pacer_check(self, sid: str, analyst: str, progress=None) -> dict:
+        """Search PACER's party index for the screen's flagged and top-dollar vendors (courtrecords.pacer_targets).
+        PACER bills per page of results, so the job stops once PACER_JOB_LIMIT_USD (default $10) is spent. Each name is
+        saved as it finishes, so a restart keeps what was done and skips it next time."""
+        if not pacer_mod.configured():
+            raise ValueError("PACER isn't set up on this site. Add the PACER account's login (PACER_LOGIN_ID and "
+                             "PACER_PASSWORD) in the server's settings.")
+        d = self.root / "subjects" / sid
+        screen = self.subject_screen(sid)  # KeyError if there is no such screen
+        f = d / "context.json"
+        if not f.exists():
+            raise ValueError("Run the outside-context check on this screen first.")
+        if (sid, "context") in self._jobs_running:
+            raise ValueError("The outside-context check is still running on this screen. Search PACER after it finishes.")
+        if (sid, "courts") in self._jobs_running:
+            raise ValueError("The court re-check is still running on this screen. Search PACER after it finishes.")
+        todo = courtrecords_mod.pacer_targets(screen, pacer_top())
+        ctx = json.loads(f.read_text())
+        post = self.pacer_post or pacer_mod._post
+        try:
+            limit = float(os.environ.get("PACER_JOB_LIMIT_USD", "10") or 10)
+        except ValueError:
+            limit = 10.0
+        if progress:
+            progress(0, len(todo), f"{len(todo)} flagged or top-dollar vendors to search on PACER")
+        done = cases = 0
+        fee = 0.0
+        stopped = ""
+        try:
+            for n, i in enumerate(todo, start=1):
+                if fee >= limit:
+                    stopped = f"stopped at the ${limit:.2f} spending limit"
+                    break
+                e = ctx["entities"][i]
+                c = e.get("clues") or context_mod.clues_for(e["name"], uei=e.get("uei", ""))
+                try:
+                    res = pacer_mod.party_search(e["name"], post)
+                    fee += res["fee"]
+                    e["sources"]["pacer"] = {"items": [context_mod.score(x, c) | {"id": context_mod.item_id(x)} for x in res["items"]],
+                                             "error": "", "fetched_at": _now(), "total": res["total"], "fee": res["fee"],
+                                             "billable_pages": res["billable_pages"]}
+                    done += 1
+                    cases += len(res["items"])
+                except pacer_mod.PacerError:
+                    raise  # a refused login fails every name the same way
+                except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as exc:
+                    why = getattr(exc, "code", "") or type(exc).__name__
+                    e["sources"]["pacer"] = {"items": [], "error": f"{context_mod.SOURCE_LABELS['pacer']} did not answer ({why})"}
+                every = [x for src in e["sources"].values() for x in src["items"]]
+                e.update(count=len(every), adverse=sum(1 for x in every if x["tags"]),
+                         errors=sum(1 for src in e["sources"].values() if src["error"]))
+                self._save_context(e)
+                tmp = f.with_suffix(".tmp")
+                tmp.write_text(json.dumps(ctx, indent=2))
+                tmp.replace(f)
+                if progress:
+                    progress(n, len(todo), f"Finished: {e['name']}")
+        finally:
+            pacer_mod.logout(post)
+        self.audit(analyst, "context_lookup", None, None, f"PACER party search for screen {sid}: {done} of {len(todo)} "
+                   f"vendors searched, {cases} cases, PACER fee ${fee:.2f}" + (f"; {stopped}" if stopped else ""))
+        return {"names": len(todo), "checked": done, "cases": cases, "fee": round(fee, 2), "stopped": stopped}
+
     def fetch_screen_awards(self, sid: str, analyst: str, progress=None) -> dict:
         """Look up award history on USAspending for the screen's entities and keep it beside the screen, dated."""
         screen = self.subject_screen(sid)
@@ -1405,7 +1492,8 @@ class Store:
     # Each takes minutes, longer than a proxy will hold a request open, so it runs in a thread and reports progress to
     # jobs.json beside the screen; the page polls it. One job of each kind per screen at a time.
     JOB_LABELS = {"awards": "Looking up awards on USAspending", "context": "Searching outside sources",
-                  "recheck": "Re-checking with the latest data", "courts": "Re-checking federal court records"}
+                  "recheck": "Re-checking with the latest data", "courts": "Re-checking federal court records",
+                  "pacer": "Searching PACER for cases by party"}
 
     def screen_jobs(self, sid: str) -> dict:
         f = self.root / "subjects" / sid / "jobs.json"

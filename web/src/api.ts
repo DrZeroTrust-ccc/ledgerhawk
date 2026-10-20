@@ -670,7 +670,7 @@ export type SubjectScreenMeta = {
   renamed_at?: string
 }
 
-export type JobKind = 'awards' | 'context' | 'recheck' | 'courts'
+export type JobKind = 'awards' | 'context' | 'recheck' | 'courts' | 'pacer'
 
 export type ScreenJob = {
   kind: JobKind
@@ -870,7 +870,7 @@ export type AddressCheck = {
   findings: CheckFinding[]
 }
 
-export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[]; courts_pending?: number }
+export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[]; courts_pending?: number; pacer?: { configured: boolean; todo: number } }
 
 export type ScreenAwards = {
   fetched_at: string
@@ -1097,6 +1097,8 @@ export const api = {
     req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
   recheckScreenCourts: (id: string, form: FormData) =>
     req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/courts`, { method: 'POST', body: form }),
+  searchScreenPacer: (id: string, form: FormData) =>
+    req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/pacer`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>
     req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
   reviewScreen: (id: string, form: FormData) =>
