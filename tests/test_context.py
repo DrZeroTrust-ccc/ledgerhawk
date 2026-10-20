@@ -178,9 +178,15 @@ def test_context_api_and_subject_exports(tmp_path):
         assert client.post(f"/api/subject-screens/{sid}/pacer", data={"analyst": "A"}).json()["state"] == "error"
         mp.setenv("PACER_LOGIN_ID", "firm")
         mp.setenv("PACER_PASSWORD", "pw")
-        from tests.test_pacer import FakePacer, row
         name = ents[0]["name"]
-        appmod.store.pacer_post = FakePacer([row("vaed", "1:2024cv00042", f"USA ex rel. Doe v. {name}", name, "dft", jt="CV")])
+
+        def fake_pacer(url, body, headers):
+            if url.endswith("cso-auth"):
+                return json.dumps({"loginResult": "0", "nextGenCSO": "T"}).encode()
+            return json.dumps({"receipt": {"billablePages": 1, "searchFee": "0.10"}, "pageInfo": {"totalPages": 1, "totalElements": 1},
+                               "content": [{"courtId": "vaed", "caseNumberFull": "1:2024cv00042", "lastName": name, "partyRole": "dft",
+                                            "caseTitle": f"USA ex rel. Doe v. {name}", "dateFiled": "2024-06-03"}]}).encode()
+        appmod.store.pacer_post = fake_pacer
         assert client.get(f"/api/subject-screens/{sid}").json()["context"]["pacer"] == {"configured": True, "todo": 1}
         job = client.post(f"/api/subject-screens/{sid}/pacer", data={"analyst": "A"}).json()
         assert job["state"] == "done" and job["result"]["checked"] == 1 and job["result"]["fee"] == 0.1, job
