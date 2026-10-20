@@ -173,6 +173,30 @@ def test_context_api_and_subject_exports(tmp_path):
         ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]
         assert not any(e["sources"]["courts"]["error"] for e in ents) and ents[0]["sources"]["courts"]["items"]
         assert ents[0]["errors"] == 0
+        # PACER: off until the firm's login is set; then the flagged and top-dollar vendors get a party search
+        assert client.get(f"/api/subject-screens/{sid}").json()["context"]["pacer"]["configured"] is False
+        assert client.post(f"/api/subject-screens/{sid}/pacer", data={"analyst": "A"}).json()["state"] == "error"
+        mp.setenv("PACER_LOGIN_ID", "firm")
+        mp.setenv("PACER_PASSWORD", "pw")
+        name = ents[0]["name"]
+
+        def fake_pacer(url, body, headers):
+            if url.endswith("cso-auth"):
+                return json.dumps({"loginResult": "0", "nextGenCSO": "T"}).encode()
+            return json.dumps({"receipt": {"billablePages": 1, "searchFee": "0.10"}, "pageInfo": {"totalPages": 1, "totalElements": 1},
+                               "content": [{"courtId": "vaed", "caseNumberFull": "1:2024cv00042", "lastName": name, "partyRole": "dft",
+                                            "caseTitle": f"USA ex rel. Doe v. {name}", "dateFiled": "2024-06-03"}]}).encode()
+        appmod.store.pacer_post = fake_pacer
+        assert client.get(f"/api/subject-screens/{sid}").json()["context"]["pacer"] == {"configured": True, "todo": 1}
+        job = client.post(f"/api/subject-screens/{sid}/pacer", data={"analyst": "A"}).json()
+        assert job["state"] == "done" and job["result"]["checked"] == 1 and job["result"]["fee"] == 0.1, job
+        screen = client.get(f"/api/subject-screens/{sid}").json()
+        assert screen["context"]["pacer"]["todo"] == 0 and screen["context"]["entities"][0]["sources"]["pacer"]["items"]
+        rm = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/court-records.xlsx").content))["Read Me"]
+        assert any(r[0] == "PACER" and r[1].startswith("1 flagged") for r in rm.iter_rows(values_only=True))
+        # a refresh of outside context keeps the paid PACER results
+        r = client.post(f"/api/subject-screens/{sid}/context", data={"analyst": "A"})
+        assert client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"][0]["sources"]["pacer"]["items"]
         courts_wb = load_workbook(io.BytesIO(client.get(f"/api/subject-screens/{sid}/court-records.xlsx").content))
         assert courts_wb.sheetnames == ["Read Me", "Court Records", "By Vendor"] and courts_wb["By Vendor"].max_row == 2
         ents = client.get(f"/api/subject-screens/{sid}").json()["context"]["entities"]

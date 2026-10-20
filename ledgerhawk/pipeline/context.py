@@ -666,6 +666,7 @@ def brave(q: str, c: dict, fetch: Fetch, key: str) -> list[dict]:
 
 SOURCES = {"news": news, "doj": doj, "courts": courts, "sec": sec}
 SOURCE_LABELS = {"news": "News", "doj": "DOJ press releases", "courts": "Federal courts (CourtListener)",
+                 "pacer": "Federal cases by party (PACER)",
                  "sec": "SEC filings", "ofac": "OFAC sanctions list", "brave": "Web and news (Brave Search)",
                  "opensanctions": "Sanctions, debarment and PEP lists (OpenSanctions)",
                  "opencorporates": "State business registries (OpenCorporates)", "leie": "HHS-OIG exclusions (LEIE)",

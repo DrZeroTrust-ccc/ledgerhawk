@@ -1096,6 +1096,15 @@ def recheck_screen_courts(sid: str, analyst: str = Form("")):
     return _screen_job(sid, "courts", analyst, lambda progress: store.recheck_courts(sid, analyst, progress))
 
 
+@app.post("/api/subject-screens/{sid}/pacer")
+def pacer_screen_check(sid: str, analyst: str = Form("")):
+    """Search PACER's party index for the screen's flagged and top-dollar vendors (paid; capped per job)."""
+    analyst = who(analyst)
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the PACER search is attributed.")
+    return _screen_job(sid, "pacer", analyst, lambda progress: store.pacer_check(sid, analyst, progress))
+
+
 @app.get("/api/context")
 def get_context(uei: str = "", name: str = "", person: bool = False):
     return {"context": store.context(uei=uei, name=name, person=person)}

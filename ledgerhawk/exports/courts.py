@@ -44,6 +44,8 @@ def build_court_records(screen: dict, generated_at: datetime | None = None, *, i
     generated_at = generated_at or datetime.now(timezone.utc)
     res = cr.screen_records(screen)
     idx = courtindex.status()
+    paid = [src for e in (screen.get("context") or {}).get("entities") or []
+            if (src := (e.get("sources") or {}).get("pacer")) and src.get("fetched_at")]
     meta = screen.get("meta") or {}
     wb = Workbook()
 
@@ -104,11 +106,15 @@ def build_court_records(screen: dict, generated_at: datetime | None = None, *, i
         ("", ""),
     ] + [(cr.GRADES[g], cr.GRADE_MEANING[g]) for g in cr.GRADE_ORDER] + [
         ("", ""),
-        ("Sources", "Federal dockets and opinions from CourtListener (RECAP), and DOJ press releases. State courts, "
-                    "PACER-only dockets, GAO bid protests and board of contract appeals decisions not on CourtListener "
+        ("Sources", "Federal dockets and opinions from CourtListener (RECAP), PACER's Case Locator (see PACER below) and DOJ press releases. State courts, "
+                    "GAO bid protests and board of contract appeals decisions not on CourtListener "
                     "are not covered; the subject screen's manual links open those searches."),
         ("Court index", courtindex.summary_line(idx) or "Not loaded on this server: court searches went to "
                         "CourtListener's search API, which allows about 125 searches a day."),
+        ("PACER", (f"{len(paid)} flagged or top-dollar vendors searched by party name in PACER's Case Locator "
+                   f"(fees ${sum(float(x.get('fee') or 0) for x in paid):.2f}); a PACER case CourtListener also has is "
+                   "shown once, with PACER's party role in Vendor's side.") if paid else
+                  "Not searched for this screen."),
         ("Matching", "Court records name parties, not UEIs. A row is graded on whether the vendor's legal name (or a "
                      "known other name) appears as a party or in the caption. Confirm the party's address or officers "
                      "on the docket before relying on a row; the Match column scores the visible detail."),
