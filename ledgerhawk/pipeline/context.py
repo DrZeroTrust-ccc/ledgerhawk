@@ -422,8 +422,16 @@ class RateLimited(OSError):
         self.code = code
 
 
-def _courts_wait() -> None:
+def _courts_wait(patient: bool = False) -> None:
+    """Space calls out. While the limit is in force a normal lookup skips CourtListener; a patient one (the court
+    re-check job, which only queries CourtListener) sleeps until the limit resets."""
     gap = float(os.environ.get("COURTLISTENER_GAP_S", "1") or 1)
+    while patient:
+        with _cl_lock:
+            left = _cl_state["blocked_until"] - time.monotonic()
+        if left <= 0:
+            break
+        time.sleep(min(left, 60))
     with _cl_lock:
         now = time.monotonic()
         if now < _cl_state["blocked_until"]:
@@ -435,29 +443,41 @@ def _courts_wait() -> None:
         _cl_state["last"] = time.monotonic()
 
 
-def courts(q: str, fetch: Fetch) -> list[dict]:
+def _courts_get(url: str, headers: dict, fetch: Fetch, token: str, patient: bool) -> bytes:
+    _courts_wait(patient)
+    try:
+        return fetch(url, headers)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 429:
+            raise
+        try:
+            wait = float(exc.headers.get("Retry-After") or 0) if exc.headers else 0.0
+        except ValueError:
+            wait = 0.0
+        wait = wait or (600.0 if token else 3600.0)
+        with _cl_lock:
+            _cl_state["blocked_until"] = time.monotonic() + wait
+        log.warning("CourtListener rate limit reached; skipping it for %.0f s%s", wait,
+                    "" if token else " (no COURTLISTENER_TOKEN set)")
+        raise RateLimited("its rate limit was reached" + ("" if token else "; add a free CourtListener API token")) from None
+
+
+def courts(q: str, fetch: Fetch, *, patient: bool = False, tries: int = 6) -> list[dict]:
+    """Federal dockets and opinions naming q. `patient` waits out the rate limit (up to `tries` times per search)
+    instead of giving up on it."""
     token = os.environ.get("COURTLISTENER_TOKEN", "").strip()
     headers = {"Authorization": f"Token {token}"} if token else {}
     out = []
     for kind, label in (("r", "Federal docket"), ("o", "Court opinion")):
         url = "https://www.courtlistener.com/api/rest/v4/search/?" + urllib.parse.urlencode(
             {"q": f'"{q}"', "type": kind, "order_by": "dateFiled desc"})
-        _courts_wait()
-        try:
-            raw = fetch(url, headers)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 429:
-                raise
+        for attempt in range(1, tries + 1):
             try:
-                wait = float(exc.headers.get("Retry-After") or 0) if exc.headers else 0.0
-            except ValueError:
-                wait = 0.0
-            wait = wait or (600.0 if token else 3600.0)
-            with _cl_lock:
-                _cl_state["blocked_until"] = time.monotonic() + wait
-            log.warning("CourtListener rate limit reached; skipping it for %.0f s%s", wait,
-                        "" if token else " (no COURTLISTENER_TOKEN set)")
-            raise RateLimited("its rate limit was reached" + ("" if token else "; add a free CourtListener API token")) from None
+                raw = _courts_get(url, headers, fetch, token, patient)
+                break
+            except RateLimited:
+                if not patient or attempt == tries:
+                    raise
         res = json.loads(raw)
         for r in (res.get("results") or [])[:PER_SOURCE]:
             path = r.get("docket_absolute_url") or r.get("absolute_url") or ""

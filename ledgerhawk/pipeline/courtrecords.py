@@ -97,6 +97,14 @@ def case_type(item: dict) -> str:
     return OTHER
 
 
+# Words that make a firm's core name read as an ordinary phrase in a DOJ title ("bribes on federal contracts"), so such
+# a firm needs its full legal name (with LLC, INC) or a known other name to count as named.
+_PLAIN_WORDS = {"FEDERAL", "CONTRACT", "CONTRACTS", "CONTRACTING", "CONTRACTOR", "CONTRACTORS", "GOVERNMENT", "DEFENSE",
+                "PUBLIC", "HEALTH", "HEALTHCARE", "MEDICAL", "CARE", "PRISON", "INDUSTRIES", "SECURITY", "NATIONAL",
+                "AMERICAN", "AMERICA", "UNITED", "STATES", "PROGRAM", "PROGRAMS", "GRANT", "GRANTS", "BENEFITS", "MEDICARE",
+                "MEDICAID", "ENERGY", "CONSTRUCTION", "PROCUREMENT", "SUPPLY", "SUPPLIES", "SYSTEMS"}
+
+
 def _named(text: str, c: dict) -> bool:
     """The vendor's name in a party name or caption: the full legal name or another known name, or the core name when
     it is distinctive enough to stand on its own."""
@@ -104,7 +112,9 @@ def _named(text: str, c: dict) -> bool:
     if cx._has(flat, c["name"]) or any(cx._has(flat, n) for n in c["other_names"]):
         return True
     core = normalize_name(c["name"])
-    return not c["generic"] and len(core.split()) >= 2 and cx._has(flat, core) and not cx._other_business(flat, c)
+    if c["generic"] or len(core.split()) < 2 or all(t in cx.GENERIC or t in _PLAIN_WORDS for t in core.split()):
+        return False
+    return cx._has(flat, core) and not cx._other_business(flat, c)
 
 
 def role(item: dict, c: dict) -> str:
@@ -130,11 +140,50 @@ def is_party(item: dict, c: dict) -> bool:
     return _named(item.get("title") or "", c)
 
 
+# A vendor that is itself a place or public body (a county, a city, a university) turns up in DOJ releases as the place
+# where a crime happened far more often than as a party, so a release about one counts only with civil-enforcement or
+# False Claims Act language, and never when the title uses the name as a place ("off the coast of Miami-Dade").
+_PUBLIC_BODY = re.compile(r"\b(?:COUNTY|CITY OF|STATE OF|TOWN OF|TOWNSHIP|VILLAGE OF|PARISH|BOROUGH|COMMONWEALTH|"
+                          r"UNIVERSITY|COLLEGE|SCHOOL DISTRICT|PUBLIC SCHOOLS|BOARD OF|DEPARTMENT OF|AUTHORITY)\b")
+_AS_PLACE = re.compile(r" (?:IN|OFF|NEAR|ACROSS|THROUGHOUT|AROUND|OUTSIDE|INSIDE|WITHIN|COAST OF|AREA OF|STREETS OF|"
+                       r"RESIDENT OF|RESIDENTS OF|NATIVE OF)(?: THE)? $")
+
+
+def _names(c: dict) -> list[str]:
+    core = normalize_name(c["name"])
+    names = [c["name"], *c["other_names"]] + ([core] if not c["generic"] and len(core.split()) >= 2 else [])
+    return sorted({cx._flat(n).strip() for n in names if cx._flat(n).strip()}, key=len, reverse=True)
+
+
+def _title_tags(title: str, c: dict) -> set[str]:
+    """Enforcement language in a title once the vendor's own name is taken out: 'Federal Prison Industries' names a
+    prison, which is not a criminal charge."""
+    flat = cx._flat(title)
+    for n in _names(c):
+        flat = flat.replace(f" {n} ", " ")
+    return set(cx.adverse_tags(flat))
+
+
+def _only_as_place(title: str, c: dict) -> bool:
+    """Every mention of the name in the title reads as a place ('in Miami-Dade', 'Miami-Dade man')."""
+    flat = cx._flat(title)
+    spots = [(m.start(), m.end()) for n in _names(c) for m in re.finditer(re.escape(f" {n} "), flat)]
+    if not spots:
+        return False
+    return all(_AS_PLACE.search(flat[:a + 1]) or re.match(r" ?(?:MAN|WOMAN|RESIDENT|RESIDENTS|AREA|NATIVE)\b", flat[b - 1:])
+               for a, b in spots)
+
+
 def grade(item: dict, c: dict) -> str:
     kind = case_type(item)
     if item.get("source") == "DOJ press release":
-        tags = set(item.get("tags") or [])
-        return GOVERNMENT if is_party(item, c) and tags & {"criminal", "civil enforcement", "procurement"} else MENTION
+        title = item.get("title") or ""
+        if not is_party(item, c) or _only_as_place(title, c):
+            return MENTION
+        tags = _title_tags(title, c)
+        if _PUBLIC_BODY.search(cx._flat(c["name"])) and not c["person"]:
+            return GOVERNMENT if kind == FCA or "civil enforcement" in tags else MENTION
+        return GOVERNMENT if tags & {"criminal", "civil enforcement", "procurement"} else MENTION
     if not is_party(item, c):
         return MENTION
     return GOVERNMENT if kind in GOVERNMENT_TYPES else PARTY

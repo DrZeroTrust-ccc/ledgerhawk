@@ -663,7 +663,7 @@ export type SubjectScreenMeta = {
   renamed_at?: string
 }
 
-export type JobKind = 'awards' | 'context' | 'recheck'
+export type JobKind = 'awards' | 'context' | 'recheck' | 'courts'
 
 export type ScreenJob = {
   kind: JobKind
@@ -1086,6 +1086,8 @@ export const api = {
     req<{ sites: Record<string, { by: string; at: string; note: string }> }>('/api/context/muted-sites', { method: 'POST', body: form }),
   fetchScreenContext: (id: string, form: FormData) =>
     req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/context`, { method: 'POST', body: form }),
+  recheckScreenCourts: (id: string, form: FormData) =>
+    req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/courts`, { method: 'POST', body: form }),
   fetchScreenAwards: (id: string, form: FormData) =>
     req<ScreenJob>(`/api/subject-screens/${encodeURIComponent(id)}/awards`, { method: 'POST', body: form }),
   reviewScreen: (id: string, form: FormData) =>

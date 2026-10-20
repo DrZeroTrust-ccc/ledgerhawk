@@ -97,8 +97,8 @@ def build_court_records(screen: dict, generated_at: datetime | None = None, *, i
         ("With a government case", str(c[cr.GOVERNMENT])),
         ("With a case as a party", str(c[cr.PARTY])),
         ("Court search incomplete", f"{c['unchecked']} vendors: the federal court search didn't answer (usually its rate "
-                                    "limit). Run the outside-context check again later to fill them in; they are listed "
-                                    "on the By Vendor sheet."),
+                                    "limit). Use Re-check courts on the screen to fill them in; they are listed on the "
+                                    "By Vendor sheet."),
         ("", ""),
     ] + [(cr.GRADES[g], cr.GRADE_MEANING[g]) for g in cr.GRADE_ORDER] + [
         ("", ""),
@@ -117,6 +117,10 @@ def build_court_records(screen: dict, generated_at: datetime | None = None, *, i
         rm.append([a, b])
         rm.cell(row=rm.max_row, column=2).alignment = Alignment(wrap_text=True, vertical="top")
     rm["A1"].font = Font(bold=True, size=14, color=NAVY)
+    if c["unchecked"]:  # a partial search reads as "clean" unless it says so loudly
+        for row in rm.iter_rows():
+            if row[0].value == "Court search incomplete":
+                row[0].font = row[1].font = Font(bold=True, color="A61B29")
     wb.move_sheet("Read Me", offset=-2)
 
     wb.properties.creator = "LedgerHawk"

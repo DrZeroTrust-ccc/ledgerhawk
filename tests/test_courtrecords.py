@@ -93,3 +93,23 @@ def test_workbook():
     # name-only rows come in on request
     wb = load_workbook(io.BytesIO(build_court_records(screen, include_mentions=True)))
     assert len(list(wb["Court Records"].iter_rows(min_row=2))) == 2
+
+
+def test_doj_releases_that_name_a_place_or_a_prison_are_not_cases():
+    county = cx.clues_for("MIAMI-DADE COUNTY", state="FL")
+    assert cr.grade(_doj("Five Charged with Smuggling Off the Coast of Miami-Dade County"), county) == cr.MENTION
+    assert cr.grade(_doj("Miami-Dade County Man Sentenced for Fraud"), county) == cr.MENTION
+    # a public body counts only with civil-enforcement or False Claims Act language
+    assert cr.grade(_doj("Miami-Dade County Sentenced Officials Named in Bribery Probe"), county) == cr.MENTION
+    assert cr.grade(_doj("Miami-Dade County Agrees to Pay $1M to Settle False Claims Act Allegations"), county) == cr.GOVERNMENT
+    fpi = cx.clues_for("FEDERAL PRISON INDUSTRIES INC")
+    assert cr.grade(_doj("Justice Department Names New Chief Executive of Federal Prison Industries Inc"), fpi) == cr.MENTION
+    assert cr.grade(_doj("Federal Prison Industries Inc Agrees to Settle Kickback Claims"), fpi) == cr.GOVERNMENT
+    # a firm in the title with charging language is still a government case
+    assert cr.grade(_doj("Ridge Analytics LLC Indicted in Contract Fraud Scheme"), C) == cr.GOVERNMENT
+
+
+def test_a_plain_phrase_name_needs_its_full_legal_name():
+    fc = cx.clues_for("FEDERAL CONTRACTS LLC")
+    assert cr.grade(_doj("Raytheon Agrees to Pay $950M to Resolve False Claims Act Allegations on Federal Contracts"), fc) == cr.MENTION
+    assert cr.grade(_doj("Federal Contracts LLC Owner Pleads Guilty to Bribery"), fc) == cr.GOVERNMENT
