@@ -138,8 +138,10 @@ export type ImportStart = { id: string | null; job: ImportJob }
 
 /** Who is signed in. auth "open": sign-in is off and analysts type their name. */
 export type Me =
-  | { auth: 'open' }
-  | { auth: 'access'; email: string; name: string; role: 'admin' | 'analyst' | 'executive' | null; role_label: string; bootstrap: boolean }
+  | { auth: 'open'; features?: Features }
+  | { auth: 'access'; email: string; name: string; role: 'admin' | 'analyst' | 'executive' | null; role_label: string; bootstrap: boolean; features?: Features }
+/** Optional parts of the app a deployment turns on. */
+export type Features = { programs?: boolean }
 /** The policy pack version an import was screened under. */
 export type PolicyRef = { pack_id: string; pack_name: string; version: number; fingerprint: string }
 export type PolicyChange = { key: string; from?: unknown; to?: unknown; added?: string[]; removed?: string[] }
@@ -976,6 +978,54 @@ export const SUBJECT_STATUS: Record<string, string> = {
   clear: 'No hits in these sources',
 }
 
+// ---- program integrity screens (state nutrition programs) ----
+export type ProgramMeta = {
+  id: string
+  label: string
+  data_class: 'simulated' | 'public' | 'client'
+  data_class_label: string
+  created: string
+  analyst: string
+  note: string
+  counts: Record<string, number>
+  flagged: number
+  meals: number
+  files: string[]
+}
+
+export type ProgramLeadRow = {
+  ref: string
+  kind: string
+  kind_label: string
+  id: string
+  name: string
+  address: string
+  program: string
+  status: string
+  people: string[]
+  sites: number
+  meals: number
+  score: number
+  signals: string[]
+  rank: number
+  headline: string
+}
+
+export type ProgramHit = { code: string; label: string; text: string; rows: Record<string, unknown>[]; links: string[] }
+export type ProgramNode = { id: string; kind: string; label: string; bad?: boolean; center?: boolean; flagged?: boolean; shared?: number }
+export type ProgramEdge = { source: string; target: string; kind: string }
+export type ProgramLead = Omit<ProgramLeadRow, 'headline'> & { hits: ProgramHit[]; graph: { nodes: ProgramNode[]; edges: ProgramEdge[] } }
+
+export type ProgramScreen = {
+  meta: ProgramMeta
+  counts: Record<string, number>
+  meals: number
+  by_signal: Record<string, number>
+  signal_labels: Record<string, string>
+  checks: { exclusions: boolean; exclusions_source: string }
+  leads: ProgramLeadRow[]
+}
+
 async function req<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, init)
   if (!r.ok) {
@@ -1125,6 +1175,11 @@ export const api = {
   reviewScreen: (id: string, form: FormData) =>
     req<ScreenReview>(`/api/subject-screens/${encodeURIComponent(id)}/review`, { method: 'POST', body: form }),
   createSubjectScreen: (form: FormData) => req<{ id: string }>('/api/subject-screens', { method: 'POST', body: form }),
+  programs: () => req<ProgramMeta[]>('/api/programs'),
+  createProgram: (form: FormData) => req<{ id: string }>('/api/programs', { method: 'POST', body: form }),
+  createProgramDemo: (form: FormData) => req<{ id: string }>('/api/programs/demo', { method: 'POST', body: form }),
+  program: (id: string) => req<ProgramScreen>(`/api/programs/${encodeURIComponent(id)}`),
+  programLead: (id: string, rank: number) => req<ProgramLead>(`/api/programs/${encodeURIComponent(id)}/leads/${rank}`),
   caseNote: (id: string, uei: string, form: FormData) =>
     req<CaseNote>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/notes`, { method: 'POST', body: form }),
   deleteCaseNote: (id: string, uei: string, nid: string, form: FormData) =>

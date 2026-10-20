@@ -42,6 +42,7 @@ from .alerts import Alerts, channels_from_env as alert_channels
 from .weekly import Weekly
 from .access_sync import AccessSync
 from .backup import Backups, config_from_env as backup_config, stream_archive
+from .programs import Programs
 from .auth import CURRENT_USER, ROLES, User, bootstrap_admins, default_name, token_from, verifier_from_env, who
 from .graph import add_screens, build_graph
 from .policies import DEFAULTS_ID, diff, is_triage_only, rules_from, validate
@@ -56,6 +57,11 @@ WEB_DIST = Path(os.environ.get("LEDGERHAWK_WEB_DIST", Path(__file__).resolve().p
 ACCESS_PASSWORD = os.environ.get("LEDGERHAWK_ACCESS_PASSWORD", "")
 
 store = Store(DATA_DIR)
+programs = Programs(DATA_DIR, sources=store.list_sources)
+# Program integrity screens are off unless a deployment turns them on, so existing sites don't change.
+PROGRAMS_ON = os.environ.get("LEDGERHAWK_PROGRAMS") == "1"
+if PROGRAMS_ON and os.environ.get("LEDGERHAWK_PROGRAM_DEMO") == "1" and not programs.list():
+    programs.create_demo("system")
 app = FastAPI(title="LedgerHawk", version="0.2.0")
 
 
@@ -157,10 +163,11 @@ async def access_gate(request: Request, call_next):
 def me():
     """Who is signed in. auth "open" means sign-in is off and people type their name."""
     u = CURRENT_USER.get()
+    features = {"programs": PROGRAMS_ON}
     if VERIFIER is None or u is None:
-        return {"auth": "open"}
+        return {"auth": "open", "features": features}
     return {"auth": "access", "email": u.email, "name": u.name, "role": u.role,
-            "role_label": ROLES.get(u.role or "", "No access yet"), "bootstrap": u.bootstrap}
+            "role_label": ROLES.get(u.role or "", "No access yet"), "bootstrap": u.bootstrap, "features": features}
 
 
 def _admin() -> User:
@@ -921,6 +928,85 @@ def get_import_job(jid: str):
         return store.import_job(jid)
     except KeyError:
         raise HTTPException(404, "No such import job")
+
+
+# ---- program integrity screens (state nutrition programs: sponsors, sites, SNAP retailers, WIC vendors) ----
+PROGRAM_FILES = ("sponsors", "sites", "retailers", "wic_vendors")
+
+
+def _programs_on():
+    if not PROGRAMS_ON:
+        raise HTTPException(404, "Program screens are not turned on for this site.")
+
+
+@app.get("/api/programs")
+def list_programs():
+    _programs_on()
+    return programs.list()
+
+
+@app.post("/api/programs")
+async def create_program(
+    label: str = Form(""),
+    data_class: str = Form("client"),
+    analyst: str = Form(""),
+    sponsors: UploadFile | None = File(None),
+    sites: UploadFile | None = File(None),
+    retailers: UploadFile | None = File(None),
+    wic_vendors: UploadFile | None = File(None),
+):
+    _programs_on()
+    analyst = who(analyst)
+    if not analyst.strip():
+        raise HTTPException(400, "Enter your name so the screen is attributed.")
+    files = {}
+    for name, up in zip(PROGRAM_FILES, (sponsors, sites, retailers, wic_vendors)):
+        if up is not None and up.filename:
+            files[name] = (await up.read()).decode("utf-8-sig", errors="replace")
+    try:
+        pid = await run_in_threadpool(programs.create, label, data_class, files, analyst)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    store.audit(analyst, "program", None, None, f"Program screen {pid} ({data_class}) from {', '.join(sorted(files))}")
+    return {"id": pid}
+
+
+@app.post("/api/programs/demo")
+def create_program_demo(analyst: str = Form("")):
+    _programs_on()
+    analyst = who(analyst) or "demo"
+    pid = programs.create_demo(analyst)
+    store.audit(analyst, "program", None, None, f"Loaded simulated program set {pid}")
+    return {"id": pid}
+
+
+@app.get("/api/programs/{pid}")
+def get_program(pid: str):
+    _programs_on()
+    try:
+        return programs.get(pid)
+    except KeyError:
+        raise HTTPException(404, "No such program screen")
+
+
+@app.get("/api/programs/{pid}/leads/{rank}")
+def get_program_lead(pid: str, rank: int):
+    _programs_on()
+    try:
+        return programs.lead(pid, rank)
+    except KeyError:
+        raise HTTPException(404, "No such lead")
+
+
+@app.get("/api/programs/{pid}/leads.csv")
+def program_leads_csv(pid: str):
+    _programs_on()
+    try:
+        body = programs.leads_csv(pid)
+    except KeyError:
+        raise HTTPException(404, "No such program screen")
+    return Response(body, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="program-leads-{pid}.csv"'})
 
 
 @app.get("/api/subject-screens")

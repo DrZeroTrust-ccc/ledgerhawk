@@ -23,6 +23,8 @@ import PoliciesPage from './pages/PoliciesPage'
 import PolicyPage from './pages/PolicyPage'
 import PolicyEditorPage from './pages/PolicyEditorPage'
 import PolicyReviewPage from './pages/PolicyReviewPage'
+import ProgramsPage from './pages/ProgramsPage'
+import ProgramPage from './pages/ProgramPage'
 import { ImportsIndicator } from './imports'
 
 const FOOTER = 'Screening signals and dollars under review, not findings of fraud.'
@@ -42,7 +44,7 @@ function Wordmark() {
 const tab = ({ isActive }: { isActive: boolean }) =>
   `rounded-md px-3 py-1.5 text-sm font-medium ${isActive ? 'bg-white/15 text-white' : 'text-white/75 hover:text-white'}`
 
-function Nav({ admin }: { admin: boolean }) {
+function Nav({ admin, programs }: { admin: boolean; programs: boolean }) {
   const onRun = !!useMatch('/runs/:id/*')
   return (
     <nav className="flex flex-wrap items-center gap-1">
@@ -55,6 +57,11 @@ function Nav({ admin }: { admin: boolean }) {
       <NavLink to="/subjects" className={tab}>
         Subject screens
       </NavLink>
+      {programs && (
+        <NavLink to="/programs" className={tab}>
+          Programs
+        </NavLink>
+      )}
       <NavLink to="/my-cases" className={tab}>
         My cases
       </NavLink>
@@ -165,7 +172,7 @@ export default function App() {
           <header className="bg-navy print:hidden">
             <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 sm:px-6">
               <Wordmark />
-              <Nav admin={signedIn?.role === 'admin'} />
+              <Nav admin={signedIn?.role === 'admin'} programs={!!me?.features?.programs} />
               <div className="ml-auto flex flex-wrap items-center gap-3">
                 <ImportsIndicator />
                 {signedIn ? (
@@ -217,6 +224,8 @@ export default function App() {
                 <Route path="/vendors/:uei" element={<VendorLookupPage />} />
                 <Route path="/subjects" element={<SubjectsPage />} />
                 <Route path="/subjects/:id" element={<SubjectScreenPage />} />
+                {me?.features?.programs && <Route path="/programs" element={<ProgramsPage />} />}
+                {me?.features?.programs && <Route path="/programs/:id" element={<ProgramPage />} />}
                 <Route path="/audit" element={<AuditPage />} />
                 <Route path="/my-cases" element={<MyCasesPage />} />
                 <Route path="/policies" element={<PoliciesPage />} />

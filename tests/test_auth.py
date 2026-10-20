@@ -64,7 +64,7 @@ def test_admins_from_the_server_and_people_without_a_role(signed):
     _, c = signed
     me = c.get("/api/me", headers=h("boss@agency.gov")).json()
     assert me == {"auth": "access", "email": "boss@agency.gov", "name": "Pat Boss", "role": "admin", "role_label": "Admin",
-                  "bootstrap": True}
+                  "bootstrap": True, "features": {"programs": False}}
     assert c.get("/api/me", headers=h("second@agency.gov")).json()["name"] == "second"
     new = c.get("/api/me", headers=h("new.person@agency.gov")).json()
     assert new["role"] is None and new["name"] == "new person"
@@ -113,6 +113,6 @@ def test_open_mode_unchanged(signed, monkeypatch):
     """With sign-in off (no Cloudflare settings) the app is open and analysts type their name, as before."""
     appmod, c = signed
     monkeypatch.setattr(appmod, "VERIFIER", None)
-    assert c.get("/api/me").json() == {"auth": "open"}
+    assert c.get("/api/me").json() == {"auth": "open", "features": {"programs": False}}
     assert c.get("/api/people").status_code == 400
     assert c.get("/api/runs").status_code == 200
