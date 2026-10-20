@@ -125,6 +125,9 @@ def next_step(v: dict, tier: str = "") -> str:
     if ids & {"L_affil_cert", "R_split_cert"}:
         return ("Confirm with SBA whether these registrations are one concern for size and program eligibility, and "
                 "whether combined receipts exceed the size standard.")
+    if "L_network" in ids:
+        return ("List every funded vendor sharing the contact or suite, then compare who runs each one, when each was "
+                "approved, and whether the dollars fit each site's size.")
     if "L_successor" in ids:
         return ("Pull award records for both firms to see whether the new firm took over the old firm's orders, and "
                 "compare owners and contacts in SAM.")

@@ -32,7 +32,7 @@ from ..pipeline.tiering import TIERS
 
 FOOTER = "Screening signals and dollars under review, not findings of fraud."
 COLORS = ("red", "yellow", "green")
-SIGNAL_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "R_young", "R_split", "R_split_cert", "L_successor", "L_affil_cert"]
+SIGNAL_IDS = ["S1", "S2", "S3", "S4", "S5", "S6", "R_young", "R_split", "R_split_cert", "L_successor", "L_affil_cert", "L_network"]
 
 
 def strict_awards(awards: dict) -> dict:
@@ -320,6 +320,7 @@ def _readme(summary: dict, counts: dict, colors: set[str], generated_at: datetim
         "R_split_cert  Certified firm split across several UEIs",
         "L_successor   Linked firm fading as this one rises",
         "L_affil_cert  Certified firm linked to an affiliate",
+        "L_network     One of many funded vendors sharing a contact or suite",
         "",
         FOOTER,
     ]

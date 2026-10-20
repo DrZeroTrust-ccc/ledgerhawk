@@ -40,10 +40,11 @@ RANK = {PAID_AFTER: 0, UNCHECKED: 1, PATTERN: 2, SINGLE: 3}
 
 SIGNAL_LEVEL = {"S1": "indicator", "S2": "anomaly", "S3": "anomaly", "S4": "anomaly", "S5": "anomaly",
                 "R_young": "indicator", "R_split": "indicator", "R_split_cert": "indicator",
-                "L_successor": "indicator", "L_affil_cert": "indicator"}
+                "L_successor": "indicator", "L_affil_cert": "indicator", "L_network": "indicator"}
 SIGNAL_LABELS_ALL = {**SIGNAL_LABELS, "R_young": "Young SAM registration with large dollars",
                      "R_split": "Same firm split across several UEIs", "R_split_cert": "Certified firm split across several UEIs",
-                     "L_successor": "Linked firm fading as this one rises", "L_affil_cert": "Certified firm linked to an affiliate"}
+                     "L_successor": "Linked firm fading as this one rises", "L_affil_cert": "Certified firm linked to an affiliate",
+                     "L_network": "One of many funded vendors sharing a contact or suite"}
 INNOCENT = {
     "S1": "A lawful reorganization, merger or novation",
     "S2": "A first large award won competitively",
@@ -55,6 +56,7 @@ INNOCENT = {
     "R_split_cert": "Separate divisions or locations registered on purpose",
     "L_successor": "A lawful acquisition or rebrand",
     "L_affil_cert": "An affiliation SBA already reviewed",
+    "L_network": "One organization that runs several approved sites or stores on purpose",
     "link": "A shared registration agent, accountant or law firm, or one corporate family",
     "mailbox": "A small firm using a registered agent or virtual office for mail",
     "name": "A different party with the same or a similar name",

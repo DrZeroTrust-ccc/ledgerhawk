@@ -78,6 +78,7 @@ export const SENTENCES: SentenceGroup[] = [
       { text: 'Treat a contact or address shared by more than {hub_cap} SAM registrations as a common hub, not a link between firms.' },
       { text: 'Ignore a contact who links more than {person_vendor_cap} vendors.' },
       { text: 'Flag a linked successor when one linked firm had at least {l_min} and the other at most {l_fade_ratio} of that.' },
+      { text: 'Flag a funded network when at least {network_min_members} vendors in the file (0 turns this off) share a contact or suite, they make up at least {network_share} of its SAM registrations, it has at most {network_cap} of them, and together they total at least {network_min_total}.' },
       { text: 'Ignore {stem_stop_words} when comparing firm names.' },
     ],
   },
