@@ -348,6 +348,13 @@ export type Graph = {
 
 type AutoKind = { checked_at?: string; fetched_at?: string; as_of?: string; error?: string }
 /** Automatic downloads from SAM.gov: on when the server has a SAM_API_KEY. */
+export type CourtIndex = {
+  enabled: boolean
+  index: { key: string; as_of: string; dockets: number; built_at: string } | null
+  job: { state: 'idle' | 'running' | 'done' | 'error'; step: string; error: string; started_at: string; finished_at: string }
+  disk_free_gb: number
+}
+
 export type AutoSources = { enabled: boolean; running: boolean; sam?: AutoKind; exclusions?: AutoKind }
 
 export type Source = {
@@ -863,7 +870,7 @@ export type AddressCheck = {
   findings: CheckFinding[]
 }
 
-export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[] }
+export type ScreenContext = { fetched_at: string; fetched_by: string; entities: OutsideContext[]; courts_pending?: number }
 
 export type ScreenAwards = {
   fetched_at: string
@@ -1051,6 +1058,8 @@ export const api = {
   audit: (q = '') => req<HistoryItem[]>(`/api/audit${q ? `?${q}` : ''}`),
   auditActions: () => req<{ actions: string[] }>('/api/audit/actions'),
   sources: () => req<{ sources: Source[]; auto?: AutoSources }>('/api/sources'),
+  courtIndex: () => req<CourtIndex>('/api/court-index'),
+  buildCourtIndex: (form: FormData) => req<CourtIndex>('/api/court-index', { method: 'POST', body: form }),
   refreshSources: (form: FormData) => req<AutoSources>('/api/sources/refresh', { method: 'POST', body: form }),
   addSource: (form: FormData) => req<Source>('/api/sources', { method: 'POST', body: form }),
   graph: (id: string, uei: string) => req<Graph>(`/api/runs/${id}/vendors/${encodeURIComponent(uei)}/graph`),

@@ -467,7 +467,7 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
   })
   const running = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'running')
   const failed = JOB_KINDS.map((k) => jobs[k]).filter((j): j is ScreenJob => j?.state === 'error')
-  const courtsUnchecked = (data.context?.entities ?? []).filter((e) => e.sources?.courts?.error).length
+  const courtsUnchecked = data.context?.courts_pending ?? (data.context?.entities ?? []).filter((e) => e.sources?.courts?.error).length
   return (
     <div className="space-y-3">
       {m.privileged && (
@@ -508,9 +508,9 @@ function Header({ data, reload }: { data: SubjectScreen; reload: () => void }) {
               kind="courts"
               job={jobs.courts}
               started={started}
-              label={`Re-check courts (${courtsUnchecked} not checked)`}
+              label={`Re-check courts (${courtsUnchecked} to check)`}
               busyLabel="Re-checking courts…"
-              title="Ask CourtListener again for the names its rate limit skipped. Waits out the limit, so a long list can take hours."
+              title="Search court records again for names CourtListener skipped, or that were searched before the local court index was loaded"
             />
           )}
           {data.subjects.length > 0 && (

@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { lastPlace } from '../nav'
-import { api, money, num, queueTotal, type AutoSources, type ImportJob, type RunMeta, type Source } from '../api'
+import { api, money, num, queueTotal, type AutoSources, type CourtIndex, type ImportJob, type RunMeta, type Source } from '../api'
 import { ImportProgress, RecentImports, useImportJob, WeeklyRescreen } from '../imports'
 import { useAnalystName } from '../App'
 import { Button, Card, DataClassBadge, ErrorNote, Loading, useAsync } from '../ui'
@@ -125,10 +125,67 @@ function AutoFetch({ auto, reload }: { auto?: AutoSources; reload: () => void })
   )
 }
 
+// The local copy of CourtListener's dockets that court searches run on (no rate limit). Built by hand the first time,
+// since it needs disk space; after that the server refreshes it when CourtListener publishes a newer file.
+function CourtIndexPanel() {
+  const [analyst] = useAnalystName()
+  const [ci, setCi] = useState<CourtIndex | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [tick, setTick] = useState(0)
+  const running = ci?.job.state === 'running'
+  useEffect(() => {
+    let live = true
+    api
+      .courtIndex()
+      .then((x) => live && setCi(x))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [tick])
+  useEffect(() => {
+    if (!running) return
+    const t = setTimeout(() => setTick((n) => n + 1), 10000)
+    return () => clearTimeout(t)
+  }, [running, ci])
+  if (!ci || !ci.enabled) return null
+  const build = async () => {
+    setError(null)
+    const f = new FormData()
+    f.set('analyst', analyst)
+    try {
+      setCi(await api.buildCourtIndex(f))
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+  const idx = ci.index
+  return (
+    <div className="mb-4 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>
+          {idx
+            ? `Court records: local copy of CourtListener's ${idx.dockets.toLocaleString()} dockets as of ${idx.as_of}. Refreshed automatically when a newer file is out.`
+            : `Court records: searched one at a time through CourtListener's API (about 125 searches a day). Load the full docket list (about 9 GB) to search every vendor at once. Free disk: ${ci.disk_free_gb} GB.`}
+        </span>
+        {!idx && (
+          <Button variant="secondary" className="ml-auto" disabled={running || !analyst.trim()} onClick={build}>
+            {running ? 'Loading dockets…' : 'Load court dockets'}
+          </Button>
+        )}
+      </div>
+      {running && <p className="mt-1 text-xs">{ci.job.step}. This takes about an hour; you can leave the page.</p>}
+      {ci.job.state === 'error' && <p className="mt-1 text-xs text-crimson">{ci.job.error}</p>}
+      <ErrorNote error={error} />
+    </div>
+  )
+}
+
 function DataSources({ sources, auto, reload }: { sources: Source[] | null; auto?: AutoSources; reload: () => void }) {
   return (
     <Card title="Data sources">
       <AutoFetch auto={auto} reload={reload} />
+      <CourtIndexPanel />
       {!sources && <Loading />}
       {sources && sources.length === 0 && (
         <p className="mb-4 text-sm text-slate-500">No SAM or exclusions extracts loaded yet. Add them once here and every import can use them.</p>

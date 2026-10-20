@@ -9,6 +9,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from ..pipeline import courtindex
 from ..pipeline import courtrecords as cr
 from .subjects import PRIVILEGED
 from .voi import MONEY, NAVY
@@ -42,6 +43,7 @@ def _match(r: dict) -> str:
 def build_court_records(screen: dict, generated_at: datetime | None = None, *, include_mentions: bool = False) -> bytes:
     generated_at = generated_at or datetime.now(timezone.utc)
     res = cr.screen_records(screen)
+    idx = courtindex.status()
     meta = screen.get("meta") or {}
     wb = Workbook()
 
@@ -105,6 +107,8 @@ def build_court_records(screen: dict, generated_at: datetime | None = None, *, i
         ("Sources", "Federal dockets and opinions from CourtListener (RECAP), and DOJ press releases. State courts, "
                     "PACER-only dockets, GAO bid protests and board of contract appeals decisions not on CourtListener "
                     "are not covered; the subject screen's manual links open those searches."),
+        ("Court index", courtindex.summary_line(idx) or "Not loaded on this server: court searches went to "
+                        "CourtListener's search API, which allows about 125 searches a day."),
         ("Matching", "Court records name parties, not UEIs. A row is graded on whether the vendor's legal name (or a "
                      "known other name) appears as a party or in the caption. Confirm the party's address or officers "
                      "on the docket before relying on a row; the Match column scores the visible detail."),

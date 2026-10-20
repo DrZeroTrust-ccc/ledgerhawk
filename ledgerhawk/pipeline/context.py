@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import osint
+from . import courtindex
 from .normalize import normalize_name
 
 USER_AGENT = "LedgerHawk screening (admin@ledgerhawk.tech)"
@@ -462,15 +463,49 @@ def _courts_get(url: str, headers: dict, fetch: Fetch, token: str, patient: bool
         raise RateLimited("its rate limit was reached" + ("" if token else "; add a free CourtListener API token")) from None
 
 
-def courts(q: str, fetch: Fetch, *, patient: bool = False, tries: int = 6) -> list[dict]:
-    """Federal dockets and opinions naming q. `patient` waits out the rate limit (up to `tries` times per search)
-    instead of giving up on it."""
+def courts(q: str, fetch: Fetch, *, patient: bool = False, tries: int = 6, recent: bool = True) -> list[dict]:
+    """Court dockets and opinions naming q. With the local docket index (courtindex.py) the search runs on our own
+    disk and CourtListener is only asked about dockets filed since the index's date; a refusal there leaves the index's
+    answer standing; `recent=False` skips that check (whole-screen lookups: the API allows about 125 calls a day).
+    Without the index, both searches go to CourtListener. `patient` waits out CourtListener's rate limit (up to
+    `tries` times per search) instead of giving up on it."""
+    idx = courtindex.status()
+    if not idx:
+        return _courts_api(q, fetch, patient=patient, tries=tries)
+    out = [_index_item(r) for r in courtindex.search(q)]
+    if not recent:
+        return out
+    try:
+        # never waits on the limit: the index already answered, and a lockout can last hours
+        recent = _courts_api(q, fetch, kinds=(("r", "Federal docket"),), extra={"filed_after": idx["as_of"]})
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        log.info("CourtListener check for dockets since %s skipped for %r: %s", idx["as_of"], q, exc)
+        recent = []
+    seen = {i["url"].split("/docket/")[-1].split("/")[0] for i in out}
+    return out + [i for i in recent if i["url"].split("/docket/")[-1].split("/")[0] not in seen]
+
+
+def _index_item(r: dict) -> dict:
+    """A docket from the local index, in the same shape as one from the search API."""
+    federal = (r["jurisdiction"] or "").startswith("F")
+    where = " · ".join(x for x in (r["court_short"] or r["court_id"], r["docket"]) if x)
+    item = _item("Federal docket" if federal else "State court docket", r["name"],
+                 f"https://www.courtlistener.com/docket/{r['id']}/{r['slug'] or 'x'}/", r["filed"] or "",
+                 where=where, snippet=r["cause"] or r["suit"] or "", match="name in case")
+    item["case"] = {"kind": "docket", "court": r["court"] or r["court_short"], "court_id": r["court_id"],
+                    "docket": r["docket"], "filed": r["filed"] or "", "terminated": r["terminated"] or "",
+                    "suit": r["suit"] or "", "cause": r["cause"] or "", "parties": [], "from": "index"}
+    return item
+
+
+def _courts_api(q: str, fetch: Fetch, *, patient: bool = False, tries: int = 6,
+                kinds=(("r", "Federal docket"), ("o", "Court opinion")), extra: dict | None = None) -> list[dict]:
     token = os.environ.get("COURTLISTENER_TOKEN", "").strip()
     headers = {"Authorization": f"Token {token}"} if token else {}
     out = []
-    for kind, label in (("r", "Federal docket"), ("o", "Court opinion")):
+    for kind, label in kinds:
         url = "https://www.courtlistener.com/api/rest/v4/search/?" + urllib.parse.urlencode(
-            {"q": f'"{q}"', "type": kind, "order_by": "dateFiled desc"})
+            {"q": f'"{q}"', "type": kind, "order_by": "dateFiled desc"} | (extra or {}))
         for attempt in range(1, tries + 1):
             try:
                 raw = _courts_get(url, headers, fetch, token, patient)
@@ -655,13 +690,15 @@ def manual_links(name: str, state: str = "", person: bool = False) -> list[dict]
 
 
 def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, fetch: Fetch = _fetch,
-           cache_dir: Path | None = None, clues: dict | None = None, entity: dict | None = None) -> dict:
+           cache_dir: Path | None = None, clues: dict | None = None, entity: dict | None = None,
+           recent_courts: bool = True) -> dict:
     """All sources for one name, each item scored against the clues. A failing source records its error and the rest
     still run. `entity` is the vendor's SAM card, when there is one: its website and address get checked directly."""
     q = name.strip().title() if person else query_name(name)
     c = clues or clues_for(name, uei=uei, state=state, person=person)
     keys = osint.keys_status()
     calls: dict[str, Callable[[], list[dict]]] = {k: (lambda fn=fn: fn(q, fetch)) for k, fn in SOURCES.items()}
+    calls["courts"] = lambda: courts(q, fetch, recent=recent_courts)
     calls["leie"] = lambda: osint.leie(name, person, fetch, cache_dir)
     if keys["opensanctions"]:
         calls["opensanctions"] = lambda: osint.opensanctions(q, person, fetch, osint._key("OPENSANCTIONS_API_KEY"))
@@ -685,6 +722,9 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
         sources["ofac"] = {"items": ofac(name, fetch, cache_dir, person), "error": ""}
     except (urllib.error.URLError, OSError, ValueError) as exc:
         sources["ofac"] = {"items": [], "error": f"OFAC list could not be loaded ({getattr(exc, 'code', '') or type(exc).__name__})"}
+    idx = courtindex.status()
+    if idx and not sources["courts"]["error"]:
+        sources["courts"]["index_as_of"] = idx["as_of"]
     for src in sources.values():
         src["items"] = [score(i, c) | {"id": item_id(i)} for i in src["items"]]
     items = [i for s in sources.values() for i in s["items"]]
@@ -699,6 +739,20 @@ def lookup(name: str, *, uei: str = "", state: str = "", person: bool = False, f
     }
 
 
+def courts_pending(entity: dict, idx: dict | None) -> bool:
+    """The court search for a saved lookup needs another pass: CourtListener didn't answer, or the search ran before
+    the local index (or an older copy of it) was there."""
+    src = (entity.get("sources") or {}).get("courts") or {}
+    if src.get("error"):
+        return True
+    return bool(idx) and src.get("index_as_of", "") < idx["as_of"]
+
+
+# With the local court index, a screen of more names than this skips CourtListener's check for dockets newer than the
+# index: its API allows about 125 calls a day, shared by every tenant on the token.
+RECENT_COURTS_MAX = 20
+
+
 def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | None = None,
                 progress: Callable[[int, int, str], None] | None = None) -> list[dict]:
     """targets: [{name, uei?, state?, person?}]. Runs a few at a time to stay polite to the free APIs. `progress` is
@@ -707,7 +761,8 @@ def lookup_many(targets: list[dict], fetch: Fetch = _fetch, cache_dir: Path | No
 
     def one(t: dict) -> dict:
         res = lookup(t["name"], uei=t.get("uei", ""), state=t.get("state", ""), person=bool(t.get("person")),
-                     fetch=fetch, cache_dir=cache_dir, clues=t.get("clues"), entity=t.get("entity"))
+                     fetch=fetch, cache_dir=cache_dir, clues=t.get("clues"), entity=t.get("entity"),
+                     recent_courts=len(targets) <= RECENT_COURTS_MAX)
         if progress:
             with lock:
                 done[0] += 1
