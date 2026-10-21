@@ -11,7 +11,12 @@ const NODE_COLOR: Record<string, string> = {
   vendor: '#7c3aed',
   address: '#d97706',
   person: '#B0263A',
+  exclusion: '#7f1d1d',
+  court: '#4338ca',
+  osint: '#0891b2',
 }
+const CHIP: Record<string, string> = { P_osint: 'bg-cyan-50 text-cyan-800', P_court: 'bg-indigo-50 text-indigo-700' }
+const RECORD_KINDS = new Set(['exclusion', 'court', 'osint'])
 const NODE_LABEL: Record<string, string> = {
   sponsor: 'Sponsor',
   site: 'Meal site',
@@ -19,6 +24,9 @@ const NODE_LABEL: Record<string, string> = {
   vendor: 'WIC vendor',
   address: 'Shared address',
   person: 'Officer or owner',
+  exclusion: 'Exclusion or disqualification',
+  court: 'Court case',
+  osint: 'Open-source finding',
 }
 
 const fmt = (n: number) => n.toLocaleString()
@@ -78,7 +86,7 @@ function Network({ lead }: { lead: ProgramLead }) {
   const pos = useMemo(() => layout(nodes, edges, W, H), [nodes, edges, H])
   const idx = new Map(nodes.map((x, i) => [x.id, i]))
   const [hover, setHover] = useState<string | null>(null)
-  const showLabel = (x: ProgramNode) => x.center || x.kind === 'person' || x.kind === 'address' || x.bad || nodes.length <= 14 || hover === x.id
+  const showLabel = (x: ProgramNode) => x.center || x.kind === 'person' || x.kind === 'address' || RECORD_KINDS.has(x.kind) || x.bad || nodes.length <= 14 || hover === x.id
   const kinds = Array.from(new Set(nodes.map((x) => x.kind)))
   return (
     <div>
@@ -94,9 +102,9 @@ function Network({ lead }: { lead: ProgramLead }) {
               y1={pos[a].y}
               x2={pos[b].x}
               y2={pos[b].y}
-              stroke={e.kind === 'officer' ? '#B0263A' : e.kind === 'at' ? '#d97706' : '#94a3b8'}
+              stroke={e.kind === 'officer' ? '#B0263A' : e.kind === 'at' ? '#d97706' : e.kind === 'record' ? '#4338ca' : '#94a3b8'}
               strokeOpacity={0.45}
-              strokeDasharray={e.kind === 'linked' ? '4 3' : undefined}
+              strokeDasharray={e.kind === 'linked' || e.kind === 'record' ? '4 3' : undefined}
             />
           )
         })}
@@ -104,14 +112,21 @@ function Network({ lead }: { lead: ProgramLead }) {
           const r = x.center ? 13 : x.kind === 'site' ? 5 : 8
           return (
             <g key={x.id} onMouseEnter={() => setHover(x.id)} onMouseLeave={() => setHover(null)}>
-              <title>{`${NODE_LABEL[x.kind] ?? x.kind}: ${x.label}${x.shared && x.shared > 1 ? ` (shared by ${x.shared})` : ''}${x.bad ? ' (terminated or disqualified)' : ''}`}</title>
+              <title>{`${NODE_LABEL[x.kind] ?? x.kind}: ${x.label}${x.shared && x.shared > 1 ? ` (shared by ${x.shared})` : ''}${x.bad && !RECORD_KINDS.has(x.kind) ? ' (terminated or disqualified)' : ''}`}</title>
               {x.kind === 'address' ? (
                 <rect x={pos[i].x - r} y={pos[i].y - r} width={2 * r} height={2 * r} fill={NODE_COLOR.address} />
+              ) : RECORD_KINDS.has(x.kind) ? (
+                <polygon
+                  points={`${pos[i].x},${pos[i].y - r - 1} ${pos[i].x + r + 1},${pos[i].y} ${pos[i].x},${pos[i].y + r + 1} ${pos[i].x - r - 1},${pos[i].y}`}
+                  fill={NODE_COLOR[x.kind]}
+                  stroke="#fff"
+                  strokeWidth={1.5}
+                />
               ) : (
                 <circle cx={pos[i].x} cy={pos[i].y} r={r} fill={NODE_COLOR[x.kind] ?? '#64748b'} stroke={x.bad ? '#B0263A' : x.flagged ? '#f59e0b' : '#fff'} strokeWidth={x.bad || x.flagged ? 3 : 1.5} />
               )}
               {showLabel(x) && (
-                <text x={pos[i].x} y={pos[i].y - r - 4} textAnchor="middle" fontSize={11} fill="#141B22" stroke="#f8fafc" strokeWidth={3} paintOrder="stroke">
+                <text x={Math.min(W - 90, Math.max(90, pos[i].x))} y={pos[i].y - r - 4} textAnchor="middle" fontSize={11} fill="#141B22" stroke="#f8fafc" strokeWidth={3} paintOrder="stroke">
                   {x.label.length > 34 ? x.label.slice(0, 32) + '…' : x.label}
                 </text>
               )}
@@ -195,7 +210,7 @@ function LeadDetail({ pid, rank }: { pid: string; rank: number }) {
       <div className="space-y-4">
         {data.hits.map((h, i) => (
           <div key={i} className="rounded-md border border-slate-200 p-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-crimson">{h.label}</div>
+            <div className={`text-xs font-semibold uppercase tracking-wide ${h.code === 'P_osint' ? 'text-cyan-700' : h.code === 'P_court' ? 'text-indigo-700' : 'text-crimson'}`}>{h.label}</div>
             <p className="mt-1 text-sm text-ink">{h.text}</p>
             <Rows rows={h.rows} />
           </div>
@@ -251,7 +266,17 @@ function ProgramView({ id }: { id: string }) {
           <Stat label="Meal sites" value={fmt(data.counts.site ?? 0)} />
           <Stat label="Meals claimed" value={fmt(data.meals)} />
           <Stat label="SNAP stores and WIC vendors" value={fmt(stores)} />
-          <Stat label="Leads" value={data.leads.length} sub={data.checks.exclusions ? 'SAM exclusions checked' : 'No exclusions list loaded'} />
+          <Stat
+            label="Leads"
+            value={data.leads.length}
+            sub={
+              data.outside && data.outside.exclusions + data.outside.court_records + data.outside.osint > 0
+                ? `Checked against ${data.outside.exclusions} exclusions, ${data.outside.court_records} court cases, ${data.outside.osint} open-source records`
+                : data.checks.exclusions
+                  ? 'SAM exclusions checked'
+                  : 'No exclusions list loaded'
+            }
+          />
         </div>
       </Card>
 
@@ -289,7 +314,7 @@ function ProgramView({ id }: { id: string }) {
                     </div>
                     <div className="mt-1 flex flex-wrap gap-1">
                       {l.signals.map((s) => (
-                        <span key={s} className="rounded bg-crimson-50 px-1.5 py-0.5 text-[11px] text-crimson">
+                        <span key={s} className={`rounded px-1.5 py-0.5 text-[11px] ${CHIP[s] ?? 'bg-crimson-50 text-crimson'}`}>
                           {data.signal_labels[s]}
                         </span>
                       ))}

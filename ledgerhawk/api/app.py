@@ -931,7 +931,7 @@ def get_import_job(jid: str):
 
 
 # ---- program integrity screens (state nutrition programs: sponsors, sites, SNAP retailers, WIC vendors) ----
-PROGRAM_FILES = ("sponsors", "sites", "retailers", "wic_vendors")
+PROGRAM_FILES = ("sponsors", "sites", "retailers", "wic_vendors", "exclusions", "court_records", "osint")
 
 
 def _programs_on():
@@ -954,13 +954,16 @@ async def create_program(
     sites: UploadFile | None = File(None),
     retailers: UploadFile | None = File(None),
     wic_vendors: UploadFile | None = File(None),
+    exclusions: UploadFile | None = File(None),
+    court_records: UploadFile | None = File(None),
+    osint: UploadFile | None = File(None),
 ):
     _programs_on()
     analyst = who(analyst)
     if not analyst.strip():
         raise HTTPException(400, "Enter your name so the screen is attributed.")
     files = {}
-    for name, up in zip(PROGRAM_FILES, (sponsors, sites, retailers, wic_vendors)):
+    for name, up in zip(PROGRAM_FILES, (sponsors, sites, retailers, wic_vendors, exclusions, court_records, osint)):
         if up is not None and up.filename:
             files[name] = (await up.read()).decode("utf-8-sig", errors="replace")
     try:

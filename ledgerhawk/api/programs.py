@@ -79,7 +79,8 @@ class Programs:
         leads = [{k: v for k, v in l.items() if k not in ("graph", "hits")} |
                  {"headline": l["hits"][0]["text"] if l["hits"] else ""} for l in res["leads"]]
         return {"meta": meta, "counts": res["counts"], "meals": res["meals"], "by_signal": res["by_signal"],
-                "signal_labels": res["signal_labels"], "checks": res["checks"], "leads": leads}
+                "signal_labels": res["signal_labels"], "checks": res["checks"], "outside": res.get("outside"),
+                "leads": leads}
 
     def lead(self, pid: str, rank: int) -> dict:
         res = json.loads((self._dir(pid) / "result.json").read_text())

@@ -1023,6 +1023,7 @@ export type ProgramScreen = {
   by_signal: Record<string, number>
   signal_labels: Record<string, string>
   checks: { exclusions: boolean; exclusions_source: string }
+  outside?: { exclusions: number; court_records: number; osint: number }
   leads: ProgramLeadRow[]
 }
 
