@@ -10,6 +10,10 @@ The planted cases follow fraud patterns from public cases, chiefly the Feeding O
   5. A sudden jump: one site's claims jump tenfold in a month
   6. An officer shared between a sponsor and a SNAP retailer
 
+Outside records round it out, also fictional: exclusion lists (SAM, the CACFP National Disqualified List, SNAP
+disqualifications), court cases and open-source findings (business registry, property, address, web and social).
+Some explain a flag away rather than confirm it, as real ones do.
+
 The rest of the population is ordinary, so the flags stand out against a realistic background.
 """
 from __future__ import annotations
@@ -176,8 +180,12 @@ def generate(seed: int = 7) -> dict[str, str]:
                       "address": "1210 Lake St", "city": "Riverton", "state": STATE, "zip": "58101",
                       "authorized": "2025-11-01", "ended": "", "disqualified": "no"})
 
+    jump_sponsor = next(x["name"] for x in sponsors if x["sponsor_id"] == "SP-012")
+    exclusions, courts, osint = _outside(jump_sponsor)
+
     out = {}
-    for stem, rows in (("sponsors", sponsors), ("sites", sites), ("retailers", retailers), ("wic_vendors", vendors)):
+    for stem, rows in (("sponsors", sponsors), ("sites", sites), ("retailers", retailers), ("wic_vendors", vendors),
+                       ("exclusions", exclusions), ("court_records", courts), ("osint", osint)):
         cols = list(dict.fromkeys(k for r in rows for k in r))
         buf = io.StringIO()
         w = csv.DictWriter(buf, fieldnames=cols)
@@ -185,3 +193,71 @@ def generate(seed: int = 7) -> dict[str, str]:
         w.writerows(rows)
         out[stem] = buf.getvalue()
     return out
+
+
+SIM = "(simulated)"
+
+
+def _outside(jump_sponsor: str) -> tuple[list[dict], list[dict], list[dict]]:
+    """Exclusion, court and open-source records. The decoys match nobody in the state, as most of a real list won't."""
+    x = lambda name, people, list_, agency, type_, active, terminates="", address="", city="", zip_="": {  # noqa: E731
+        "name": name, "people": people, "address": address, "city": city, "state": STATE if address else "", "zip": zip_,
+        "list": list_, "agency": agency, "type": type_, "active": active, "terminates": terminates}
+    exclusions = [
+        x("Kendall Marlowe", "Kendall Marlowe", "CACFP National Disqualified List", "Northland Dept. of Education",
+          "Individual, disqualified as a principal of Cornerstone Kids Nutrition LLC", "2025-08-12"),
+        x("Harper Quill", "Harper Quill", "SAM exclusion list", "Department of Housing and Urban Development",
+          "Debarment (individual)", "2024-03-05", "2027-03-05"),
+        x("Eastgate Food Mart", "Dakota Pemberton", "SNAP retailer disqualification list", "USDA Food and Nutrition Service",
+          "Permanent disqualification (trafficking)", "2025-02-14", "", "742 River Rd", "Cedar Falls", "58104"),
+        x("Prairie Wind Catering LLC", "Logan Whitfield", "SAM exclusion list", "Department of Agriculture",
+          "Debarment", "2023-06-01", "2026-06-01"),
+        x("Bluewater Youth Services", "Morgan Achterberg", "CACFP National Disqualified List", "Southland Dept. of Education",
+          "Institution, disqualified", "2022-10-18"),
+        x("Kwik Stop Grocery #2", "Jesse Varnell", "SNAP retailer disqualification list", "USDA Food and Nutrition Service",
+          "Disqualified 3 years", "2024-09-30", "2027-09-30", "15 Harbor Way", "Port Ellis", "59210"),
+        x("Tomlin Health Supply Inc", "", "SAM exclusion list", "Department of Health and Human Services",
+          "Exclusion (program fraud)", "2021-04-12"),
+    ]
+    c = lambda case_no, court, filed, caption, nature, parties, status, summary: {  # noqa: E731
+        "case_no": case_no, "court": court, "filed": filed, "caption": caption, "nature": nature, "parties": parties,
+        "status": status, "summary": summary}
+    courts = [
+        c("CR-2024-0412", "Cedar Falls District Court", "2024-11-04", "State of Northland v. Dakota Pemberton",
+          "Criminal: SNAP benefit trafficking", "Dakota Pemberton; Eastgate Food Mart", "Pleaded guilty 2025-05-20",
+          "Bought SNAP benefits for cash at about 50 cents on the dollar, per the charging papers."),
+        c("CV-2025-1187", "Northland District Court", "2025-07-22",
+          "State of Northland ex rel. Dept. of Education v. Cornerstone Kids Nutrition LLC",
+          "Government civil: recovery of meal reimbursements", "Cornerstone Kids Nutrition LLC; Kendall Marlowe; Finley Ostrander",
+          "Pending", "The state seeks $1.4M claimed for meals at sites that inspectors found closed."),
+        c("CV-2026-0233", "Lakeside County Court", "2026-04-10", "Lakeside Commercial Properties LLC v. Northland Feeding Partners Inc",
+          "Civil: unpaid rent", "Northland Feeding Partners Inc; Harper Quill", "Pending",
+          "The landlord at 88 Mill Rd says the tenant used the suite as a mail drop and never served meals there."),
+        c("CV-2025-0981", "Riverton County Court", "2025-06-02", "Okonkwo v. Tri-State Vending Co",
+          "Civil: contract", "Tri-State Vending Co; Blake Okonkwo", "Dismissed", "A vending contract dispute."),
+    ]
+    o = lambda subject, source, found, finding, address="", zip_="": {  # noqa: E731
+        "subject": subject, "address": address, "zip": zip_, "source": source, "found": found, "finding": finding,
+        "link": SIM}
+    osint = [
+        o("Northland Feeding Partners Inc", "Northland Secretary of State", "2026-06-30",
+          "Incorporated 2025-11-03, 70 days before its program approval. Its registered agent, at the same suite, formed "
+          "14 other nonprofits in November and December 2025."),
+        o("455 Center Rd", "Commercial property listing", "2026-06-30",
+          "A 1,400 sq ft storefront. Eleven meal sites claim to serve children there.", "455 Center Rd", "58102"),
+        o("88 Mill Rd Ste 2", "Address lookup", "2026-06-30", "Advertised as a virtual office and mail-forwarding suite.",
+          "88 Mill Rd Ste 2", "58103"),
+        o("Harper Quill", "County property records", "2026-07-01",
+          "Bought three homes and a lake lot between March and June 2026 for $2.3M combined, with no mortgage recorded."),
+        o("Keystone Child Meals Inc", "Domain and web archive records", "2026-06-30",
+          "keystonechildmeals.org was registered 2025-08-20. Its phone number matches Cornerstone Kids Nutrition's "
+          "archived 2024 website."),
+        o("Rowan Stroud", "Professional networking profile", "2026-06-30",
+          "Lists Director of Operations at Northland Feeding Partners and Owner of Lake Street Quick Mart."),
+        o("S&I Healthy Foods LLC", "Northland Secretary of State", "2026-06-30",
+          "Organized 2023-01-09 by Sawyer Ingram at 19 Church St, the address of Plaza Family Grocery."),
+        o(jump_sponsor, "Local news", "2026-03-18",
+          "Its Willow Day Care Annex opened an after-school program in March, raising enrollment from about 40 to 380. "
+          "That explains the jump in claims, but the site's license still lists capacity for 40."),
+    ]
+    return exclusions, courts, osint

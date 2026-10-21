@@ -8,6 +8,13 @@ through state agencies, so none of them show up in federal award data. A program
   retailers.csv    store_id, name, owner, address, city, state, zip, authorized, ended, disqualified
   wic_vendors.csv  vendor_id, name, owner, address, city, state, zip, authorized
 
+Three optional reference files add outside records, matched to entities by name, person or address:
+
+  exclusions.csv     name, people, address, city, state, zip, list, agency, type, active, terminates
+                     (SAM, the CACFP National Disqualified List, SNAP disqualifications, state debarments)
+  court_records.csv  case_no, court, filed, caption, nature, parties, status, summary
+  osint.csv          subject, address, zip, source, found, finding, link (business registries, property, web, news, social)
+
 Officers and owners are separated by semicolons. Every file is optional except sponsors or retailers. Checks:
 
   P_capacity   a site claims more meals a day than its licensed capacity allows (3 a child a day: two meals and a snack)
@@ -17,7 +24,9 @@ Officers and owners are separated by semicolons. Every file is optional except s
   P_officer    an officer or owner appears on more than one sponsor, retailer or vendor
   P_reentry    an active entity shares an address or a person with a disqualified or terminated one, and started after it
   P_dual       a SNAP retailer and a WIC vendor are the same business under different names
-  P_excluded   the sponsor or its parent is on the SAM exclusions list
+  P_excluded   the entity, its parent or one of its people is on an exclusion or disqualification list
+  P_court      the entity or one of its people is a party to a court case
+  P_osint      open-source records add something a reviewer should see
 
 Signals are leads for review, not findings. Each lead carries the rows behind it and a small network for the link view.
 """
@@ -46,10 +55,13 @@ SIGNALS = {
     "P_officer": "Same person on several entities",
     "P_reentry": "Linked to a disqualified or terminated entity",
     "P_dual": "Same business as a SNAP retailer and a WIC vendor",
-    "P_excluded": "Sponsor or parent excluded in SAM",
+    "P_excluded": "Excluded or disqualified (entity, parent or person)",
+    "P_court": "Party to a court case",
+    "P_osint": "Open-source finding",
 }
 WEIGHT = {"P_capacity": 30, "P_cluster": 20, "P_new": 10, "P_spike": 10, "P_officer": 15, "P_reentry": 35,
-          "P_dual": 10, "P_excluded": 40}
+          "P_dual": 10, "P_excluded": 40, "P_court": 15, "P_osint": 5}
+COURT_WEIGHTY = ("criminal", "false claims", "government")  # natures that count fully; other civil cases count half
 
 FILES = {
     "sponsors": ["sponsor_id", "name", "program", "officers", "address", "city", "state", "zip", "approved", "status",
@@ -57,6 +69,9 @@ FILES = {
     "sites": ["site_id", "sponsor_id", "name", "address", "city", "state", "zip", "capacity", "opened"],
     "retailers": ["store_id", "name", "owner", "address", "city", "state", "zip", "authorized", "ended", "disqualified"],
     "wic_vendors": ["vendor_id", "name", "owner", "address", "city", "state", "zip", "authorized"],
+    "exclusions": ["name", "people", "address", "city", "state", "zip", "list", "agency", "type", "active", "terminates"],
+    "court_records": ["case_no", "court", "filed", "caption", "nature", "parties", "status", "summary"],
+    "osint": ["subject", "address", "zip", "source", "found", "finding", "link"],
 }
 ALIASES = {"id": None, "officer": "officers", "owners": "owner", "approval_date": "approved", "open_date": "opened",
            "authorized_date": "authorized", "end_date": "ended", "street": "address", "zip_code": "zip", "zipcode": "zip"}
@@ -138,6 +153,9 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
     vendors = files.get("wic_vendors") or []
     if not sponsors and not retailers and not vendors:
         raise ValueError("A program file set needs sponsors.csv, retailers.csv or wic_vendors.csv.")
+    excl_rows = files.get("exclusions") or []
+    court_rows = files.get("court_records") or []
+    osint_rows = files.get("osint") or []
 
     # Every entity in one list: (ref, kind, row)
     ents: dict[str, dict] = {}
@@ -342,12 +360,78 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
                     f"{'Parent' if f['who'] == 'parent' else 'This entity'} {f['name']} is excluded by {f['agency']} "
                     f"since {f['active']} (matched by {f['matched_by']})" for f in found) + ".", found)
 
+    # ---- outside records: exclusion lists, court cases, open-source findings ----
+    by_nn = defaultdict(list)
+    for e in ents.values():
+        if e["kind"] != "site":
+            by_nn[normalize_name(e["name"])].append(e["ref"])
+            pn = e["row"].get("parent_name")
+            if pn:
+                by_nn[normalize_name(pn)].append(e["ref"])
+
+    def match(names=(), persons=(), addr="") -> dict[str, str]:
+        """Entities (not sites) a record points at, with how it matched."""
+        out: dict[str, str] = {}
+        for n in names:
+            for r in by_nn.get(normalize_name(n), []) if n else []:
+                out.setdefault(r, f"name ({n})")
+        for p in persons:
+            for r in by_person.get(person_key(p), []):
+                if ents[r]["kind"] != "site":
+                    out.setdefault(r, f"person ({p})")
+        if addr:
+            for r in by_addr.get(addr, []):
+                e = ents[r]
+                if e["kind"] == "site":  # a site address counts against the sponsor that runs it
+                    r = f"sponsor:{e['row'].get('sponsor_id', '')}"
+                    if r not in ents:
+                        continue
+                out.setdefault(r, f"address ({_addr_text(e['row']) or addr.split('|')[0]})")
+        return out
+
+    excl_hits = defaultdict(list)
+    for x in excl_rows:
+        for r, how in match([x.get("name", "")], people(x, "people"), addr_key(x)).items():
+            excl_hits[r].append({"listed": x.get("name", ""), "list": x.get("list", ""), "agency": x.get("agency", ""),
+                                 "type": x.get("type", ""), "active": x.get("active", ""),
+                                 "terminates": x.get("terminates", ""), "matched_by": how})
+    for r, found in excl_hits.items():
+        def says(f):
+            m = re.match(r"person \((.+)\)", f["matched_by"])
+            who = f["listed"] if not m or person_key(m.group(1)) == person_key(f["listed"]) else \
+                f"{m.group(1)}, a principal of {f['listed']},"
+            return (f"{who} is on the {f['list'] or 'exclusion list'}" + (f" ({f['agency']})" if f["agency"] else "")
+                    + (f" since {f['active']}" if f["active"] else "") + f"; matched by {f['matched_by']}")
+        hit(r, "P_excluded", ". ".join(says(f) for f in found) + ".", found)
+
+    for c in court_rows:
+        parties = people(c, "parties")
+        found = match(parties, parties)
+        weighty = any(w in (c.get("nature") or "").lower() for w in COURT_WEIGHTY)
+        for r, how in found.items():
+            hit(r, "P_court", f"{c.get('caption', '')} ({c.get('court', '')} {c.get('case_no', '')}, filed "
+                f"{c.get('filed', '')}). {c.get('nature') or 'Case'}; {c.get('status') or 'status unknown'}. "
+                + (c.get("summary") or ""),
+                [{"case": c.get("case_no", ""), "court": c.get("court", ""), "filed": c.get("filed", ""),
+                  "nature": c.get("nature", ""), "status": c.get("status", ""), "matched_by": how}])
+            if not weighty:
+                hits[r][-1]["minor"] = True
+
+    for o in osint_rows:
+        subj = o.get("subject", "")
+        for r, how in match([subj], [subj], addr_key(o)).items():
+            hit(r, "P_osint", f"{o.get('source', 'Open source')}: {o.get('finding', '')}",
+                [{"subject": subj, "source": o.get("source", ""), "found": o.get("found", ""),
+                  "link": o.get("link", ""), "matched_by": how}])
+
     # ---- leads ----
     leads = []
     for ref, hs in hits.items():
         e = ents[ref]
         codes = sorted({h["code"] for h in hs}, key=lambda c: -WEIGHT[c])
-        score = min(100, sum(WEIGHT[c] for c in codes) + (10 if len(codes) >= 3 else 0))
+        minor_court = all(h.get("minor") for h in hs if h["code"] == "P_court")
+        score = min(100, sum(WEIGHT[c] // (2 if c == "P_court" and minor_court else 1) for c in codes)
+                    + (10 if len(codes) >= 3 else 0))
         row = e["row"]
         ss = sites_of.get(e["id"], []) if e["kind"] == "sponsor" else []
         meals = sum(sum(site_detail.get(s["ref"], {}).get("months", {}).values()) for s in ss)
@@ -367,7 +451,8 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
     by_signal = {c: sum(1 for l in leads if c in l["signals"]) for c in SIGNALS}
     return {"counts": dict(counts), "meals": total_meals, "leads": leads, "by_signal": by_signal,
             "signal_labels": SIGNALS, "flagged": len(leads),
-            "checks": {"exclusions": exclusions is not None,
+            "outside": {"exclusions": len(excl_rows), "court_records": len(court_rows), "osint": len(osint_rows)},
+            "checks": {"exclusions": exclusions is not None or bool(excl_rows),
                        "exclusions_source": getattr(exclusions, "source_name", "") if exclusions is not None else ""}}
 
 
@@ -413,4 +498,17 @@ def _graph(e, hs, ents, sites_of, by_addr, by_person, status_bad) -> dict:
         for l in h["links"]:
             if l and l in ents and l not in nodes:
                 edge(root, ent(ents[l]), "linked")
+    # Outside records hang off the person or the entity they matched
+    for h in hs:
+        if h["code"] not in ("P_excluded", "P_court", "P_osint"):
+            continue
+        for row in h["rows"]:
+            how = row.get("matched_by", "")
+            label = (row.get("list") or row.get("agency") or "Exclusion") if h["code"] == "P_excluded" else \
+                (f"{row.get('court', '')} {row.get('case', '')}".strip() if h["code"] == "P_court" else row.get("source", "Open source"))
+            rid = node(f"r:{h['code']}:{label}:{row.get('listed') or row.get('subject') or ''}",
+                       {"P_excluded": "exclusion", "P_court": "court", "P_osint": "osint"}[h["code"]], label,
+                       bad=h["code"] == "P_excluded")
+            m = re.match(r"person \((.+)\)", how)
+            edge(node("p:" + person_key(m.group(1)), "person", m.group(1)) if m else root, rid, "record")
     return {"nodes": list(nodes.values()), "edges": edges}

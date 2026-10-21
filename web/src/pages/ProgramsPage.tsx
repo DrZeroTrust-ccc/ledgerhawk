@@ -11,6 +11,9 @@ const FILES: { key: string; label: string; hint: string }[] = [
   { key: 'sites', label: 'Meal sites', hint: 'site_id, sponsor_id, name, address, capacity, opened, meals_YYYY_MM per month' },
   { key: 'retailers', label: 'SNAP retailers', hint: 'store_id, name, owner, address, authorized, ended, disqualified' },
   { key: 'wic_vendors', label: 'WIC vendors', hint: 'vendor_id, name, owner, address, authorized' },
+  { key: 'exclusions', label: 'Exclusion lists (optional)', hint: 'name, people, address, list, agency, type, active, terminates' },
+  { key: 'court_records', label: 'Court records (optional)', hint: 'case_no, court, filed, caption, nature, parties, status, summary' },
+  { key: 'osint', label: 'Open-source findings (optional)', hint: 'subject, address, zip, source, found, finding, link' },
 ]
 
 export function ProgramClassBadge({ dataClass, label }: { dataClass: string; label?: string }) {
@@ -69,9 +72,10 @@ function NewProgram({ onDone }: { onDone: (id: string) => void }) {
           </label>
         ))}
       </div>
-      <p className="text-xs text-slate-500">Any one file is enough to start. Sites need their sponsors file for the capacity and site-cluster checks.</p>
+      <p className="text-xs text-slate-500">Sponsors, retailers or WIC vendors are enough to start. Sites need their sponsors file for the capacity and site-cluster checks. The
+        optional lists are matched to every entity by name, person and address.</p>
       <ErrorNote error={error} />
-      <Button type="submit" disabled={busy || !analyst.trim() || !Object.values(files).some(Boolean)}>
+      <Button type="submit" disabled={busy || !analyst.trim() || !['sponsors', 'retailers', 'wic_vendors'].some((k) => files[k])}>
         {busy ? 'Screening…' : 'Screen these files'}
       </Button>
       {!analyst.trim() && <p className="text-xs text-crimson">Enter your name at the top of the page first.</p>}
@@ -119,7 +123,7 @@ export default function ProgramsPage() {
       >
         <p className="text-sm text-slate-600">
           The State of Northland is fictional: 49 meal sponsors, 319 sites, 184 SNAP stores and 41 WIC vendors, with six planted cases modeled on public
-          prosecutions. Everything it produces is labeled simulated.
+          prosecutions, plus exclusion lists, court cases and open-source findings. Everything it produces is labeled simulated.
         </p>
         <ErrorNote error={demoError} />
       </Card>

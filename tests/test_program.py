@@ -108,3 +108,26 @@ def test_program_demo_seeds_on_start(tmp_path):
         assert len(listed) == 1 and listed[0]["data_class"] == "simulated"
     finally:
         mp.undo()
+
+
+def test_outside_records(result):
+    top = _lead(result, "Northland Feeding Partners Inc")
+    assert {"P_excluded", "P_court", "P_osint"} <= set(top["signals"])
+    osint = [h for h in top["hits"] if h["code"] == "P_osint"]
+    # Findings at the sponsor's site addresses roll up to the sponsor
+    assert any(h["rows"][0]["matched_by"].startswith("address") for h in osint)
+    assert any(n["kind"] == "court" for n in top["graph"]["nodes"])
+    river = _lead(result, "River Road Market LLC")
+    assert "a principal of Eastgate Food Mart" in next(h["text"] for h in river["hits"] if h["code"] == "P_excluded")
+    # Decoy list entries and the unrelated lawsuit match nobody
+    names = {l["name"] for l in result["leads"]}
+    assert not names & {"Prairie Wind Catering LLC", "Tri-State Vending Co"}
+    assert result["outside"] == {"exclusions": 7, "court_records": 4, "osint": 8}
+
+
+def test_minor_civil_case_counts_half():
+    files = {"retailers": [{"store_id": "R1", "name": "Acme Market", "owner": "Pat Doe", "address": "1 Main St", "zip": "1"}],
+             "court_records": [{"case_no": "1", "caption": "X v. Acme Market", "nature": "Civil: contract",
+                                "parties": "Acme Market"}]}
+    lead = program.screen(files)["leads"][0]
+    assert lead["signals"] == ["P_court"] and lead["score"] == program.WEIGHT["P_court"] // 2
