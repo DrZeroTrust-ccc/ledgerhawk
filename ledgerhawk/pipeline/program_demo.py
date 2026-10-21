@@ -10,6 +10,9 @@ The planted cases follow fraud patterns from public cases, chiefly the Feeding O
   5. A sudden jump: one site's claims jump tenfold in a month
   6. An officer shared between a sponsor and a SNAP retailer
 
+A records file adds what a real screen would bring back from exclusion lists, court dockets and open sources (business
+registries, address checks, news). Those records are simulated too, and say so in their source.
+
 The rest of the population is ordinary, so the flags stand out against a realistic background.
 """
 from __future__ import annotations
@@ -63,6 +66,56 @@ def _meals(rng, capacity, start=0, scale=1.0):
         else:
             out.append(int(capacity * rng.uniform(1.6, 2.6) * 20 * scale))
     return out
+
+
+SIM = " (simulated)"
+REG, ADDR, NEWS = "Northland Secretary of State" + SIM, "Address verification" + SIM, "News search" + SIM
+SAM, NDL, FNS = "SAM.gov exclusions" + SIM, "CACFP National Disqualified List" + SIM, "USDA SNAP disqualifications" + SIM
+STATE_CT, FED_CT = "Northland District Court" + SIM, "U.S. District Court, D. Northland" + SIM
+
+
+def _rec(subject, kind, source, when, title, detail="", case=""):
+    return {"subject": subject, "kind": kind, "source": source, "date": when, "title": title, "detail": detail,
+            "case_number": case, "url": ""}
+
+
+# What exclusion, court and open-source checks would bring back for the planted cases. Each one only adds evidence to
+# a case the program files already flag; nothing here is about the ordinary population.
+RECORDS = [
+    # 1. the site mill
+    _rec("Northland Feeding Partners Inc", "osint", REG, "2025-11-03", "Incorporated 10 weeks before program approval",
+         "Articles filed 2025-11-03; approved as an SFSP sponsor 2026-01-12. Registered agent is a mail-forwarding firm."),
+    _rec("Northland Feeding Partners Inc", "osint", ADDR, "2026-09-30", "Sponsor address is a virtual office",
+         "1200 Lake St Ste 4 is a commercial mail-receiving agency; 14 of the sponsor's meal sites list the same suite."),
+    _rec("Northland Feeding Partners Inc", "osint", NEWS, "2026-06-18", "Local report on meal sites in empty storefronts",
+         "Riverton Ledger: neighbors say two listed meal sites on Lake St have had no visible activity since spring."),
+    _rec("Harper Quill", "court", STATE_CT, "2023-08-22", "Civil judgment for unpaid payroll taxes",
+         "Judgment for the state against a prior child care business owned by this officer; unsatisfied.", "27-CV-23-4410"),
+    _rec("Rowan Stroud", "osint", REG, "2025-10-21", "Registered 9 LLCs in one week",
+         "Organizer on nine LLCs filed 2025-10-14 to 2025-10-21, six of which appear as the sponsor's meal sites."),
+    # 2. sponsor re-entry
+    _rec("Kendall Marlowe", "exclusion", NDL, "2025-07-15", "Listed as a responsible principal",
+         "Disqualified after Cornerstone Kids Nutrition LLC was terminated for cause on 2025-06-30."),
+    _rec("Cornerstone Kids Nutrition LLC", "court", STATE_CT, "2025-09-04", "State suit to recover overclaimed meal funds",
+         "Northland Department of Education v. Cornerstone Kids Nutrition LLC; $412,600 sought.", "27-CV-25-1187"),
+    _rec("Keystone Child Meals Inc", "osint", REG, "2025-07-28", "Formed 4 weeks after the prior sponsor was terminated",
+         "Same registered office (301 Prairie Ln Ste 12) and the same organizer as the terminated sponsor."),
+    # 3. SNAP retailer re-entry
+    _rec("Dakota Pemberton", "exclusion", FNS, "2025-02-14", "Permanently disqualified for trafficking",
+         "Eastgate Food Mart disqualified after an investigation found SNAP benefits exchanged for cash."),
+    _rec("Dakota Pemberton", "court", FED_CT, "2025-11-06", "Charged with SNAP benefit trafficking (7 U.S.C. 2024)",
+         "United States v. Pemberton; indictment unsealed, case pending.", "1:25-cr-00218"),
+    _rec("River Road Market LLC", "osint", REG, "2025-05-19", "Formed 3 months after the disqualification",
+         "Sole member is the disqualified store's owner; same street address."),
+    # 4. one business, two programs
+    _rec("S&I Healthy Foods LLC", "osint", REG, "2022-11-30", "Same owner and address as a SNAP-authorized grocery",
+         "Registry lists the same member and principal office as Plaza Family Grocery."),
+    # 6. officer who also owns a SNAP store
+    _rec("Rowan Stroud", "exclusion", SAM, "2024-03-08", "Excluded from federal awards (HHS, 3-year term)",
+         "Exclusion of an individual, effective 2024-03-08 to 2027-03-07, under a prior Medicaid billing case."),
+    _rec("Lake Street Quick Mart", "osint", ADDR, "2026-09-30", "Store sits next door to the sponsor's mail suite",
+         "1210 Lake St is two doors from 1200 Lake St Ste 4; opened the month the sponsor's sites began claiming."),
+]
 
 
 def generate(seed: int = 7) -> dict[str, str]:
@@ -177,7 +230,8 @@ def generate(seed: int = 7) -> dict[str, str]:
                       "authorized": "2025-11-01", "ended": "", "disqualified": "no"})
 
     out = {}
-    for stem, rows in (("sponsors", sponsors), ("sites", sites), ("retailers", retailers), ("wic_vendors", vendors)):
+    for stem, rows in (("sponsors", sponsors), ("sites", sites), ("retailers", retailers), ("wic_vendors", vendors),
+                       ("records", RECORDS)):
         cols = list(dict.fromkeys(k for r in rows for k in r))
         buf = io.StringIO()
         w = csv.DictWriter(buf, fieldnames=cols)

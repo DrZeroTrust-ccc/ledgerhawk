@@ -47,9 +47,12 @@ SIGNALS = {
     "P_reentry": "Linked to a disqualified or terminated entity",
     "P_dual": "Same business as a SNAP retailer and a WIC vendor",
     "P_excluded": "Sponsor or parent excluded in SAM",
+    "P_listed": "On an exclusion or disqualification list",
+    "P_court": "Court case on the entity or its people",
+    "P_osint": "Open-source finding",
 }
 WEIGHT = {"P_capacity": 30, "P_cluster": 20, "P_new": 10, "P_spike": 10, "P_officer": 15, "P_reentry": 35,
-          "P_dual": 10, "P_excluded": 40}
+          "P_dual": 10, "P_excluded": 40, "P_listed": 40, "P_court": 25, "P_osint": 10}
 
 FILES = {
     "sponsors": ["sponsor_id", "name", "program", "officers", "address", "city", "state", "zip", "approved", "status",
@@ -57,7 +60,11 @@ FILES = {
     "sites": ["site_id", "sponsor_id", "name", "address", "city", "state", "zip", "capacity", "opened"],
     "retailers": ["store_id", "name", "owner", "address", "city", "state", "zip", "authorized", "ended", "disqualified"],
     "wic_vendors": ["vendor_id", "name", "owner", "address", "city", "state", "zip", "authorized"],
+    # Evidence gathered elsewhere (exclusion lists, court dockets, open sources), one row per record. `subject` is a
+    # business or a person's name; a record on a person reaches every entity that lists them as an officer or owner.
+    "records": ["subject", "kind", "source", "date", "title", "detail", "case_number", "url"],
 }
+RECORD_SIGNAL = {"exclusion": "P_listed", "court": "P_court", "osint": "P_osint"}
 ALIASES = {"id": None, "officer": "officers", "owners": "owner", "approval_date": "approved", "open_date": "opened",
            "authorized_date": "authorized", "end_date": "ended", "street": "address", "zip_code": "zip", "zipcode": "zip"}
 BAD_STATUS = {"disqualified", "terminated", "seriously deficient", "suspended"}
@@ -186,8 +193,9 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
 
     hits: dict[str, list[dict]] = defaultdict(list)  # lead ref -> signal hits
 
-    def hit(ref, code, text, rows=None, links=None):
-        hits[ref].append({"code": code, "label": SIGNALS[code], "text": text, "rows": rows or [], "links": links or []})
+    def hit(ref, code, text, rows=None, links=None, records=None):
+        hits[ref].append({"code": code, "label": SIGNALS[code], "text": text, "rows": rows or [], "links": links or [],
+                          "records": records or []})
 
     # Sites count as new only if they opened within 90 days of the start of the claims data
     first_months = [m for s in sites for m in _months(s)]
@@ -342,6 +350,33 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
                     f"{'Parent' if f['who'] == 'parent' else 'This entity'} {f['name']} is excluded by {f['agency']} "
                     f"since {f['active']} (matched by {f['matched_by']})" for f in found) + ".", found)
 
+    # ---- records from exclusion lists, court dockets and open sources ----
+    by_nn_ent = defaultdict(list)
+    for e in ents.values():
+        by_nn_ent[normalize_name(e["name"])].append(e["ref"])
+    found_records: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for n, rec in enumerate(files.get("records") or []):
+        code = RECORD_SIGNAL.get((rec.get("kind") or "").strip().lower())
+        subject = (rec.get("subject") or "").strip()
+        if not code or not subject:
+            continue
+        r = {"id": f"r{n}", "subject": subject, "kind": rec.get("kind", "").strip().lower(), "source": rec.get("source", ""),
+             "date": rec.get("date", ""), "title": rec.get("title", ""), "detail": rec.get("detail", ""),
+             "case_number": rec.get("case_number", ""), "url": rec.get("url", "")}
+        for ref in by_nn_ent.get(normalize_name(subject), []):
+            found_records[(ref, code)].append({**r, "via": "entity"})
+        for ref in by_person.get(person_key(subject), []):
+            found_records[(ref, code)].append({**r, "via": "person", "person": subject})
+    for (ref, code), recs in found_records.items():
+        first = recs[0]
+        role = "officer" if ents[ref]["kind"] == "sponsor" else "owner"
+        who = f"{first['person']} ({role}): " if first["via"] == "person" else ""
+        more = f" Plus {len(recs) - 1} more record{'s' if len(recs) > 2 else ''}." if len(recs) > 1 else ""
+        hit(ref, code, f"{who}{first['title'] or 'Record found'}. {first['source']}"
+            f"{', ' + first['date'] if first['date'] else ''}.{more}",
+            [{k: x[k] for k in ("subject", "source", "date", "title", "case_number", "detail", "url") if x.get(k)}
+             for x in recs], records=recs)
+
     # ---- leads ----
     leads = []
     for ref, hs in hits.items():
@@ -368,6 +403,9 @@ def screen(files: dict[str, list[dict]], exclusions=None) -> dict:
     return {"counts": dict(counts), "meals": total_meals, "leads": leads, "by_signal": by_signal,
             "signal_labels": SIGNALS, "flagged": len(leads),
             "checks": {"exclusions": exclusions is not None,
+                       "records": {k: sum(1 for r in files.get("records") or [] if (r.get("kind") or "").strip().lower() == k)
+                                   for k in RECORD_SIGNAL},
+                       "records_matched": len({r["id"] for rs in found_records.values() for r in rs}),
                        "exclusions_source": getattr(exclusions, "source_name", "") if exclusions is not None else ""}}
 
 
@@ -413,4 +451,8 @@ def _graph(e, hs, ents, sites_of, by_addr, by_person, status_bad) -> dict:
         for l in h["links"]:
             if l and l in ents and l not in nodes:
                 edge(root, ent(ents[l]), "linked")
+        for r in h.get("records", []):
+            rid = node("r:" + r["id"], "record", f"{r['title']} ({r['source']})", record_kind=r["kind"])
+            pid = "p:" + person_key(r["person"]) if r.get("person") else root
+            edge(pid if pid in nodes else root, rid, "record")
     return {"nodes": list(nodes.values()), "edges": edges}

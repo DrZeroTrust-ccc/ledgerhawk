@@ -11,6 +11,7 @@ const FILES: { key: string; label: string; hint: string }[] = [
   { key: 'sites', label: 'Meal sites', hint: 'site_id, sponsor_id, name, address, capacity, opened, meals_YYYY_MM per month' },
   { key: 'retailers', label: 'SNAP retailers', hint: 'store_id, name, owner, address, authorized, ended, disqualified' },
   { key: 'wic_vendors', label: 'WIC vendors', hint: 'vendor_id, name, owner, address, authorized' },
+  { key: 'records', label: 'Records (optional)', hint: 'subject, kind (exclusion, court or osint), source, date, title, detail, case_number, url' },
 ]
 
 export function ProgramClassBadge({ dataClass, label }: { dataClass: string; label?: string }) {

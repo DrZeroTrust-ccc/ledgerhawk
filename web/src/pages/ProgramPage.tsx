@@ -11,6 +11,7 @@ const NODE_COLOR: Record<string, string> = {
   vendor: '#7c3aed',
   address: '#d97706',
   person: '#B0263A',
+  record: '#0369a1',
 }
 const NODE_LABEL: Record<string, string> = {
   sponsor: 'Sponsor',
@@ -19,6 +20,7 @@ const NODE_LABEL: Record<string, string> = {
   vendor: 'WIC vendor',
   address: 'Shared address',
   person: 'Officer or owner',
+  record: 'Exclusion, court or open-source record',
 }
 
 const fmt = (n: number) => n.toLocaleString()
@@ -78,7 +80,7 @@ function Network({ lead }: { lead: ProgramLead }) {
   const pos = useMemo(() => layout(nodes, edges, W, H), [nodes, edges, H])
   const idx = new Map(nodes.map((x, i) => [x.id, i]))
   const [hover, setHover] = useState<string | null>(null)
-  const showLabel = (x: ProgramNode) => x.center || x.kind === 'person' || x.kind === 'address' || x.bad || nodes.length <= 14 || hover === x.id
+  const showLabel = (x: ProgramNode) => x.center || x.kind === 'person' || x.kind === 'address' || x.kind === 'record' || x.bad || nodes.length <= 14 || hover === x.id
   const kinds = Array.from(new Set(nodes.map((x) => x.kind)))
   return (
     <div>
@@ -94,7 +96,7 @@ function Network({ lead }: { lead: ProgramLead }) {
               y1={pos[a].y}
               x2={pos[b].x}
               y2={pos[b].y}
-              stroke={e.kind === 'officer' ? '#B0263A' : e.kind === 'at' ? '#d97706' : '#94a3b8'}
+              stroke={e.kind === 'officer' ? '#B0263A' : e.kind === 'at' ? '#d97706' : e.kind === 'record' ? '#0369a1' : '#94a3b8'}
               strokeOpacity={0.45}
               strokeDasharray={e.kind === 'linked' ? '4 3' : undefined}
             />

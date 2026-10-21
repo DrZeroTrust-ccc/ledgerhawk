@@ -41,6 +41,32 @@ def test_ordinary_population_stays_quiet(result):
     assert len(result["leads"]) <= 10
 
 
+def test_records_add_exclusion_court_and_osint_evidence(result):
+    mill = _lead(result, "Northland Feeding Partners Inc")
+    assert {"P_listed", "P_court", "P_osint"} <= set(mill["signals"])
+    listed = next(h for h in mill["hits"] if h["code"] == "P_listed")
+    assert listed["text"].startswith("Rowan Stroud (officer): Excluded from federal awards")
+    assert "(simulated)" in listed["text"]
+    osint = next(h for h in mill["hits"] if h["code"] == "P_osint")
+    assert len(osint["rows"]) == 4  # registry, address check and news on the sponsor, plus the officer's LLC filings
+    kinds = {n["kind"] for n in mill["graph"]["nodes"]}
+    assert "record" in kinds
+    store = _lead(result, "River Road Market LLC")
+    assert {"P_listed", "P_court", "P_reentry"} <= set(store["signals"])
+    court = next(h for h in store["hits"] if h["code"] == "P_court")
+    assert court["rows"][0]["case_number"] == "1:25-cr-00218"
+    assert result["checks"]["records"] == {"exclusion": 3, "court": 3, "osint": 8}
+    assert result["checks"]["records_matched"] == 14
+
+
+def test_records_never_flag_on_their_own_name_alone():
+    files = {"sponsors": [{"sponsor_id": "A", "name": "Plain Meals Inc", "officers": "Pat Doe", "address": "1 Main St",
+                           "city": "Riverton", "state": "NL", "zip": "58101", "status": "active"}],
+             "records": [{"subject": "Someone Else", "kind": "court", "source": "x", "title": "Case"},
+                         {"subject": "Plain Meals", "kind": "unknown", "source": "x", "title": "Ignored kind"}]}
+    assert program.screen(files)["leads"] == []
+
+
 def test_screen_rejects_empty_set():
     with pytest.raises(ValueError):
         program.screen({})
